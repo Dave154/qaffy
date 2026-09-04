@@ -1,0 +1,324 @@
+{
+  "buildManifest": {
+    "serverBundles": {
+      "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0": {
+        "id": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
+        "file": "build/server/nodejs_eyJydW50aW1lIjoibm9kZWpzIn0/index.js",
+        "config": {
+          "runtime": "nodejs"
+        }
+      }
+    },
+    "routeIdToServerBundleId": {
+      "root": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
+      "portals/customer/pages/Home": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
+      "portals/customer/pages/Transactions": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
+      "portals/customer/pages/Login": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
+      "portals/logistics/pages/Home": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
+      "logistics-delivery": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
+      "portals/logistics/pages/Login": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
+      "portals/vendor/pages/Home": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
+      "portals/vendor/pages/Login": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
+      "portals/admin/pages/Home": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
+      "portals/admin/pages/Login": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0"
+    },
+    "routes": {
+      "root": {
+        "id": "root",
+        "file": "src/root.tsx",
+        "path": "",
+        "config": {
+          "runtime": "nodejs"
+        }
+      },
+      "portals/customer/CustomerLayout": {
+        "id": "portals/customer/CustomerLayout",
+        "parentId": "root",
+        "file": "src/portals/customer/CustomerLayout.tsx",
+        "config": {}
+      },
+      "portals/customer/pages/Home": {
+        "id": "portals/customer/pages/Home",
+        "parentId": "portals/customer/CustomerLayout",
+        "file": "src/portals/customer/pages/Home.tsx",
+        "index": true,
+        "config": {}
+      },
+      "portals/customer/pages/Transactions": {
+        "id": "portals/customer/pages/Transactions",
+        "parentId": "portals/customer/CustomerLayout",
+        "file": "src/portals/customer/pages/Transactions.tsx",
+        "path": "transactions",
+        "config": {}
+      },
+      "portals/customer/pages/Login": {
+        "id": "portals/customer/pages/Login",
+        "parentId": "root",
+        "file": "src/portals/customer/pages/Login.tsx",
+        "path": "login",
+        "config": {}
+      },
+      "portals/logistics/LogisticsLayout": {
+        "id": "portals/logistics/LogisticsLayout",
+        "parentId": "root",
+        "file": "src/portals/logistics/LogisticsLayout.tsx",
+        "config": {}
+      },
+      "portals/logistics/pages/Home": {
+        "id": "portals/logistics/pages/Home",
+        "parentId": "portals/logistics/LogisticsLayout",
+        "file": "src/portals/logistics/pages/Home.tsx",
+        "path": "logistics",
+        "index": true,
+        "config": {}
+      },
+      "logistics-delivery": {
+        "id": "logistics-delivery",
+        "parentId": "portals/logistics/LogisticsLayout",
+        "file": "src/portals/logistics/pages/Home.tsx",
+        "path": "logistics/delivery",
+        "config": {}
+      },
+      "portals/logistics/pages/Login": {
+        "id": "portals/logistics/pages/Login",
+        "parentId": "root",
+        "file": "src/portals/logistics/pages/Login.tsx",
+        "path": "logistics/login",
+        "config": {}
+      },
+      "portals/vendor/VendorLayout": {
+        "id": "portals/vendor/VendorLayout",
+        "parentId": "root",
+        "file": "src/portals/vendor/VendorLayout.tsx",
+        "config": {}
+      },
+      "portals/vendor/pages/Home": {
+        "id": "portals/vendor/pages/Home",
+        "parentId": "portals/vendor/VendorLayout",
+        "file": "src/portals/vendor/pages/Home.tsx",
+        "path": "vendor",
+        "index": true,
+        "config": {}
+      },
+      "portals/vendor/pages/Login": {
+        "id": "portals/vendor/pages/Login",
+        "parentId": "root",
+        "file": "src/portals/vendor/pages/Login.tsx",
+        "path": "vendor/login",
+        "config": {}
+      },
+      "portals/admin/AdminLayout": {
+        "id": "portals/admin/AdminLayout",
+        "parentId": "root",
+        "file": "src/portals/admin/AdminLayout.tsx",
+        "config": {}
+      },
+      "portals/admin/pages/Home": {
+        "id": "portals/admin/pages/Home",
+        "parentId": "portals/admin/AdminLayout",
+        "file": "src/portals/admin/pages/Home.tsx",
+        "path": "admin",
+        "index": true,
+        "config": {}
+      },
+      "portals/admin/pages/Login": {
+        "id": "portals/admin/pages/Login",
+        "parentId": "root",
+        "file": "src/portals/admin/pages/Login.tsx",
+        "path": "admin/login",
+        "config": {}
+      }
+    }
+  },
+  "reactRouterConfig": {
+    "appDirectory": "C:/Users/user/Desktop/Projects/qaffy/src",
+    "basename": "/",
+    "buildDirectory": "C:/Users/user/Desktop/Projects/qaffy/build",
+    "future": {
+      "unstable_optimizeDeps": false,
+      "v8_passThroughRequests": false,
+      "v8_trailingSlashAwareDataRequests": false,
+      "unstable_previewServerPrerendering": false,
+      "v8_middleware": false,
+      "v8_splitRouteModules": false,
+      "v8_viteEnvironmentApi": false
+    },
+    "routes": {
+      "root": {
+        "id": "root",
+        "file": "root.tsx",
+        "path": ""
+      },
+      "portals/customer/CustomerLayout": {
+        "id": "portals/customer/CustomerLayout",
+        "parentId": "root",
+        "file": "portals/customer/CustomerLayout.tsx"
+      },
+      "portals/customer/pages/Home": {
+        "id": "portals/customer/pages/Home",
+        "parentId": "portals/customer/CustomerLayout",
+        "file": "portals/customer/pages/Home.tsx",
+        "index": true
+      },
+      "portals/customer/pages/Transactions": {
+        "id": "portals/customer/pages/Transactions",
+        "parentId": "portals/customer/CustomerLayout",
+        "file": "portals/customer/pages/Transactions.tsx",
+        "path": "transactions"
+      },
+      "portals/customer/pages/Login": {
+        "id": "portals/customer/pages/Login",
+        "parentId": "root",
+        "file": "portals/customer/pages/Login.tsx",
+        "path": "login"
+      },
+      "portals/logistics/LogisticsLayout": {
+        "id": "portals/logistics/LogisticsLayout",
+        "parentId": "root",
+        "file": "portals/logistics/LogisticsLayout.tsx"
+      },
+      "portals/logistics/pages/Home": {
+        "id": "portals/logistics/pages/Home",
+        "parentId": "portals/logistics/LogisticsLayout",
+        "file": "portals/logistics/pages/Home.tsx",
+        "path": "logistics",
+        "index": true
+      },
+      "logistics-delivery": {
+        "id": "logistics-delivery",
+        "parentId": "portals/logistics/LogisticsLayout",
+        "file": "portals/logistics/pages/Home.tsx",
+        "path": "logistics/delivery"
+      },
+      "portals/logistics/pages/Login": {
+        "id": "portals/logistics/pages/Login",
+        "parentId": "root",
+        "file": "portals/logistics/pages/Login.tsx",
+        "path": "logistics/login"
+      },
+      "portals/vendor/VendorLayout": {
+        "id": "portals/vendor/VendorLayout",
+        "parentId": "root",
+        "file": "portals/vendor/VendorLayout.tsx"
+      },
+      "portals/vendor/pages/Home": {
+        "id": "portals/vendor/pages/Home",
+        "parentId": "portals/vendor/VendorLayout",
+        "file": "portals/vendor/pages/Home.tsx",
+        "path": "vendor",
+        "index": true
+      },
+      "portals/vendor/pages/Login": {
+        "id": "portals/vendor/pages/Login",
+        "parentId": "root",
+        "file": "portals/vendor/pages/Login.tsx",
+        "path": "vendor/login"
+      },
+      "portals/admin/AdminLayout": {
+        "id": "portals/admin/AdminLayout",
+        "parentId": "root",
+        "file": "portals/admin/AdminLayout.tsx"
+      },
+      "portals/admin/pages/Home": {
+        "id": "portals/admin/pages/Home",
+        "parentId": "portals/admin/AdminLayout",
+        "file": "portals/admin/pages/Home.tsx",
+        "path": "admin",
+        "index": true
+      },
+      "portals/admin/pages/Login": {
+        "id": "portals/admin/pages/Login",
+        "parentId": "root",
+        "file": "portals/admin/pages/Login.tsx",
+        "path": "admin/login"
+      }
+    },
+    "routeDiscovery": {
+      "mode": "lazy",
+      "manifestPath": "/__manifest"
+    },
+    "serverBuildFile": "index.js",
+    "serverModuleFormat": "esm",
+    "ssr": true,
+    "subResourceIntegrity": false,
+    "allowedActionOrigins": false,
+    "unstable_routeConfig": [
+      {
+        "id": "root",
+        "path": "",
+        "file": "root.tsx",
+        "children": [
+          {
+            "file": "portals/customer/CustomerLayout.tsx",
+            "children": [
+              {
+                "file": "portals/customer/pages/Home.tsx",
+                "index": true
+              },
+              {
+                "file": "portals/customer/pages/Transactions.tsx",
+                "path": "transactions"
+              }
+            ]
+          },
+          {
+            "file": "portals/customer/pages/Login.tsx",
+            "path": "login"
+          },
+          {
+            "file": "portals/logistics/LogisticsLayout.tsx",
+            "children": [
+              {
+                "file": "portals/logistics/pages/Home.tsx",
+                "index": true,
+                "path": "logistics"
+              },
+              {
+                "file": "portals/logistics/pages/Home.tsx",
+                "path": "logistics/delivery",
+                "id": "logistics-delivery"
+              }
+            ]
+          },
+          {
+            "file": "portals/logistics/pages/Login.tsx",
+            "path": "logistics/login"
+          },
+          {
+            "file": "portals/vendor/VendorLayout.tsx",
+            "children": [
+              {
+                "file": "portals/vendor/pages/Home.tsx",
+                "index": true,
+                "path": "vendor"
+              }
+            ]
+          },
+          {
+            "file": "portals/vendor/pages/Login.tsx",
+            "path": "vendor/login"
+          },
+          {
+            "file": "portals/admin/AdminLayout.tsx",
+            "children": [
+              {
+                "file": "portals/admin/pages/Home.tsx",
+                "index": true,
+                "path": "admin"
+              }
+            ]
+          },
+          {
+            "file": "portals/admin/pages/Login.tsx",
+            "path": "admin/login"
+          }
+        ]
+      }
+    ]
+  },
+  "viteConfig": {
+    "build": {
+      "assetsDir": "assets"
+    }
+  }
+}

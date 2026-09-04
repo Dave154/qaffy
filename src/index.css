@@ -1,0 +1,101 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --color-violet-50: #edf4ff;
+  --color-violet-100: #dfeeff;
+  --color-violet-200: #c5dcf8;
+  --color-violet-300: #9bbde9;
+  --color-violet-400: #6f9ad6;
+  --color-violet-500: #4e7fc8;
+  --color-violet-600: #3d6eaf;
+  --color-violet-700: #2f5d96;
+  --color-violet-800: #234a7a;
+  --color-violet-900: #19395c;
+  --color-violet-950: #122a43;
+
+  --color-accent: #2e5d8a;
+  --color-accent-dark: #1c3c5f;
+  --color-surface: #f3f8ff;
+  --color-ink: #162636;
+  --font-sans: "Manrope", "Segoe UI", sans-serif;
+}
+
+:root {
+  color: #162636;
+  background: #eef5ff;
+  font-family: var(--font-sans);
+  line-height: 1.5;
+  font-weight: 400;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  position: relative;
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 15% 15%, rgba(109, 160, 215, 0.20), transparent 22%),
+    radial-gradient(circle at 80% 0%, rgba(133, 182, 236, 0.18), transparent 20%),
+    linear-gradient(180deg, #eef5ff 0%, #f7fbff 42%, #f1f6ff 100%);
+  color: #162636;
+}
+
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  pointer-events: none;
+  z-index: 0;
+  border-radius: 9999px;
+  filter: blur(18px);
+  opacity: 0.7;
+}
+
+body::before {
+  width: 26rem;
+  height: 26rem;
+  top: -6rem;
+  right: -8rem;
+  background: rgba(91, 148, 212, 0.12);
+}
+
+body::after {
+  width: 30rem;
+  height: 30rem;
+  bottom: -8rem;
+  left: -7rem;
+  background: rgba(161, 194, 230, 0.16);
+}
+
+#root,
+[data-reactroot] {
+  position: relative;
+  z-index: 1;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+input,
+textarea {
+  outline: none;
+}
+
+::selection {
+  background: rgba(183, 93, 61, 0.18);
+}
