@@ -13,7 +13,14 @@
       "root": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
       "portals/customer/pages/Home": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
       "portals/customer/pages/Transactions": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
+      "portals/customer/pages/Orders": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
+      "portals/customer/pages/Plans": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
+      "portals/customer/pages/Settings": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
+      "portals/customer/pages/Invoice": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
+      "portals/customer/pages/OtpFlow": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
       "portals/customer/pages/Login": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
+      "portals/customer/pages/CreateAccount": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
+      "portals/customer/pages/VerifyOtp": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
       "portals/logistics/pages/Home": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
       "logistics-delivery": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
       "portals/logistics/pages/Login": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
@@ -51,11 +58,60 @@
         "path": "transactions",
         "config": {}
       },
+      "portals/customer/pages/Orders": {
+        "id": "portals/customer/pages/Orders",
+        "parentId": "portals/customer/CustomerLayout",
+        "file": "src/portals/customer/pages/Orders.tsx",
+        "path": "orders",
+        "config": {}
+      },
+      "portals/customer/pages/Plans": {
+        "id": "portals/customer/pages/Plans",
+        "parentId": "portals/customer/CustomerLayout",
+        "file": "src/portals/customer/pages/Plans.tsx",
+        "path": "plans",
+        "config": {}
+      },
+      "portals/customer/pages/Settings": {
+        "id": "portals/customer/pages/Settings",
+        "parentId": "portals/customer/CustomerLayout",
+        "file": "src/portals/customer/pages/Settings.tsx",
+        "path": "settings",
+        "config": {}
+      },
+      "portals/customer/pages/Invoice": {
+        "id": "portals/customer/pages/Invoice",
+        "parentId": "portals/customer/CustomerLayout",
+        "file": "src/portals/customer/pages/Invoice.tsx",
+        "path": "invoice",
+        "config": {}
+      },
+      "portals/customer/pages/OtpFlow": {
+        "id": "portals/customer/pages/OtpFlow",
+        "parentId": "portals/customer/CustomerLayout",
+        "file": "src/portals/customer/pages/OtpFlow.tsx",
+        "path": "otp",
+        "config": {}
+      },
       "portals/customer/pages/Login": {
         "id": "portals/customer/pages/Login",
         "parentId": "root",
         "file": "src/portals/customer/pages/Login.tsx",
         "path": "login",
+        "config": {}
+      },
+      "portals/customer/pages/CreateAccount": {
+        "id": "portals/customer/pages/CreateAccount",
+        "parentId": "root",
+        "file": "src/portals/customer/pages/CreateAccount.tsx",
+        "path": "create-account",
+        "config": {}
+      },
+      "portals/customer/pages/VerifyOtp": {
+        "id": "portals/customer/pages/VerifyOtp",
+        "parentId": "root",
+        "file": "src/portals/customer/pages/VerifyOtp.tsx",
+        "path": "verify-otp",
         "config": {}
       },
       "portals/logistics/LogisticsLayout": {
@@ -75,7 +131,7 @@
       "logistics-delivery": {
         "id": "logistics-delivery",
         "parentId": "portals/logistics/LogisticsLayout",
-        "file": "src/portals/logistics/pages/Home.tsx",
+        "file": "src/portals/logistics/pages/Delivery.tsx",
         "path": "logistics/delivery",
         "config": {}
       },
@@ -166,11 +222,53 @@
         "file": "portals/customer/pages/Transactions.tsx",
         "path": "transactions"
       },
+      "portals/customer/pages/Orders": {
+        "id": "portals/customer/pages/Orders",
+        "parentId": "portals/customer/CustomerLayout",
+        "file": "portals/customer/pages/Orders.tsx",
+        "path": "orders"
+      },
+      "portals/customer/pages/Plans": {
+        "id": "portals/customer/pages/Plans",
+        "parentId": "portals/customer/CustomerLayout",
+        "file": "portals/customer/pages/Plans.tsx",
+        "path": "plans"
+      },
+      "portals/customer/pages/Settings": {
+        "id": "portals/customer/pages/Settings",
+        "parentId": "portals/customer/CustomerLayout",
+        "file": "portals/customer/pages/Settings.tsx",
+        "path": "settings"
+      },
+      "portals/customer/pages/Invoice": {
+        "id": "portals/customer/pages/Invoice",
+        "parentId": "portals/customer/CustomerLayout",
+        "file": "portals/customer/pages/Invoice.tsx",
+        "path": "invoice"
+      },
+      "portals/customer/pages/OtpFlow": {
+        "id": "portals/customer/pages/OtpFlow",
+        "parentId": "portals/customer/CustomerLayout",
+        "file": "portals/customer/pages/OtpFlow.tsx",
+        "path": "otp"
+      },
       "portals/customer/pages/Login": {
         "id": "portals/customer/pages/Login",
         "parentId": "root",
         "file": "portals/customer/pages/Login.tsx",
         "path": "login"
+      },
+      "portals/customer/pages/CreateAccount": {
+        "id": "portals/customer/pages/CreateAccount",
+        "parentId": "root",
+        "file": "portals/customer/pages/CreateAccount.tsx",
+        "path": "create-account"
+      },
+      "portals/customer/pages/VerifyOtp": {
+        "id": "portals/customer/pages/VerifyOtp",
+        "parentId": "root",
+        "file": "portals/customer/pages/VerifyOtp.tsx",
+        "path": "verify-otp"
       },
       "portals/logistics/LogisticsLayout": {
         "id": "portals/logistics/LogisticsLayout",
@@ -187,7 +285,7 @@
       "logistics-delivery": {
         "id": "logistics-delivery",
         "parentId": "portals/logistics/LogisticsLayout",
-        "file": "portals/logistics/pages/Home.tsx",
+        "file": "portals/logistics/pages/Delivery.tsx",
         "path": "logistics/delivery"
       },
       "portals/logistics/pages/Login": {
@@ -258,12 +356,40 @@
               {
                 "file": "portals/customer/pages/Transactions.tsx",
                 "path": "transactions"
+              },
+              {
+                "file": "portals/customer/pages/Orders.tsx",
+                "path": "orders"
+              },
+              {
+                "file": "portals/customer/pages/Plans.tsx",
+                "path": "plans"
+              },
+              {
+                "file": "portals/customer/pages/Settings.tsx",
+                "path": "settings"
+              },
+              {
+                "file": "portals/customer/pages/Invoice.tsx",
+                "path": "invoice"
+              },
+              {
+                "file": "portals/customer/pages/OtpFlow.tsx",
+                "path": "otp"
               }
             ]
           },
           {
             "file": "portals/customer/pages/Login.tsx",
             "path": "login"
+          },
+          {
+            "file": "portals/customer/pages/CreateAccount.tsx",
+            "path": "create-account"
+          },
+          {
+            "file": "portals/customer/pages/VerifyOtp.tsx",
+            "path": "verify-otp"
           },
           {
             "file": "portals/logistics/LogisticsLayout.tsx",
@@ -274,7 +400,7 @@
                 "path": "logistics"
               },
               {
-                "file": "portals/logistics/pages/Home.tsx",
+                "file": "portals/logistics/pages/Delivery.tsx",
                 "path": "logistics/delivery",
                 "id": "logistics-delivery"
               }
