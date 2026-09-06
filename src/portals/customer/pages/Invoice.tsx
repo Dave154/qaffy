@@ -19,7 +19,7 @@ export default function Invoice() {
       <header className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-sm font-medium text-violet-600">Billing</p>
-          <h2 className="mt-1 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Invoice</h2>
+          <h2 className="mt-1 text-2xl font-bold tracking-tight text-[#121212] lg:hidden">Invoice</h2>
         </div>
         <span className="rounded-full bg-amber-50 px-3 py-1.5 text-sm font-medium text-amber-700">Awaiting payment</span>
       </header>

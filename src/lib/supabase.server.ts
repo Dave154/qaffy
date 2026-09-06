@@ -9,9 +9,16 @@ import type { Database } from '@/types/database.types'
 export function getSupabaseServerClient(request: Request) {
   const headers = new Headers()
 
+  const supabaseUrl = process.env.SUPABASE_URL
+  const supabaseAnonKey = process.env.SUPABASE_ANON_KEY
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    throw new Error('Supabase server environment variables are not configured.')
+  }
+
   const supabase = createServerClient<Database>(
-    process.env.SUPABASE_URL!,
-    process.env.SUPABASE_ANON_KEY!,
+    supabaseUrl,
+    supabaseAnonKey,
     {
       cookies: {
         getAll() {
@@ -28,3 +35,7 @@ export function getSupabaseServerClient(request: Request) {
 
   return { supabase, headers }
 }
+
+export const isSupabaseServerConfigured = Boolean(
+  process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY,
+)

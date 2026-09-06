@@ -1,31 +1,38 @@
-import { useMemo, useState } from 'react'
-
-const otpSteps = [
-  { label: 'Pickup OTP', detail: 'Share this when dropping off your bag', value: 'QF-2048' },
-  { label: 'Delivery OTP', detail: 'Use this to collect your clean clothes', value: 'QF-4187' },
-]
+import { useState } from 'react'
+import { useCustomerStore } from '../customer-store-hook'
 
 export default function OtpFlow() {
+  const { orders } = useCustomerStore()
   const [activeStep, setActiveStep] = useState(0)
+  const order = orders[0]
+  const otpSteps = [
+    { label: 'Pickup OTP', detail: 'Share this when dropping off your bag', value: order?.pickedUp ? undefined : order?.pickupOtp },
+    { label: 'Delivery OTP', detail: 'Use this to collect your clean clothes', value: order?.deliveryOtp },
+  ]
 
-  const currentStep = useMemo(() => otpSteps[activeStep], [activeStep])
+  const currentStep = otpSteps[activeStep]
 
   return (
     <div className="space-y-5 pb-8">
       <header className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h2 className="mt-1 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Pickup and delivery OTP</h2>
+          <h2 className="mt-1 text-2xl font-bold tracking-tight text-[#121212] lg:hidden">Pickup and delivery OTP</h2>
         </div>
-        <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-700">Order verified</span>
+        <span className="rounded-full bg-sky-50 px-3 py-1.5 text-sm font-medium text-sky-700">{order?.id ?? 'No active order'}</span>
       </header>
 
       <section className="rounded-[28px] bg-gradient-to-br from-violet-600 via-violet-700 to-fuchsia-500 p-5 text-white shadow-lg shadow-violet-200 sm:p-6">
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="text-xs font-medium uppercase tracking-[0.18em] text-violet-100">Current code</p>
-            <h3 className="mt-3 text-4xl font-bold tracking-[0.24em]">{currentStep.value}</h3>
+            <h3 className="mt-3 text-4xl font-bold tracking-[0.24em]">{currentStep.value ?? 'Not available'}</h3>
           </div>
-          <button type="button" className="rounded-2xl bg-white/10 px-3 py-2 text-sm font-medium text-white backdrop-blur-sm">Copy</button>
+          <button
+            type="button"
+            disabled={!currentStep.value}
+            onClick={() => currentStep.value && navigator.clipboard?.writeText(currentStep.value)}
+            className="rounded-2xl bg-white/10 px-3 py-2 text-sm font-medium text-white backdrop-blur-sm disabled:cursor-not-allowed disabled:opacity-50"
+          >Copy</button>
         </div>
 
         <p className="mt-4 text-sm text-violet-100">{currentStep.detail}</p>
@@ -53,19 +60,21 @@ export default function OtpFlow() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-[10px] uppercase tracking-[0.22em] text-slate-400">Status</p>
-              <p className="mt-2 text-lg font-bold text-slate-900">Ready for handoff</p>
+              <p className="mt-2 text-lg font-bold text-slate-900">{currentStep.value ? 'Ready for handoff' : 'Waiting for the next step'}</p>
             </div>
-            <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-700">Active</span>
+            <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${currentStep.value ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+              {currentStep.value ? 'Active' : 'Unavailable'}
+            </span>
           </div>
 
           <div className="mt-5 grid gap-3 sm:grid-cols-2">
             <div className="rounded-2xl border border-slate-200 bg-white p-3">
               <p className="text-xs text-slate-500">Bag count</p>
-              <p className="mt-2 text-xl font-bold text-slate-900">6 clothes</p>
+              <p className="mt-2 text-xl font-bold text-slate-900">{order?.items ?? 0} clothes</p>
             </div>
             <div className="rounded-2xl border border-slate-200 bg-white p-3">
               <p className="text-xs text-slate-500">Service</p>
-              <p className="mt-2 text-xl font-bold text-slate-900">Wash + Iron</p>
+              <p className="mt-2 text-xl font-bold text-slate-900">{order?.service ?? 'No active order'}</p>
             </div>
           </div>
         </div>

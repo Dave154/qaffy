@@ -4,8 +4,9 @@ import { Link, useNavigate } from 'react-router'
 import QaffyLogo from '../../../components/QaffyLogo'
 import { isSupabaseConfigured, supabase } from '../../../lib/supabase.client'
 
-export default function Login() {
+export default function CreateAccount() {
   const navigate = useNavigate()
+  const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [phone, setPhone] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -15,8 +16,8 @@ export default function Login() {
     event?.preventDefault()
     setError('')
 
-    if (!email.trim()) {
-      setError('Enter your email address to continue.')
+    if (!name.trim() || !email.trim() || !phone.trim()) {
+      setError('Enter your name, email, and phone number to continue.')
       return
     }
 
@@ -28,7 +29,10 @@ export default function Login() {
     setIsSubmitting(true)
     const { error: authError } = await supabase.auth.signInWithOtp({
       email: email.trim(),
-      options: { shouldCreateUser: false },
+      options: {
+        shouldCreateUser: true,
+        data: { full_name: name.trim(), phone: phone.trim() },
+      },
     })
 
     if (authError) {
@@ -37,7 +41,7 @@ export default function Login() {
       return
     }
 
-    navigate(`/verify-otp?email=${encodeURIComponent(email.trim())}&mode=login`)
+    navigate(`/verify-otp?email=${encodeURIComponent(email.trim())}&mode=create-account`)
   }
   return (
     <div
@@ -70,9 +74,9 @@ export default function Login() {
         <div className="w-full max-w-[430px] rounded-[36px] bg-white/95 p-5 shadow-[0_30px_80px_rgba(0,0,0,0.28)] backdrop-blur-sm sm:p-7" style={{ fontFamily: 'Qanelas, sans-serif' }}>
           <div className="mb-7 text-center">
             <h2 className="text-[2.7rem] leading-none text-slate-900" style={{ fontFamily: 'Freestyle Script, cursive' }}>
-              Customer Login
+              Create account
             </h2>
-            <p className="mt-2 text-sm text-slate-500">Use your email and phone number to continue</p>
+            <p className="mt-2 text-sm text-slate-500">Start with your email and phone number</p>
           </div>
 
           <form onSubmit={handleContinue}>
@@ -91,6 +95,17 @@ export default function Login() {
           </button>
 
           <div className="space-y-4 pt-4">
+            <label className="block">
+              <input
+                type="text"
+                aria-label="Full name"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder="Enter your full name"
+                className="h-14 w-full rounded-lg border border-[#f24d4d] bg-white px-4 text-[14px] font-semibold text-black shadow-sm outline-none transition placeholder:text-[#8e9a9a] focus:border-[#2563eb] focus:ring-2 focus:ring-blue-100"
+              />
+            </label>
+
             <label className="block">
               <input
                 type="email"
@@ -119,11 +134,8 @@ export default function Login() {
           <div className="mt-5 flex items-center justify-between gap-2 text-sm text-slate-500">
             <label className="inline-flex items-center gap-2">
               <input type="checkbox" className="h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500" />
-              Stay signed in
+              I agree to the terms
             </label>
-            <button type="button" className="font-medium text-violet-600 hover:text-violet-700">
-              Forgot password?
-            </button>
           </div>
 
           <button
@@ -131,13 +143,13 @@ export default function Login() {
             disabled={isSubmitting}
             className="mt-6 w-full rounded-2xl bg-slate-900 px-4 py-3.5 text-sm font-semibold text-white transition hover:bg-slate-800"
           >
-            {isSubmitting ? 'Sending code...' : 'Sign in'}
+            {isSubmitting ? 'Sending code...' : 'Create account'}
           </button>
 
           <p className="mt-6 text-center text-sm text-slate-500">
-            New to Qaffy?{' '}
-            <Link to="/create-account" className="font-semibold text-violet-600 hover:text-violet-700">
-              Create account
+            Already have an account?{' '}
+            <Link to="/login" className="font-semibold text-violet-600 hover:text-violet-700">
+              Sign in
             </Link>
           </p>
           </form>

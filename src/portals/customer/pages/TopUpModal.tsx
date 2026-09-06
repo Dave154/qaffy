@@ -34,7 +34,7 @@ export default function TopUpModal({ currentBalance, onClose }: TopUpModalProps)
       >
         <header className="flex items-start justify-between gap-3">
           <div>
-            <h2 id="top-up-title" className="mt-1 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Add funds</h2>
+            <h2 id="top-up-title" className="mt-1 text-2xl font-bold tracking-tight text-[#121212]">Add funds</h2>
           </div>
           <button type="button" onClick={onClose} aria-label="Close top-up modal" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-xl text-slate-500 shadow-sm transition hover:border-violet-200 hover:text-violet-700">
             ×

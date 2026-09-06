@@ -49,8 +49,7 @@ export default function Transactions() {
     <div className="space-y-5 pb-8">
       <header className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="text-sm font-medium text-sky-700">Money movement</p>
-          <h2 className="mt-1 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Transactions</h2>
+          <h2 className="mt-1 text-2xl font-bold tracking-tight text-[#121212] lg:hidden">Transactions</h2>
         </div>
         <p className="text-sm text-slate-500">Your wallet activity</p>
       </header>

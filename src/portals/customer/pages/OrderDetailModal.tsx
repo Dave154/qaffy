@@ -1,21 +1,4 @@
-type CustomerOrder = {
-  id: string
-  customerId: string
-  title: string
-  status: 'Picked up' | 'In progress' | 'Delivered'
-  statusTone: string
-  date: string
-  pickup: string
-  total: string
-  items: string
-  pickupOtp: string
-  deliveryOtp?: string
-  pickedUp: boolean
-  pickupDate?: string
-  notes: string
-  service: string
-  paymentStatus: 'Paid' | 'Pending'
-}
+import type { CustomerOrder } from '../customer-store'
 
 type OrderDetailModalProps = {
   order: CustomerOrder
@@ -34,7 +17,7 @@ export default function OrderDetailModal({ order, onClose }: OrderDetailModalPro
       >
         <header className="flex items-start justify-between gap-3">
           <div>
-            <h2 id="order-details-title" className="mt-1 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">{order.id}</h2>
+            <h2 id="order-details-title" className="mt-1 text-2xl font-bold tracking-tight text-[#121212]">{order.id}</h2>
           </div>
           <button type="button" onClick={onClose} aria-label="Close order details" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-xl text-slate-500 shadow-sm transition hover:border-violet-200 hover:text-violet-700">
             ×
@@ -74,11 +57,11 @@ export default function OrderDetailModal({ order, onClose }: OrderDetailModalPro
               </div>
               <div className="flex items-center justify-between gap-3">
                 <dt>Items</dt>
-                <dd className="font-semibold text-slate-900">{order.items}</dd>
+                <dd className="font-semibold text-slate-900">{order.items} clothes</dd>
               </div>
               <div className="flex items-center justify-between gap-3">
                 <dt>Total</dt>
-                <dd className="font-semibold text-slate-900">{order.total}</dd>
+                <dd className="font-semibold text-slate-900">₦{order.total.toLocaleString()}</dd>
               </div>
               <div className="flex items-center justify-between gap-3">
                 <dt>Customer ID</dt>

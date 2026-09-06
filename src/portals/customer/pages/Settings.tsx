@@ -16,7 +16,7 @@ export default function Settings() {
     <div className="space-y-5 pb-8">
       <header className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h2 className="mt-1 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Settings</h2>
+          <h2 className="mt-1 text-2xl font-bold tracking-tight text-[#121212] lg:hidden">Settings</h2>
         </div>
         <p className="text-sm text-slate-500">Manage your profile and billing</p>
       </header>
@@ -57,7 +57,9 @@ export default function Settings() {
               <span className="mb-1.5 block text-sm font-medium text-slate-600">Full name</span>
               <input
                 defaultValue="Aisha Bello"
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-base text-slate-900 focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+                readOnly
+                aria-readonly="true"
+                className="w-full cursor-not-allowed rounded-2xl border border-slate-200 bg-slate-100 px-3 py-3 text-base text-slate-500 focus:border-slate-200 focus:ring-0"
               />
             </label>
 
@@ -65,7 +67,7 @@ export default function Settings() {
               <span className="mb-1.5 block text-sm font-medium text-slate-600">Phone number</span>
               <input
                 defaultValue="+234 801 234 5678"
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-base text-slate-900 focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+                className="w-full rounded-2xl border border-violet-200 bg-white px-3 py-3 text-base text-slate-900 focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
               />
             </label>
 
@@ -73,7 +75,9 @@ export default function Settings() {
               <span className="mb-1.5 block text-sm font-medium text-slate-600">Email address</span>
               <input
                 defaultValue="aisha@qaffy.app"
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-base text-slate-900 focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+                readOnly
+                aria-readonly="true"
+                className="w-full cursor-not-allowed rounded-2xl border border-slate-200 bg-slate-100 px-3 py-3 text-base text-slate-500 focus:border-slate-200 focus:ring-0"
               />
             </label>
           </div>

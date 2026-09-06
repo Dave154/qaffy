@@ -11,6 +11,8 @@ export default [
     route('otp', 'portals/customer/pages/OtpFlow.tsx'),
   ]),
   route('login', 'portals/customer/pages/Login.tsx'),
+  route('create-account', 'portals/customer/pages/CreateAccount.tsx'),
+  route('verify-otp', 'portals/customer/pages/VerifyOtp.tsx'),
 
   ...prefix('logistics', [
     layout('portals/logistics/LogisticsLayout.tsx', [
