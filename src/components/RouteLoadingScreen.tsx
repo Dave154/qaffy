@@ -1,8 +1,13 @@
 import { useNavigation } from 'react-router'
 
-export default function RouteLoadingScreen() {
+type RouteLoadingScreenProps = {
+  isLoading?: boolean
+  watchNavigation?: boolean
+}
+
+export default function RouteLoadingScreen({ isLoading = false, watchNavigation = true }: RouteLoadingScreenProps) {
   const navigation = useNavigation()
-  const isNavigating = navigation.state !== 'idle'
+  const isNavigating = isLoading || (watchNavigation && navigation.state !== 'idle')
 
   if (!isNavigating) return null
 

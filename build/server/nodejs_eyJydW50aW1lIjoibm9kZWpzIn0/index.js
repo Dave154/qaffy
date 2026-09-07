@@ -68,11 +68,12 @@ function handleRequest(request, responseStatusCode, responseHeaders, routerConte
 }
 //#endregion
 //#region src/index.css?url
-var src_default = "/assets/index-_ublE694.css";
+var src_default = "/assets/index-BwAECgbO.css";
 //#endregion
 //#region src/components/RouteLoadingScreen.tsx
-function RouteLoadingScreen() {
-	if (!(useNavigation().state !== "idle")) return null;
+function RouteLoadingScreen({ isLoading = false, watchNavigation = true }) {
+	const navigation = useNavigation();
+	if (!(isLoading || watchNavigation && navigation.state !== "idle")) return null;
 	return /* @__PURE__ */ jsx("div", {
 		className: "route-loading-screen fixed inset-0 z-[100] flex items-center justify-center bg-white/45 backdrop-blur-[2px]",
 		role: "status",
@@ -176,8 +177,8 @@ function QaffyLogo({ className = "", light = false }) {
 		className,
 		"aria-label": "Qaffy logo",
 		children: /* @__PURE__ */ jsx("h1", {
-			className: `text-4xl leading-[33px] ${light ? "text-white" : "text-[#00b7d4]"}`,
-			style: { fontFamily: "Freestyle Script, cursive" },
+			className: `text-4xl leading-[33px] ${light ? "text-white" : "text-brand-primary"}`,
+			style: { fontFamily: "Pacifico, cursive" },
 			children: "Qaffy"
 		})
 	});
@@ -2232,13 +2233,20 @@ var Orders_default = UNSAFE_withComponentProps(function Orders() {
 							children: [/* @__PURE__ */ jsxs("div", { children: [
 								/* @__PURE__ */ jsxs("div", {
 									className: "flex items-center gap-2",
-									children: [/* @__PURE__ */ jsx("p", {
-										className: "text-lg font-semibold text-slate-900",
-										children: /* @__PURE__ */ jsx(CopyableOrderId, { id: order.id })
-									}), /* @__PURE__ */ jsx("span", {
-										className: `inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${order.statusTone}`,
-										children: order.status
-									})]
+									children: [
+										/* @__PURE__ */ jsx("p", {
+											className: "text-lg font-semibold text-slate-900",
+											children: /* @__PURE__ */ jsx(CopyableOrderId, { id: order.id })
+										}),
+										/* @__PURE__ */ jsx("span", {
+											className: `inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${order.statusTone}`,
+											children: order.status
+										}),
+										/* @__PURE__ */ jsxs("span", {
+											className: `inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${order.paymentStatus === "Paid" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`,
+											children: ["Payment: ", order.paymentStatus]
+										})
+									]
 								}),
 								/* @__PURE__ */ jsx("p", {
 									className: "mt-2 text-sm font-medium text-slate-700",
@@ -3245,7 +3253,10 @@ var Login_default$3 = UNSAFE_withComponentProps(function Login() {
 		setError("");
 		setError("Supabase is not configured. Add the required environment variables to continue.");
 	};
-	return /* @__PURE__ */ jsx("div", {
+	return /* @__PURE__ */ jsxs(Fragment, { children: [/* @__PURE__ */ jsx(RouteLoadingScreen, {
+		isLoading: isSubmitting,
+		watchNavigation: false
+	}), /* @__PURE__ */ jsx("div", {
 		className: "flex min-h-screen items-center justify-center overflow-hidden bg-[#0d1016] px-4 py-6 sm:px-6 lg:px-10",
 		style: {
 			backgroundImage: "linear-gradient(90deg, rgba(12,15,22,0.82) 0%, rgba(12,15,22,0.62) 32%, rgba(12,15,22,0.1) 100%), url(\"https://images.unsplash.com/photo-1567113463300-102a7eb3cb26?q=80&w=1470&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D\")",
@@ -3262,7 +3273,7 @@ var Login_default$3 = UNSAFE_withComponentProps(function Login() {
 						className: "inline-flex"
 					}),
 					/* @__PURE__ */ jsxs("h1", {
-						className: "mt-8 text-5xl font-bold leading-[1.06] tracking-[-0.04em] text-white",
+						className: "mt-8 text-5xl font-semibold leading-[1.06] tracking-[-0.04em] text-white",
 						children: ["Premium Care,", /* @__PURE__ */ jsx("span", {
 							className: "block text-white/85",
 							children: "Every Fabric."
@@ -3279,13 +3290,12 @@ var Login_default$3 = UNSAFE_withComponentProps(function Login() {
 				]
 			}), /* @__PURE__ */ jsxs("div", {
 				className: "w-full max-w-[430px] rounded-[36px] bg-white/95 p-5 shadow-[0_30px_80px_rgba(0,0,0,0.28)] backdrop-blur-sm sm:p-7",
-				style: { fontFamily: "Qanelas, sans-serif" },
+				style: { fontFamily: "Inter, sans-serif" },
 				children: [/* @__PURE__ */ jsxs("div", {
 					className: "mb-7 text-center",
 					children: [/* @__PURE__ */ jsx("h2", {
-						className: "text-[2.7rem] leading-none text-slate-900",
-						style: { fontFamily: "Freestyle Script, cursive" },
-						children: "Customer Login"
+						className: "text-[2.7rem] font-semibold text-slate-900",
+						children: "Login"
 					}), /* @__PURE__ */ jsx("p", {
 						className: "mt-2 text-sm text-slate-500",
 						children: "Use your email and phone number to continue"
@@ -3402,7 +3412,7 @@ var Login_default$3 = UNSAFE_withComponentProps(function Login() {
 				})]
 			})]
 		})
-	});
+	})] });
 });
 //#endregion
 //#region src/portals/customer/pages/CreateAccount.tsx
@@ -3428,7 +3438,10 @@ var CreateAccount_default = UNSAFE_withComponentProps(function CreateAccount() {
 		setError("");
 		setError("Supabase is not configured. Add the required environment variables to continue.");
 	};
-	return /* @__PURE__ */ jsx("div", {
+	return /* @__PURE__ */ jsxs(Fragment, { children: [/* @__PURE__ */ jsx(RouteLoadingScreen, {
+		isLoading: isSubmitting,
+		watchNavigation: false
+	}), /* @__PURE__ */ jsx("div", {
 		className: "flex min-h-screen items-center justify-center overflow-hidden bg-[#0d1016] px-4 py-6 sm:px-6 lg:px-10",
 		style: {
 			backgroundImage: "linear-gradient(90deg, rgba(12,15,22,0.82) 0%, rgba(12,15,22,0.62) 32%, rgba(12,15,22,0.1) 100%), url(\"https://images.unsplash.com/photo-1567113463300-102a7eb3cb26?q=80&w=1470&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D\")",
@@ -3445,7 +3458,7 @@ var CreateAccount_default = UNSAFE_withComponentProps(function CreateAccount() {
 						className: "inline-flex"
 					}),
 					/* @__PURE__ */ jsxs("h1", {
-						className: "mt-8 text-5xl font-bold leading-[1.06] tracking-[-0.04em] text-white",
+						className: "mt-8 text-5xl font-semibold leading-[1.06] tracking-[-0.04em] text-white",
 						children: ["Premium Care,", /* @__PURE__ */ jsx("span", {
 							className: "block text-white/85",
 							children: "Every Fabric."
@@ -3462,12 +3475,11 @@ var CreateAccount_default = UNSAFE_withComponentProps(function CreateAccount() {
 				]
 			}), /* @__PURE__ */ jsxs("div", {
 				className: "w-full max-w-[430px] rounded-[36px] bg-white/95 p-5 shadow-[0_30px_80px_rgba(0,0,0,0.28)] backdrop-blur-sm sm:p-7",
-				style: { fontFamily: "Qanelas, sans-serif" },
+				style: { fontFamily: "Inter, sans-serif" },
 				children: [/* @__PURE__ */ jsxs("div", {
 					className: "mb-7 text-center",
 					children: [/* @__PURE__ */ jsx("h2", {
-						className: "text-[2.7rem] leading-none text-slate-900",
-						style: { fontFamily: "Freestyle Script, cursive" },
+						className: "text-[2.7rem] font-semibold text-slate-900",
 						children: "Create account"
 					}), /* @__PURE__ */ jsx("p", {
 						className: "mt-2 text-sm text-slate-500",
@@ -3594,7 +3606,7 @@ var CreateAccount_default = UNSAFE_withComponentProps(function CreateAccount() {
 				})]
 			})]
 		})
-	});
+	})] });
 });
 //#endregion
 //#region src/portals/customer/pages/VerifyOtp.tsx
@@ -3659,7 +3671,7 @@ var VerifyOtp_default = UNSAFE_withComponentProps(function VerifyOtp() {
 						className: "inline-flex"
 					}),
 					/* @__PURE__ */ jsxs("h1", {
-						className: "mt-8 text-5xl font-bold leading-[1.06] tracking-[-0.04em] text-white",
+						className: "mt-8 text-5xl font-semibold leading-[1.06] tracking-[-0.04em] text-white",
 						children: ["Premium Care,", /* @__PURE__ */ jsx("span", {
 							className: "block text-white/85",
 							children: "Every Fabric."
@@ -3688,7 +3700,7 @@ var VerifyOtp_default = UNSAFE_withComponentProps(function VerifyOtp() {
 					className: "space-y-5",
 					children: [
 						/* @__PURE__ */ jsxs("div", { children: [/* @__PURE__ */ jsx("h2", {
-							className: "text-[2.2rem] font-bold tracking-[-0.04em] text-slate-900",
+							className: "text-[2.2rem] font-semibold tracking-[-0.04em] text-slate-900",
 							children: "Enter OTP"
 						}), /* @__PURE__ */ jsxs("p", {
 							className: "mt-2 text-base text-[#8e9a9a]",
@@ -3779,7 +3791,10 @@ var CompleteProfile_default = UNSAFE_withComponentProps(function CompleteProfile
 		}
 		setError("Supabase is not configured. Add the required environment variables to continue.");
 	};
-	return /* @__PURE__ */ jsx("div", {
+	return /* @__PURE__ */ jsxs(Fragment, { children: [/* @__PURE__ */ jsx(RouteLoadingScreen, {
+		isLoading: isSubmitting,
+		watchNavigation: false
+	}), /* @__PURE__ */ jsx("div", {
 		className: "flex min-h-screen items-center justify-center bg-[#0d1016] px-4 py-6",
 		style: {
 			backgroundImage: "linear-gradient(90deg, rgba(12,15,22,0.82), rgba(12,15,22,0.1)), url(\"https://images.unsplash.com/photo-1567113463300-102a7eb3cb26?q=80&w=1470&auto=format&fit=crop\")",
@@ -3788,13 +3803,13 @@ var CompleteProfile_default = UNSAFE_withComponentProps(function CompleteProfile
 		},
 		children: /* @__PURE__ */ jsxs("div", {
 			className: "w-full max-w-[430px] rounded-[36px] bg-white/95 p-5 shadow-[0_30px_80px_rgba(0,0,0,0.28)] sm:p-7",
-			style: { fontFamily: "Qanelas, sans-serif" },
+			style: { fontFamily: "Inter, sans-serif" },
 			children: [/* @__PURE__ */ jsxs("div", {
 				className: "mb-7 text-center",
 				children: [
 					/* @__PURE__ */ jsx(QaffyLogo, { className: "mx-auto mb-5 inline-flex" }),
 					/* @__PURE__ */ jsx("h1", {
-						className: "text-2xl font-bold text-slate-900",
+						className: "text-2xl font-semibold text-slate-900",
 						children: "Complete your profile"
 					}),
 					/* @__PURE__ */ jsx("p", {
@@ -3835,7 +3850,7 @@ var CompleteProfile_default = UNSAFE_withComponentProps(function CompleteProfile
 				]
 			})]
 		})
-	});
+	})] });
 });
 //#endregion
 //#region src/portals/logistics/LogisticsLayout.tsx
@@ -4401,12 +4416,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-CsmH-xFB.js",
+			"module": "/assets/root-B5yLZwSJ.js",
 			"imports": [
 				"/assets/chunk-BV7QT456-BDegQKJ4.js",
 				"/assets/react-dom-CNfWT6vQ.js",
 				"/assets/jsx-runtime-pNW8k5OS.js",
-				"/assets/dist-BbqvSyUb.js"
+				"/assets/dist-BbqvSyUb.js",
+				"/assets/RouteLoadingScreen-CIAWPh0t.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -4427,7 +4443,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/CustomerLayout-B0u9MIWT.js",
+			"module": "/assets/CustomerLayout-C6zhJgum.js",
 			"imports": [
 				"/assets/chunk-BV7QT456-BDegQKJ4.js",
 				"/assets/supabase.client-Duq0p86w.js",
@@ -4435,7 +4451,7 @@ var server_manifest_default = {
 				"/assets/createLucideIcon-DDihqGja.js",
 				"/assets/clipboard-list-D6Dv0KEX.js",
 				"/assets/x-BbNm108-.js",
-				"/assets/QaffyLogo-DziVPfpA.js",
+				"/assets/QaffyLogo-D4L04MQ2.js",
 				"/assets/customer-store-hook-DtGdhfzF.js",
 				"/assets/customer-store-CHXCVViv.js",
 				"/assets/dist-BbqvSyUb.js",
@@ -4519,7 +4535,7 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/Orders-BxIdUUki.js",
+			"module": "/assets/Orders-CsPWbHW6.js",
 			"imports": [
 				"/assets/chunk-BV7QT456-BDegQKJ4.js",
 				"/assets/jsx-runtime-pNW8k5OS.js",
@@ -4660,12 +4676,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/Login-GQlXZIoF.js",
+			"module": "/assets/Login-HwheNIRg.js",
 			"imports": [
 				"/assets/chunk-BV7QT456-BDegQKJ4.js",
 				"/assets/supabase.client-Duq0p86w.js",
 				"/assets/jsx-runtime-pNW8k5OS.js",
-				"/assets/QaffyLogo-DziVPfpA.js"
+				"/assets/RouteLoadingScreen-CIAWPh0t.js",
+				"/assets/QaffyLogo-D4L04MQ2.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -4686,12 +4703,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/CreateAccount-Bd7bXmly.js",
+			"module": "/assets/CreateAccount-B5WlJnqw.js",
 			"imports": [
 				"/assets/chunk-BV7QT456-BDegQKJ4.js",
 				"/assets/supabase.client-Duq0p86w.js",
 				"/assets/jsx-runtime-pNW8k5OS.js",
-				"/assets/QaffyLogo-DziVPfpA.js"
+				"/assets/RouteLoadingScreen-CIAWPh0t.js",
+				"/assets/QaffyLogo-D4L04MQ2.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -4712,12 +4730,12 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/VerifyOtp-BKpZ0kYq.js",
+			"module": "/assets/VerifyOtp-DmJa2XXV.js",
 			"imports": [
 				"/assets/chunk-BV7QT456-BDegQKJ4.js",
 				"/assets/supabase.client-Duq0p86w.js",
 				"/assets/jsx-runtime-pNW8k5OS.js",
-				"/assets/QaffyLogo-DziVPfpA.js"
+				"/assets/QaffyLogo-D4L04MQ2.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -4759,13 +4777,14 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/CompleteProfile-DQhPoxDA.js",
+			"module": "/assets/CompleteProfile-BeVO_4BK.js",
 			"imports": [
 				"/assets/chunk-BV7QT456-BDegQKJ4.js",
 				"/assets/supabase.client-Duq0p86w.js",
 				"/assets/jsx-runtime-pNW8k5OS.js",
 				"/assets/dist-BbqvSyUb.js",
-				"/assets/QaffyLogo-DziVPfpA.js",
+				"/assets/RouteLoadingScreen-CIAWPh0t.js",
+				"/assets/QaffyLogo-D4L04MQ2.js",
 				"/assets/toast-Du0uRnVy.js",
 				"/assets/react-dom-CNfWT6vQ.js"
 			],
@@ -4986,8 +5005,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-9880f086.js",
-	"version": "9880f086",
+	"url": "/assets/manifest-b992529b.js",
+	"version": "b992529b",
 	"sri": void 0
 };
 //#endregion

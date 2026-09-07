@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router'
 import QaffyLogo from '../../../components/QaffyLogo'
+import RouteLoadingScreen from '../../../components/RouteLoadingScreen'
 import { isSupabaseConfigured, supabase } from '../../../lib/supabase.client'
 
 export default function Login() {
@@ -49,15 +50,21 @@ export default function Login() {
       return
     }
 
+    setIsSubmitting(true)
     const { error: authError } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: { redirectTo: `${window.location.origin}/auth/callback` },
     })
 
-    if (authError) setError(authError.message)
+    if (authError) {
+      setError(authError.message)
+      setIsSubmitting(false)
+    }
   }
   return (
-    <div
+    <>
+      <RouteLoadingScreen isLoading={isSubmitting} watchNavigation={false} />
+      <div
       className="flex min-h-screen items-center justify-center overflow-hidden bg-[#0d1016] px-4 py-6 sm:px-6 lg:px-10"
       style={{
         backgroundImage:
@@ -70,7 +77,7 @@ export default function Login() {
         <div className="hidden max-w-xl flex-1 pb-10 pt-10 text-white lg:block">
           <QaffyLogo light className="inline-flex" />
 
-          <h1 className="mt-8 text-5xl font-bold leading-[1.06] tracking-[-0.04em] text-white">
+          <h1 className="mt-8 text-5xl font-semibold leading-[1.06] tracking-[-0.04em] text-white">
             Premium Care,
             <span className="block text-white/85">Every Fabric.</span>
           </h1>
@@ -84,10 +91,10 @@ export default function Login() {
           </p>
         </div>
 
-        <div className="w-full max-w-[430px] rounded-[36px] bg-white/95 p-5 shadow-[0_30px_80px_rgba(0,0,0,0.28)] backdrop-blur-sm sm:p-7" style={{ fontFamily: 'Qanelas, sans-serif' }}>
+        <div className="w-full max-w-[430px] rounded-[36px] bg-white/95 p-5 shadow-[0_30px_80px_rgba(0,0,0,0.28)] backdrop-blur-sm sm:p-7" style={{ fontFamily: 'Inter, sans-serif' }}>
           <div className="mb-7 text-center">
-            <h2 className="text-[2.7rem] leading-none text-slate-900" style={{ fontFamily: 'Freestyle Script, cursive' }}>
-              Customer Login
+            <h2 className="text-[2.7rem] font-semibold text-slate-900">
+              Login
             </h2>
             <p className="mt-2 text-sm text-slate-500">Use your email and phone number to continue</p>
           </div>
@@ -176,6 +183,7 @@ export default function Login() {
           </form>
         </div>
       </div>
-    </div>
+      </div>
+    </>
   )
 }

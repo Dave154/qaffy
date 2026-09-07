@@ -1,4 +1,8 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Pacifico&display=swap');
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/inter/700.css';
+@import '@fontsource/pacifico/400.css';
 @import "tailwindcss";
 
 @theme {
@@ -34,7 +38,7 @@
   --color-field-disabled-text: #8e9a9a;
   --color-surface: #fafafa;
   --color-ink: #121212;
-  --font-sans: "Qanelas", "Inter", "Segoe UI", sans-serif;
+  --font-sans: "Inter", "Segoe UI", sans-serif;
 }
 
 :root {
@@ -167,7 +171,7 @@ body {
 }
 
 .route-loading-logo text {
-  font-family: 'Freestyle Script', cursive;
+  font-family: 'Pacifico', cursive;
   font-size: 76px;
 }
 

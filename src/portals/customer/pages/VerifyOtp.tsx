@@ -128,7 +128,7 @@ export default function VerifyOtp() {
         <div className="hidden max-w-xl flex-1 pb-10 pt-10 text-white lg:block">
           <QaffyLogo light className="inline-flex" />
 
-          <h1 className="mt-8 text-5xl font-bold leading-[1.06] tracking-[-0.04em] text-white">
+          <h1 className="mt-8 text-5xl font-semibold leading-[1.06] tracking-[-0.04em] text-white">
             Premium Care,
             <span className="block text-white/85">Every Fabric.</span>
           </h1>
@@ -154,7 +154,7 @@ export default function VerifyOtp() {
 
           <div className="space-y-5">
             <div>
-              <h2 className="text-[2.2rem] font-bold tracking-[-0.04em] text-slate-900">Enter OTP</h2>
+              <h2 className="text-[2.2rem] font-semibold tracking-[-0.04em] text-slate-900">Enter OTP</h2>
               <p className="mt-2 text-base text-[#8e9a9a]">
                 Please provide the OTP sent to <span className="font-semibold text-slate-700">{email}</span>
               </p>

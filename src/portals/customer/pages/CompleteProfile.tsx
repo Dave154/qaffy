@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { useNavigate } from 'react-router'
 import QaffyLogo from '../../../components/QaffyLogo'
+import RouteLoadingScreen from '../../../components/RouteLoadingScreen'
 import { toast } from '../../../lib/toast'
 import { isSupabaseConfigured, supabase } from '../../../lib/supabase.client'
 
@@ -51,11 +52,13 @@ export default function CompleteProfile() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#0d1016] px-4 py-6" style={{ backgroundImage: 'linear-gradient(90deg, rgba(12,15,22,0.82), rgba(12,15,22,0.1)), url("https://images.unsplash.com/photo-1567113463300-102a7eb3cb26?q=80&w=1470&auto=format&fit=crop")', backgroundSize: 'cover', backgroundPosition: 'center' }}>
-      <div className="w-full max-w-[430px] rounded-[36px] bg-white/95 p-5 shadow-[0_30px_80px_rgba(0,0,0,0.28)] sm:p-7" style={{ fontFamily: 'Qanelas, sans-serif' }}>
+    <>
+      <RouteLoadingScreen isLoading={isSubmitting} watchNavigation={false} />
+      <div className="flex min-h-screen items-center justify-center bg-[#0d1016] px-4 py-6" style={{ backgroundImage: 'linear-gradient(90deg, rgba(12,15,22,0.82), rgba(12,15,22,0.1)), url("https://images.unsplash.com/photo-1567113463300-102a7eb3cb26?q=80&w=1470&auto=format&fit=crop")', backgroundSize: 'cover', backgroundPosition: 'center' }}>
+      <div className="w-full max-w-[430px] rounded-[36px] bg-white/95 p-5 shadow-[0_30px_80px_rgba(0,0,0,0.28)] sm:p-7" style={{ fontFamily: 'Inter, sans-serif' }}>
         <div className="mb-7 text-center">
           <QaffyLogo className="mx-auto mb-5 inline-flex" />
-          <h1 className="text-2xl font-bold text-slate-900">Complete your profile</h1>
+          <h1 className="text-2xl font-semibold text-slate-900">Complete your profile</h1>
           <p className="mt-2 text-sm text-slate-500">Add your name and phone number before continuing.</p>
         </div>
 
@@ -68,6 +71,7 @@ export default function CompleteProfile() {
           </button>
         </form>
       </div>
-    </div>
+      </div>
+    </>
   )
 }
