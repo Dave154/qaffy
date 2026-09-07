@@ -63,7 +63,7 @@ export interface ClothCategoryRate {
   wash_price: number
   iron_price: number
   wash_iron_price: number
-  weight_kg: number | null
+  subscription_units: number
   created_at: string
 }
 
@@ -136,6 +136,8 @@ export interface OrderItem {
   order_id: string
   category_id: string
   quantity: number
+  service: 'wash' | 'iron' | 'wash_iron'
+  unit_price: number
 }
 
 export interface Mismatch {
@@ -191,7 +193,12 @@ export interface Referral {
   created_at: string
 }
 
-type TableDef<Row> = { Row: Row; Insert: Partial<Row>; Update: Partial<Row> }
+type TableDef<Row> = {
+  Row: Row & Record<string, unknown>
+  Insert: Partial<Row> & Record<string, unknown>
+  Update: Partial<Row> & Record<string, unknown>
+  Relationships: []
+}
 
 export interface Database {
   public: {
@@ -215,6 +222,7 @@ export interface Database {
       vendor_settlement_orders: TableDef<VendorSettlementOrder>
       referrals: TableDef<Referral>
     }
+    Views: Record<string, never>
     Functions: {
       has_role: { Args: { p_role: UserRole }; Returns: boolean }
       is_admin: { Args: Record<string, never>; Returns: boolean }

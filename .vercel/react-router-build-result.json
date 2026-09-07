@@ -21,6 +21,8 @@
       "portals/customer/pages/Login": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
       "portals/customer/pages/CreateAccount": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
       "portals/customer/pages/VerifyOtp": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
+      "portals/customer/pages/AuthCallback": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
+      "portals/customer/pages/CompleteProfile": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
       "portals/logistics/pages/Home": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
       "logistics-delivery": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
       "portals/logistics/pages/Login": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
@@ -112,6 +114,20 @@
         "parentId": "root",
         "file": "src/portals/customer/pages/VerifyOtp.tsx",
         "path": "verify-otp",
+        "config": {}
+      },
+      "portals/customer/pages/AuthCallback": {
+        "id": "portals/customer/pages/AuthCallback",
+        "parentId": "root",
+        "file": "src/portals/customer/pages/AuthCallback.tsx",
+        "path": "auth/callback",
+        "config": {}
+      },
+      "portals/customer/pages/CompleteProfile": {
+        "id": "portals/customer/pages/CompleteProfile",
+        "parentId": "root",
+        "file": "src/portals/customer/pages/CompleteProfile.tsx",
+        "path": "complete-profile",
         "config": {}
       },
       "portals/logistics/LogisticsLayout": {
@@ -270,6 +286,18 @@
         "file": "portals/customer/pages/VerifyOtp.tsx",
         "path": "verify-otp"
       },
+      "portals/customer/pages/AuthCallback": {
+        "id": "portals/customer/pages/AuthCallback",
+        "parentId": "root",
+        "file": "portals/customer/pages/AuthCallback.tsx",
+        "path": "auth/callback"
+      },
+      "portals/customer/pages/CompleteProfile": {
+        "id": "portals/customer/pages/CompleteProfile",
+        "parentId": "root",
+        "file": "portals/customer/pages/CompleteProfile.tsx",
+        "path": "complete-profile"
+      },
       "portals/logistics/LogisticsLayout": {
         "id": "portals/logistics/LogisticsLayout",
         "parentId": "root",
@@ -390,6 +418,14 @@
           {
             "file": "portals/customer/pages/VerifyOtp.tsx",
             "path": "verify-otp"
+          },
+          {
+            "file": "portals/customer/pages/AuthCallback.tsx",
+            "path": "auth/callback"
+          },
+          {
+            "file": "portals/customer/pages/CompleteProfile.tsx",
+            "path": "complete-profile"
           },
           {
             "file": "portals/logistics/LogisticsLayout.tsx",

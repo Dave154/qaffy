@@ -1,8 +1,41 @@
 import { useState } from 'react'
 import NewOrder from './NewOrder'
 import OrderDetailModal from './OrderDetailModal'
+import CopyableOrderId from '../../../components/CopyableOrderId'
 import { type CustomerOrder } from '../customer-store'
 import { useCustomerStore } from '../customer-store-hook'
+import { data } from 'react-router'
+import type { Route } from './+types/Orders'
+import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
+import { chargeSubscriptionInvoice, debitOneOffInvoice, InsufficientBalanceError } from '../../../lib/wallet.server'
+
+// Charges subscription overflow from the authenticated customer's subscription balance.
+// eslint-disable-next-line react-refresh/only-export-components
+export async function action({ request }: Route.ActionArgs) {
+  if (!isSupabaseServerConfigured) return data({ ok: false, message: 'Supabase is not configured.' }, { status: 500 })
+
+  const { supabase: serverSupabase, headers } = getSupabaseServerClient(request)
+  const { data: userData } = await serverSupabase.auth.getUser()
+  if (!userData.user) return data({ ok: false, message: 'Please sign in again.' }, { status: 401, headers })
+
+  const formData = await request.formData()
+  const invoiceId = String(formData.get('invoiceId') ?? '')
+  const balanceType = String(formData.get('balanceType') ?? 'subscription')
+  if (!invoiceId) return data({ ok: false, message: 'Invoice is missing.' }, { status: 400, headers })
+
+  try {
+    if (balanceType === 'one_off') {
+      await debitOneOffInvoice(userData.user.id, invoiceId)
+      return data({ ok: true }, { headers })
+    }
+    await chargeSubscriptionInvoice(userData.user.id, invoiceId)
+    return data({ ok: true }, { headers })
+  } catch (error) {
+    if (error instanceof InsufficientBalanceError) return data({ ok: false, message: 'Your subscription balance is too low for the extra units.' }, { status: 402, headers })
+    const message = error instanceof Error ? error.message : 'Unknown wallet error'
+    return data({ ok: false, message: `The extra charge could not be paid from your wallet: ${message}` }, { status: 500, headers })
+  }
+}
 
 export default function Orders() {
   const { orders } = useCustomerStore()
@@ -17,6 +50,17 @@ export default function Orders() {
     return true
   })
 
+  const exportOrders = () => {
+    const rows = [['Order', 'Status', 'Total', 'Date'], ...filteredOrders.map((order) => [order.id, order.status, String(order.total), order.date])]
+    const csv = rows.map((row) => row.map((value) => `"${value.replaceAll('"', '""')}"`).join(',')).join('\n')
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = 'qaffy-orders.csv'
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
   const stats = [
     { label: 'Total orders', value: String(orders.length), helper: 'In your history' },
     { label: 'Active', value: String(orders.filter((order) => order.status !== 'Delivered').length).padStart(2, '0'), helper: 'In progress' },
@@ -30,7 +74,7 @@ export default function Orders() {
         <div>
           <h2 className="mt-1 text-2xl font-bold tracking-tight text-[#121212] lg:hidden">Orders</h2>
         </div>
-        <button type="button" onClick={() => setIsOrderModalOpen(true)} className="rounded-lg bg-[#00b7d4] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#007f99]">
+        <button type="button" onClick={() => setIsOrderModalOpen(true)} className="rounded-lg bg-brand-primary px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-primary-hover">
           New order
         </button>
       </header>
@@ -54,7 +98,7 @@ export default function Orders() {
               onClick={() => setActiveFilter(filter)}
               className={`rounded-full px-4 py-2 text-sm font-medium transition ${
                 activeFilter === filter
-                  ? 'bg-[#e8fbfd] text-[#00b7d4] ring-1 ring-[#a8eaf0]'
+                  ? 'bg-brand-soft text-brand-primary ring-1 ring-brand-border'
                   : 'bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-900'
               }`}
             >
@@ -70,7 +114,7 @@ export default function Orders() {
             <h3 className="text-lg font-bold text-slate-900">Recent orders</h3>
             <p className="mt-1 text-sm text-slate-500">Track pickup, delivery, and payment status</p>
           </div>
-          <button type="button" className="text-sm font-medium text-[#00b7d4]">Export</button>
+          <button type="button" onClick={exportOrders} className="text-sm font-medium text-brand-primary">Export</button>
         </div>
 
         <div className="space-y-3">
@@ -79,9 +123,12 @@ export default function Orders() {
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
                   <div className="flex items-center gap-2">
-                    <p className="text-lg font-semibold text-slate-900">{order.id}</p>
+                    <p className="text-lg font-semibold text-slate-900"><CopyableOrderId id={order.id} /></p>
                     <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${order.statusTone}`}>
                       {order.status}
+                    </span>
+                    <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${order.paymentStatus === 'Paid' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
+                      Payment: {order.paymentStatus}
                     </span>
                   </div>
                   <p className="mt-2 text-sm font-medium text-slate-700">{order.title}</p>
@@ -89,8 +136,23 @@ export default function Orders() {
                 </div>
 
                 <div className="text-left sm:text-right">
-                  <p className="text-xl font-bold text-slate-900">₦{order.total.toLocaleString()}</p>
-                  <p className="mt-1 text-xs text-slate-500">{order.items} clothes</p>
+                  {order.status === 'Awaiting pickup' ? (
+                    <div className="flex flex-col items-start sm:items-end">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-primary">Pickup OTP</p>
+                      <div className="mt-2 flex gap-2">
+                        {Array.from({ length: 5 }).map((_, index) => (
+                          <div key={`${order.id}-${index}`} className="flex h-11 w-11 items-center justify-center rounded-md border border-[#ff4a4a] bg-white text-lg font-bold text-[#ff4a4a] shadow-[inset_0_0_0_1px_rgba(255,74,74,0.05)]">
+                            {order.pickupOtp[index] ?? ''}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <p className="text-xl font-bold text-slate-900">₦{order.total.toLocaleString()}</p>
+                      <p className="mt-1 text-xs text-slate-500">{order.items} clothes</p>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -99,7 +161,7 @@ export default function Orders() {
                 <button
                   type="button"
                   onClick={() => setSelectedOrder(order)}
-                    className="rounded-lg border border-[#a8eaf0] bg-white px-3.5 py-2 text-sm font-semibold text-[#00b7d4] hover:bg-[#e8fbfd]"
+                    className="rounded-lg border border-brand-border bg-white px-3.5 py-2 text-sm font-semibold text-brand-primary hover:bg-brand-soft"
                 >
                   {order.action}
                 </button>

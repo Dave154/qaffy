@@ -1,1 +1,0 @@
-import{M as e,P as t}from"./jsx-runtime-DRqUxo5a.js";var n=t(e(),1),r=(0,n.createContext)(null);function i(){let e=(0,n.useContext)(r);if(!e)throw Error(`useCustomerStore must be used inside CustomerStoreProvider`);return e}export{r as n,i as t};

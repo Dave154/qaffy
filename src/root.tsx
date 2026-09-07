@@ -8,6 +8,8 @@ import {
 } from 'react-router'
 import type { Route } from './+types/root'
 import stylesheetUrl from './index.css?url'
+import { Toaster } from 'sonner'
+import RouteLoadingScreen from './components/RouteLoadingScreen'
 
 export const links: Route.LinksFunction = () => [
   { rel: 'stylesheet', href: stylesheetUrl },
@@ -24,6 +26,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       </head>
       <body>
         {children}
+        <Toaster position="top-right" richColors closeButton />
         <ScrollRestoration />
         <Scripts />
       </body>
@@ -32,7 +35,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
-  return <Outlet />
+  return (
+    <>
+      <Outlet />
+      <RouteLoadingScreen />
+    </>
+  )
 }
 
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {

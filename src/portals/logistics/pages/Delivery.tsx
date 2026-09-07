@@ -1,9 +1,18 @@
+import { useState } from 'react'
+
 const stats = [
-  { label: 'Collected today', value: '18', accent: 'bg-violet-100 text-violet-700' },
-  { label: 'Delivered', value: '12', accent: 'bg-emerald-100 text-emerald-700' },
+  { label: 'Collected today', value: '0', accent: 'bg-violet-100 text-violet-700' },
+  { label: 'Delivered', value: '0', accent: 'bg-emerald-100 text-emerald-700' },
 ]
 
 export default function Delivery() {
+  const [otp, setOtp] = useState('')
+  const [message, setMessage] = useState('')
+
+  const confirmDelivery = () => {
+    setMessage(otp.trim() ? 'No delivery was found for that OTP.' : 'Enter a customer OTP to search.')
+  }
+
   return (
     <div className="space-y-5">
       <div className="grid gap-3 md:grid-cols-2">
@@ -28,17 +37,20 @@ export default function Delivery() {
           <input
             type="text"
             placeholder="Enter OTP"
-            className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-base text-slate-900 placeholder:text-slate-400 focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+            className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-base text-slate-900 placeholder:text-slate-400"
+            onChange={(event) => setOtp(event.target.value)}
+            value={otp}
           />
         </label>
 
         <div className="mt-4 rounded-[22px] bg-slate-50 p-4">
           <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Customer</p>
-          <p className="mt-2 text-lg font-bold text-slate-900">Aisha Bello</p>
-          <p className="mt-1 text-sm text-slate-500">3 bags • Paid • Ready for collection</p>
+          <p className="mt-2 text-lg font-bold text-slate-900">No customer selected</p>
+          <p className="mt-1 text-sm text-slate-500">Search with a valid delivery OTP.</p>
         </div>
 
-        <button type="button" className="mt-4 w-full rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white shadow-md shadow-emerald-200">
+        {message && <p role="status" className="mt-3 text-sm text-slate-600">{message}</p>}
+        <button type="button" onClick={confirmDelivery} className="mt-4 w-full rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white shadow-md shadow-emerald-200">
           Confirm delivery
         </button>
       </div>

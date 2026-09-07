@@ -1,5 +1,11 @@
 # React + TypeScript + Vite
 
+## Supabase Email OTP
+
+The customer signup and sign-in flows use Supabase email OTP. In the Supabase dashboard, open **Authentication > Email Templates** and update the relevant email template to display `{{ .Token }}`. The default `{{ .ConfirmationURL }}` template sends a magic link instead of a six-digit code, which will not work with the OTP input screen.
+
+Configure the project URL and allowed redirect URLs for the application origin. The app expects the public `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` variables plus the server-side `SUPABASE_URL` and `SUPABASE_ANON_KEY` variables.
+
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
 Currently, two official plugins are available:

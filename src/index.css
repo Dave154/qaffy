@@ -2,20 +2,36 @@
 @import "tailwindcss";
 
 @theme {
-  --color-violet-50: #e8fbfd;
-  --color-violet-100: #d1f5f8;
-  --color-violet-200: #a8eaf0;
-  --color-violet-300: #70d9e3;
-  --color-violet-400: #39c7d4;
-  --color-violet-500: #00b7d4;
-  --color-violet-600: #009db8;
-  --color-violet-700: #007f99;
-  --color-violet-800: #00677d;
-  --color-violet-900: #005467;
-  --color-violet-950: #003944;
+  --color-violet-50: #fff1f3;
+  --color-violet-100: #ffe1e6;
+  --color-violet-200: #ffc3cb;
+  --color-violet-300: #ff98a7;
+  --color-violet-400: #f86b7d;
+  --color-violet-500: #e7485f;
+  --color-violet-600: #d9364e;
+  --color-violet-700: #b92b40;
+  --color-violet-800: #98283a;
+  --color-violet-900: #7d2936;
+  --color-violet-950: #551e28;
 
-  --color-accent: #00b7d4;
-  --color-accent-dark: #007f99;
+  --color-accent: #e21c37;
+  --color-accent-dark: #b9152b;
+  --color-brand-primary: #d9364e;
+  --color-brand-primary-hover: #b92b40;
+  --color-brand-strong: #e21c37;
+  --color-brand-strong-hover: #b9152b;
+  --color-brand-soft: #fff0f2;
+  --color-brand-soft-hover: #fff8f9;
+  --color-brand-surface: #fff8fa;
+  --color-brand-border: #ffc3cb;
+  --color-brand-focus: #ffe1e6;
+  --color-field-border: #f24d4d;
+  --color-field-focus: #2563eb;
+  --color-field-focus-hover: #1d4ed8;
+  --color-field-focus-soft: #dbeafe;
+  --color-field-placeholder: #8e9a9a;
+  --color-field-disabled: #dfe2e2;
+  --color-field-disabled-text: #8e9a9a;
   --color-surface: #fafafa;
   --color-ink: #121212;
   --font-sans: "Qanelas", "Inter", "Segoe UI", sans-serif;
@@ -141,6 +157,62 @@ body {
   100% {
     opacity: 0;
     transform: translate3d(18px, var(--bubble-rise-distance, -105vh), 0) scale(calc(1.12 * var(--bubble-scale, 1)));
+  }
+}
+
+.route-loading-logo {
+  width: min(260px, 62vw);
+  height: auto;
+  overflow: visible;
+}
+
+.route-loading-logo text {
+  font-family: 'Freestyle Script', cursive;
+  font-size: 76px;
+}
+
+.route-loading-letter {
+  fill: transparent;
+  stroke: var(--color-brand-primary);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  paint-order: stroke fill;
+  stroke-dasharray: 150;
+  stroke-dashoffset: 150;
+  opacity: 0;
+  animation: qaffy-letter-draw 5.6s ease-in-out infinite;
+  animation-iteration-count: infinite;
+}
+
+@keyframes qaffy-letter-draw {
+  0% {
+    opacity: 0;
+    fill: transparent;
+    stroke-dashoffset: 150;
+  }
+
+  7%,
+  22% {
+    opacity: 1;
+    fill: color-mix(in srgb, var(--color-brand-primary) 12%, transparent);
+    stroke-dashoffset: 0;
+  }
+
+  35%,
+  100% {
+    opacity: 0;
+    fill: transparent;
+    stroke-dashoffset: -150;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .route-loading-letter {
+    opacity: 1;
+    fill: color-mix(in srgb, var(--color-brand-primary) 12%, transparent);
+    stroke-dashoffset: 0;
+    animation: none;
   }
 }
 

@@ -1,50 +1,20 @@
-type Transaction = {
-  title: string
-  reference: string
-  date: string
-  amount: string
-  direction: 'credit' | 'debit'
-  status: string
-}
-
-const transactions: Transaction[] = [
-  {
-    title: 'Wallet top up',
-    reference: 'via Paystack • QF-8821',
-    date: 'Today, 09:42 AM',
-    amount: '+₦10,000',
-    direction: 'credit',
-    status: 'Successful',
-  },
-  {
-    title: 'Order payment',
-    reference: 'QF-1042 • Wash + Iron',
-    date: 'Yesterday, 04:18 PM',
-    amount: '-₦4,800',
-    direction: 'debit',
-    status: 'Successful',
-  },
-  {
-    title: 'Wallet top up',
-    reference: 'via Paystack • QF-8794',
-    date: '28 Aug 2026, 11:06 AM',
-    amount: '+₦15,000',
-    direction: 'credit',
-    status: 'Successful',
-  },
-  {
-    title: 'Order payment',
-    reference: 'QF-1038 • Wash',
-    date: '27 Aug 2026, 02:35 PM',
-    amount: '-₦7,200',
-    direction: 'debit',
-    status: 'Successful',
-  },
-]
+import { useCustomerStore } from '../customer-store-hook'
 
 const filterItems = ['All activity', 'Top ups', 'Payments']
 
 export default function Transactions() {
+  const { transactions } = useCustomerStore()
+  const exportTransactions = () => {
+    const rows = [['Type', 'Reference', 'Amount', 'Date', 'Status'], ...transactions.map((transaction) => [transaction.title, transaction.reference, transaction.amount, transaction.date, transaction.status])]
+    const csv = rows.map((row) => row.map((value) => `"${value.replaceAll('"', '""')}"`).join(',')).join('\n')
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = 'qaffy-transactions.csv'
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
   return (
     <div className="space-y-5 pb-8">
       <header className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
@@ -76,7 +46,7 @@ export default function Transactions() {
             <h3 className="text-lg font-bold text-slate-900">Recent activity</h3>
             <p className="mt-1 text-sm text-slate-500">A record of your wallet and payments</p>
           </div>
-          <button type="button" className="hidden rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 hover:border-sky-200 hover:text-sky-700 sm:block">
+          <button type="button" onClick={exportTransactions} className="hidden rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 hover:border-sky-200 hover:text-sky-700 sm:block">
             Export
           </button>
         </div>

@@ -1,0 +1,1 @@
+import{t as e}from"./jsx-runtime-pNW8k5OS.js";var t=e();function n({className:e=``,light:n=!1}){return(0,t.jsx)(`div`,{className:e,"aria-label":`Qaffy logo`,children:(0,t.jsx)(`h1`,{className:`text-4xl leading-[33px] ${n?`text-white`:`text-[#00b7d4]`}`,style:{fontFamily:`Freestyle Script, cursive`},children:`Qaffy`})})}export{n as t};

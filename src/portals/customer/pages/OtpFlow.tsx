@@ -11,6 +11,7 @@ export default function OtpFlow() {
   ]
 
   const currentStep = otpSteps[activeStep]
+  const otpDigits = (currentStep.value ?? '').replace(/\D/g, '').slice(0, 5)
 
   return (
     <div className="space-y-5 pb-8">
@@ -23,9 +24,18 @@ export default function OtpFlow() {
 
       <section className="rounded-[28px] bg-gradient-to-br from-violet-600 via-violet-700 to-fuchsia-500 p-5 text-white shadow-lg shadow-violet-200 sm:p-6">
         <div className="flex items-start justify-between gap-4">
-          <div>
+          <div className="w-full">
             <p className="text-xs font-medium uppercase tracking-[0.18em] text-violet-100">Current code</p>
-            <h3 className="mt-3 text-4xl font-bold tracking-[0.24em]">{currentStep.value ?? 'Not available'}</h3>
+            <div className="mt-3 flex gap-2 sm:gap-3">
+              {Array.from({ length: 5 }).map((_, index) => (
+                <div
+                  key={`${currentStep.label}-${index}`}
+                  className="flex h-14 w-14 items-center justify-center rounded-md border-2 border-[#ff4a4a] bg-white text-2xl font-bold text-[#ff4a4a] shadow-sm sm:h-16 sm:w-16"
+                >
+                  {otpDigits[index] ?? ''}
+                </div>
+              ))}
+            </div>
           </div>
           <button
             type="button"
@@ -95,7 +105,7 @@ export default function OtpFlow() {
           <p className="mt-3 text-sm text-slate-600">
             If the code is not working, contact support or ask a staff member to verify the order manually.
           </p>
-          <button type="button" className="mt-5 rounded-full border border-violet-200 bg-violet-50 px-4 py-2.5 text-sm font-semibold text-violet-700">Contact support</button>
+          <a href="mailto:support@qaffy.app" className="mt-5 inline-block rounded-full border border-violet-200 bg-violet-50 px-4 py-2.5 text-sm font-semibold text-violet-700">Contact support</a>
         </div>
       </section>
     </div>

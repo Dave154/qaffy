@@ -26,7 +26,7 @@ type BubblyBackgroundProps = {
 
 export default function BubblyBackground({
   count = bubbles.length,
-  color = '#00b7d4',
+  color = '#d9364e',
   opacity = 0.12,
   scale = 1,
   className = '',

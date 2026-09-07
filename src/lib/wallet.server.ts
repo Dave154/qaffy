@@ -51,19 +51,126 @@ export async function creditWallet(customerId: string, balanceType: WalletBalanc
 
   return sql.begin(async (tx) => {
     await tx`insert into wallets (customer_id) values (${customerId}) on conflict (customer_id) do nothing`
-
-    const balanceColumn = balanceType === 'one_off' ? 'one_off_balance' : 'subscription_balance'
-    const [wallet] = await tx`select * from wallets where customer_id = ${customerId} for update`
-    const newBalance = Number(wallet[balanceColumn]) + amount
-
-    await tx`update wallets set ${tx({ [balanceColumn]: newBalance, updated_at: new Date() })} where customer_id = ${customerId}`
-    const [payment] = await tx`update payments set status = 'success' where reference = ${paymentReference} returning id`
     await tx`
-      insert into wallet_transactions (customer_id, balance_type, txn_type, amount, balance_after, related_payment_id)
-      values (${customerId}, ${balanceType}, 'topup', ${amount}, ${newBalance}, ${payment?.id ?? null})
+      insert into payments (customer_id, reference, amount, balance_type, status)
+      values (${customerId}, ${paymentReference}, ${amount}, ${balanceType}, 'pending')
+      on conflict (reference) do nothing
     `
 
-    return { newBalance }
+    const [wallet] = await tx`select * from wallets where customer_id = ${customerId} for update`
+    const subscriptionDebt = Math.max(0, -Number(wallet.subscription_balance))
+    const subscriptionCredit = balanceType === 'subscription' ? amount : Math.min(amount, subscriptionDebt)
+    const oneOffCredit = balanceType === 'one_off' ? amount - subscriptionCredit : 0
+    const subscriptionBalance = Number(wallet.subscription_balance) + subscriptionCredit
+    const oneOffBalance = Number(wallet.one_off_balance) + oneOffCredit
+
+    await tx`
+      update wallets
+      set one_off_balance = ${oneOffBalance}, subscription_balance = ${subscriptionBalance}, updated_at = ${new Date()}
+      where customer_id = ${customerId}
+    `
+    const [payment] = await tx`update payments set status = 'success' where reference = ${paymentReference} returning id`
+    if (subscriptionCredit > 0) {
+      await tx`
+        insert into wallet_transactions (customer_id, balance_type, txn_type, amount, balance_after, related_payment_id)
+        values (${customerId}, 'subscription', 'topup', ${subscriptionCredit}, ${subscriptionBalance}, ${payment?.id ?? null})
+      `
+    }
+    if (oneOffCredit > 0) {
+      let settlementBudget = oneOffCredit
+      const unpaidInvoices = await tx`
+        select i.id, i.amount, o.id as order_id
+        from invoices i
+        join orders o on o.id = i.order_id
+        where o.customer_id = ${customerId}
+          and o.is_subscription_order = false
+          and i.status = 'unpaid'
+        order by i.created_at asc, i.id asc
+        for update of i
+      `
+
+      for (const invoice of unpaidInvoices) {
+        const invoiceAmount = Number(invoice.amount)
+        if (settlementBudget < invoiceAmount) break
+
+        const deliveryOtp = String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0')
+        await tx`update invoices set status = 'paid', paid_at = now() where id = ${invoice.id}`
+        await tx`update orders set delivery_otp = ${deliveryOtp} where id = ${invoice.order_id}`
+        settlementBudget -= invoiceAmount
+      }
+
+      await tx`
+        insert into wallet_transactions (customer_id, balance_type, txn_type, amount, balance_after, related_payment_id)
+        values (${customerId}, 'one_off', 'topup', ${oneOffCredit}, ${oneOffBalance}, ${payment?.id ?? null})
+      `
+    }
+
+    return { newBalance: balanceType === 'subscription' ? subscriptionBalance : oneOffBalance }
+  })
+}
+
+/** Records a normal one-time invoice as wallet debt when the order is created. */
+export async function debitOneOffInvoice(customerId: string, invoiceId: string) {
+  return sql.begin(async (tx) => {
+    await tx`insert into wallets (customer_id) values (${customerId}) on conflict (customer_id) do nothing`
+
+    const [invoice] = await tx`
+      select i.id, i.amount, i.status, o.customer_id, o.is_subscription_order
+      from invoices i
+      join orders o on o.id = i.order_id
+      where i.id = ${invoiceId}
+      for update of i
+    `
+
+    if (!invoice || invoice.customer_id !== customerId || invoice.is_subscription_order) throw new Error('Invoice not found')
+    if (invoice.status === 'paid') return { invoiceId, alreadyPaid: true }
+
+    const [wallet] = await tx`select one_off_balance from wallets where customer_id = ${customerId} for update`
+    const newBalance = Number(wallet.one_off_balance) - Number(invoice.amount)
+    await tx`update wallets set one_off_balance = ${newBalance}, updated_at = now() where customer_id = ${customerId}`
+    await tx`
+      insert into wallet_transactions (customer_id, balance_type, txn_type, amount, balance_after, related_invoice_id)
+      values (${customerId}, 'one_off', 'debit', ${invoice.amount}, ${newBalance}, ${invoiceId})
+    `
+
+    return { invoiceId, newBalance, alreadyPaid: false }
+  })
+}
+
+/** Charges subscription excess from the customer's subscription balance. */
+export async function chargeSubscriptionInvoice(customerId: string, invoiceId: string) {
+  return sql.begin(async (tx) => {
+    await tx`insert into wallets (customer_id) values (${customerId}) on conflict (customer_id) do nothing`
+
+    const [invoice] = await tx`
+      select i.*, o.customer_id, o.is_subscription_order
+      from invoices i
+      join orders o on o.id = i.order_id
+      where i.id = ${invoiceId}
+      for update of i
+    `
+
+    if (!invoice || invoice.customer_id !== customerId || !invoice.is_subscription_order) throw new Error('Invoice not found')
+    if (invoice.status === 'paid') return { amount: Number(invoice.amount), alreadyPaid: true }
+
+    const [wallet] = await tx`
+      select subscription_balance from wallets where customer_id = ${customerId} for update
+    `
+    const currentBalance = Number(wallet?.subscription_balance ?? 0)
+    const amount = Number(invoice.amount)
+    const newBalance = currentBalance - amount
+    const deliveryOtp = newBalance >= 0
+      ? String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0')
+      : null
+    await tx`update wallets set subscription_balance = ${newBalance}, updated_at = now() where customer_id = ${customerId}`
+    await tx`update invoices set status = 'paid', paid_at = now() where id = ${invoiceId}`
+    if (deliveryOtp) await tx`update orders set delivery_otp = ${deliveryOtp} where id = ${invoice.order_id}`
+    await tx`
+      insert into wallet_transactions (customer_id, balance_type, txn_type, amount, balance_after, related_invoice_id)
+      values (${customerId}, 'subscription', 'debit', ${amount}, ${newBalance}, ${invoiceId})
+    `
+
+    return { amount, newBalance, deliveryOtp, alreadyPaid: false }
   })
 }
 

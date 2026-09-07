@@ -13,6 +13,8 @@ export default [
   route('login', 'portals/customer/pages/Login.tsx'),
   route('create-account', 'portals/customer/pages/CreateAccount.tsx'),
   route('verify-otp', 'portals/customer/pages/VerifyOtp.tsx'),
+  route('auth/callback', 'portals/customer/pages/AuthCallback.tsx'),
+  route('complete-profile', 'portals/customer/pages/CompleteProfile.tsx'),
 
   ...prefix('logistics', [
     layout('portals/logistics/LogisticsLayout.tsx', [

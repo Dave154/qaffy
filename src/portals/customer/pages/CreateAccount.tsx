@@ -9,6 +9,7 @@ export default function CreateAccount() {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [phone, setPhone] = useState('')
+  const [showEmailAuth, setShowEmailAuth] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState('')
 
@@ -42,6 +43,22 @@ export default function CreateAccount() {
     }
 
     navigate(`/verify-otp?email=${encodeURIComponent(email.trim())}&mode=create-account`)
+  }
+
+  const handleGoogleSignUp = async () => {
+    setError('')
+
+    if (!isSupabaseConfigured || !supabase) {
+      setError('Supabase is not configured. Add the required environment variables to continue.')
+      return
+    }
+
+    const { error: authError } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: `${window.location.origin}/auth/callback` },
+    })
+
+    if (authError) setError(authError.message)
   }
   return (
     <div
@@ -82,7 +99,7 @@ export default function CreateAccount() {
           <form onSubmit={handleContinue}>
           <button
             type="button"
-            onClick={() => setError('Google sign-in will be connected after email OTP authentication.')}
+            onClick={handleGoogleSignUp}
             className="flex w-full items-center justify-center gap-3 rounded-2xl bg-violet-600 px-4 py-3.5 text-sm font-semibold text-white shadow-md shadow-violet-200 transition hover:bg-violet-700"
           >
             <svg viewBox="0 0 48 48" aria-hidden="true" className="h-5 w-5" role="img">
@@ -94,7 +111,23 @@ export default function CreateAccount() {
             Continue with Google
           </button>
 
-          <div className="space-y-4 pt-4">
+          <div className="my-5 flex items-center gap-3 text-xs text-slate-400">
+            <span className="h-px flex-1 bg-slate-200" />
+            <span>or</span>
+            <span className="h-px flex-1 bg-slate-200" />
+          </div>
+
+          {!showEmailAuth && (
+            <button
+              type="button"
+              onClick={() => setShowEmailAuth(true)}
+              className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-sm font-semibold text-slate-700 transition hover:border-violet-300 hover:bg-violet-50"
+            >
+              Sign up with email
+            </button>
+          )}
+
+          {showEmailAuth && <div className="space-y-4">
             <label className="block">
               <input
                 type="text"
@@ -102,7 +135,7 @@ export default function CreateAccount() {
                 value={name}
                 onChange={(event) => setName(event.target.value)}
                 placeholder="Enter your full name"
-                className="h-14 w-full rounded-lg border border-[#f24d4d] bg-white px-4 text-[14px] font-semibold text-black shadow-sm outline-none transition placeholder:text-[#8e9a9a] focus:border-[#2563eb] focus:ring-2 focus:ring-blue-100"
+                className="h-14 w-full rounded-lg border border-field-border bg-white px-4 text-[14px] font-semibold text-black shadow-sm outline-none transition placeholder:text-field-placeholder focus:border-field-focus focus:ring-2 focus:ring-field-focus-soft"
               />
             </label>
 
@@ -113,7 +146,7 @@ export default function CreateAccount() {
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
                 placeholder="Enter your email"
-                className="h-14 w-full rounded-lg border border-[#f24d4d] bg-white px-4 text-[14px] font-semibold text-black shadow-sm outline-none transition placeholder:text-[#8e9a9a] focus:border-[#2563eb] focus:ring-2 focus:ring-blue-100"
+                className="h-14 w-full rounded-lg border border-field-border bg-white px-4 text-[14px] font-semibold text-black shadow-sm outline-none transition placeholder:text-field-placeholder focus:border-field-focus focus:ring-2 focus:ring-field-focus-soft"
               />
             </label>
 
@@ -124,27 +157,27 @@ export default function CreateAccount() {
                 value={phone}
                 onChange={(event) => setPhone(event.target.value)}
                 placeholder="0803 123 4567"
-                className="h-14 w-full rounded-lg border border-[#f24d4d] bg-white px-4 text-[14px] font-semibold text-black shadow-sm outline-none transition placeholder:text-[#8e9a9a] focus:border-[#2563eb] focus:ring-2 focus:ring-blue-100"
+                className="h-14 w-full rounded-lg border border-field-border bg-white px-4 text-[14px] font-semibold text-black shadow-sm outline-none transition placeholder:text-field-placeholder focus:border-field-focus focus:ring-2 focus:ring-field-focus-soft"
               />
             </label>
-          </div>
+          </div>}
 
           {error && <p role="alert" className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
 
-          <div className="mt-5 flex items-center justify-between gap-2 text-sm text-slate-500">
+          {showEmailAuth && <div className="mt-5 flex items-center justify-between gap-2 text-sm text-slate-500">
             <label className="inline-flex items-center gap-2">
               <input type="checkbox" className="h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500" />
               I agree to the terms
             </label>
-          </div>
+          </div>}
 
-          <button
+          {showEmailAuth && <button
             type="submit"
             disabled={isSubmitting}
             className="mt-6 w-full rounded-2xl bg-slate-900 px-4 py-3.5 text-sm font-semibold text-white transition hover:bg-slate-800"
           >
             {isSubmitting ? 'Sending code...' : 'Create account'}
-          </button>
+          </button>}
 
           <p className="mt-6 text-center text-sm text-slate-500">
             Already have an account?{' '}

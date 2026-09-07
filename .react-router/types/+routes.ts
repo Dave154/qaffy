@@ -41,6 +41,12 @@ type Pages = {
   "/verify-otp": {
     params: {};
   };
+  "/auth/callback": {
+    params: {};
+  };
+  "/complete-profile": {
+    params: {};
+  };
   "/logistics": {
     params: {};
   };
@@ -67,7 +73,7 @@ type Pages = {
 type RouteFiles = {
   "root.tsx": {
     id: "root";
-    page: "/" | "/transactions" | "/orders" | "/plans" | "/settings" | "/invoice" | "/otp" | "/login" | "/create-account" | "/verify-otp" | "/logistics" | "/logistics/delivery" | "/logistics/login" | "/vendor" | "/vendor/login" | "/admin" | "/admin/login";
+    page: "/" | "/transactions" | "/orders" | "/plans" | "/settings" | "/invoice" | "/otp" | "/login" | "/create-account" | "/verify-otp" | "/auth/callback" | "/complete-profile" | "/logistics" | "/logistics/delivery" | "/logistics/login" | "/vendor" | "/vendor/login" | "/admin" | "/admin/login";
   };
   "portals/customer/CustomerLayout.tsx": {
     id: "portals/customer/CustomerLayout";
@@ -112,6 +118,14 @@ type RouteFiles = {
   "portals/customer/pages/VerifyOtp.tsx": {
     id: "portals/customer/pages/VerifyOtp";
     page: "/verify-otp";
+  };
+  "portals/customer/pages/AuthCallback.tsx": {
+    id: "portals/customer/pages/AuthCallback";
+    page: "/auth/callback";
+  };
+  "portals/customer/pages/CompleteProfile.tsx": {
+    id: "portals/customer/pages/CompleteProfile";
+    page: "/complete-profile";
   };
   "portals/logistics/LogisticsLayout.tsx": {
     id: "portals/logistics/LogisticsLayout";
@@ -168,6 +182,8 @@ type RouteModules = {
   "portals/customer/pages/Login": typeof import("./src/portals/customer/pages/Login.tsx");
   "portals/customer/pages/CreateAccount": typeof import("./src/portals/customer/pages/CreateAccount.tsx");
   "portals/customer/pages/VerifyOtp": typeof import("./src/portals/customer/pages/VerifyOtp.tsx");
+  "portals/customer/pages/AuthCallback": typeof import("./src/portals/customer/pages/AuthCallback.tsx");
+  "portals/customer/pages/CompleteProfile": typeof import("./src/portals/customer/pages/CompleteProfile.tsx");
   "portals/logistics/LogisticsLayout": typeof import("./src/portals/logistics/LogisticsLayout.tsx");
   "portals/logistics/pages/Home": typeof import("./src/portals/logistics/pages/Home.tsx");
   "logistics-delivery": typeof import("./src/portals/logistics/pages/Delivery.tsx");

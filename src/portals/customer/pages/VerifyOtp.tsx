@@ -42,6 +42,32 @@ export default function VerifyOtp() {
       return
     }
 
+    const { data: userData, error: userError } = await supabase.auth.getUser()
+    const metadata = userData.user?.user_metadata
+
+    if (userError || !userData.user) {
+      setError(userError?.message ?? 'Your account was verified, but the profile could not be loaded.')
+      setIsSubmitting(false)
+      return
+    }
+
+    if (mode === 'create-account' && (metadata?.full_name || metadata?.phone)) {
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .update({
+          name: typeof metadata.full_name === 'string' ? metadata.full_name : null,
+          phone: typeof metadata.phone === 'string' ? metadata.phone : null,
+          email: userData.user.email ?? email,
+        })
+        .eq('id', userData.user.id)
+
+      if (profileError) {
+        setError(profileError.message)
+        setIsSubmitting(false)
+        return
+      }
+    }
+
     navigate('/')
   }
 
@@ -146,7 +172,7 @@ export default function VerifyOtp() {
                   maxLength={1}
                   value={digit}
                   onChange={(event) => updateCode(index, event.target.value)}
-                  className="h-[80px] w-[72px] rounded-lg border border-[#f24d4d] bg-white text-center text-[1.5rem] font-semibold text-black shadow-sm outline-none transition focus:border-[#2563eb] focus:ring-2 focus:ring-blue-100"
+                  className="h-[80px] w-[72px] rounded-lg border border-field-border bg-white text-center text-[1.5rem] font-semibold text-black shadow-sm outline-none transition focus:border-field-focus focus:ring-2 focus:ring-field-focus-soft"
                 />
               ))}
             </div>
@@ -157,7 +183,7 @@ export default function VerifyOtp() {
                 type="button"
                 onClick={handleResend}
                 disabled={!canResend}
-                className={`font-semibold transition ${canResend ? 'cursor-pointer text-[#2563eb] hover:text-blue-700' : 'cursor-default text-slate-500'}`}
+                className={`font-semibold transition ${canResend ? 'cursor-pointer text-field-focus hover:text-field-focus-hover' : 'cursor-default text-slate-500'}`}
               >
                 {canResend ? 'Resend code' : `Resend in ${secondsRemaining} secs`}
               </button>
@@ -166,7 +192,7 @@ export default function VerifyOtp() {
             <button
               type="button"
               onClick={handleVerify}
-              className={`mt-2 flex w-full items-center justify-center rounded-full px-4 py-3 text-[1.05rem] font-semibold transition ${isComplete ? 'bg-[#2563eb] text-white hover:bg-blue-700' : 'cursor-not-allowed bg-[#dfe2e2] text-[#8e9a9a]'}`}
+              className={`mt-2 flex w-full items-center justify-center rounded-full px-4 py-3 text-[1.05rem] font-semibold transition ${isComplete ? 'bg-field-focus text-white hover:bg-field-focus-hover' : 'cursor-not-allowed bg-field-disabled text-field-disabled-text'}`}
               disabled={!isComplete || isSubmitting}
             >
               {isSubmitting ? 'Verifying...' : 'Proceed'}

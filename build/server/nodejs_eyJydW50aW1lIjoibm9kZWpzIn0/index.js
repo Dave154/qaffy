@@ -1,12 +1,14 @@
 import { PassThrough } from "node:stream";
 import { createReadableStreamFromReadable } from "@react-router/node";
-import { Link, Links, Meta, NavLink, Outlet, Scripts, ScrollRestoration, ServerRouter, UNSAFE_withComponentProps, UNSAFE_withErrorBoundaryProps, data, isRouteErrorResponse, redirect, useLocation, useNavigate } from "react-router";
+import { Link, Links, Meta, NavLink, Outlet, Scripts, ScrollRestoration, ServerRouter, UNSAFE_withComponentProps, UNSAFE_withErrorBoundaryProps, data, isRouteErrorResponse, redirect, useFetcher, useLoaderData, useLocation, useNavigate, useNavigation, useRevalidator } from "react-router";
 import { isbot } from "isbot";
 import { renderToPipeableStream } from "react-dom/server";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
+import { Toaster, toast } from "sonner";
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
-import { ArrowUpRight, Bell, Check, ChevronRight, ClipboardList, Clock3, CreditCard, FileText, Gift, Home, LayoutGrid, LogOut, Menu, Minus, Plus, ReceiptText, Search, Settings, Settings2, Sparkles, Trash2, UserCircle2, X } from "lucide-react";
+import { ArrowUpRight, Bell, Check, ChevronRight, ClipboardList, Clock3, Copy, CreditCard, FileText, Gift, Home, LayoutGrid, LogOut, Menu, Minus, Plus, ReceiptText, Search, Settings, Settings2, Sparkles, Trash2, UserCircle2, X } from "lucide-react";
 import { createServerClient, parseCookieHeader, serializeCookieHeader } from "@supabase/ssr";
+import postgres from "postgres";
 //#region \0rolldown/runtime.js
 var __defProp = Object.defineProperty;
 var __exportAll = (all, no_symbols) => {
@@ -66,7 +68,59 @@ function handleRequest(request, responseStatusCode, responseHeaders, routerConte
 }
 //#endregion
 //#region src/index.css?url
-var src_default = "/assets/index-DHvsE88y.css";
+var src_default = "/assets/index-_ublE694.css";
+//#endregion
+//#region src/components/RouteLoadingScreen.tsx
+function RouteLoadingScreen() {
+	if (!(useNavigation().state !== "idle")) return null;
+	return /* @__PURE__ */ jsx("div", {
+		className: "route-loading-screen fixed inset-0 z-[100] flex items-center justify-center bg-white/45 backdrop-blur-[2px]",
+		role: "status",
+		"aria-live": "polite",
+		"aria-label": "Loading Qaffy",
+		children: /* @__PURE__ */ jsx("div", {
+			className: "flex flex-col items-center",
+			children: /* @__PURE__ */ jsx("svg", {
+				className: "route-loading-logo",
+				viewBox: "0 0 260 100",
+				role: "img",
+				"aria-label": "Qaffy",
+				children: /* @__PURE__ */ jsxs("text", {
+					x: "130",
+					y: "72",
+					textAnchor: "middle",
+					children: [
+						/* @__PURE__ */ jsx("tspan", {
+							className: "route-loading-letter",
+							style: { animationDelay: "0.1s" },
+							children: "Q"
+						}),
+						/* @__PURE__ */ jsx("tspan", {
+							className: "route-loading-letter",
+							style: { animationDelay: "0.42s" },
+							children: "a"
+						}),
+						/* @__PURE__ */ jsx("tspan", {
+							className: "route-loading-letter",
+							style: { animationDelay: "0.74s" },
+							children: "f"
+						}),
+						/* @__PURE__ */ jsx("tspan", {
+							className: "route-loading-letter",
+							style: { animationDelay: "1.06s" },
+							children: "f"
+						}),
+						/* @__PURE__ */ jsx("tspan", {
+							className: "route-loading-letter",
+							style: { animationDelay: "1.38s" },
+							children: "y"
+						})
+					]
+				})
+			})
+		})
+	});
+}
 //#endregion
 //#region src/root.tsx
 var root_exports = /* @__PURE__ */ __exportAll({
@@ -92,13 +146,18 @@ function Layout({ children }) {
 			/* @__PURE__ */ jsx(Links, {})
 		] }), /* @__PURE__ */ jsxs("body", { children: [
 			children,
+			/* @__PURE__ */ jsx(Toaster, {
+				position: "top-right",
+				richColors: true,
+				closeButton: true
+			}),
 			/* @__PURE__ */ jsx(ScrollRestoration, {}),
 			/* @__PURE__ */ jsx(Scripts, {})
 		] })]
 	});
 }
 var root_default = UNSAFE_withComponentProps(function App() {
-	return /* @__PURE__ */ jsx(Outlet, {});
+	return /* @__PURE__ */ jsxs(Fragment, { children: [/* @__PURE__ */ jsx(Outlet, {}), /* @__PURE__ */ jsx(RouteLoadingScreen, {})] });
 });
 var ErrorBoundary = UNSAFE_withErrorBoundaryProps(function ErrorBoundary({ error }) {
 	const message = isRouteErrorResponse(error) ? `${error.status} ${error.statusText}` : error instanceof Error ? error.message : "Unknown error";
@@ -153,116 +212,169 @@ var isSupabaseServerConfigured = Boolean(process.env.SUPABASE_URL && process.env
 var CustomerStoreContext = createContext(null);
 //#endregion
 //#region src/portals/customer/customer-store.tsx
-var initialOrders = [
-	{
-		id: "QF-1042",
-		customerId: "ID-1042",
-		title: "Wash + Iron",
-		status: "Picked up",
-		statusTone: "bg-emerald-50 text-emerald-700",
-		date: "Today, 09:10 AM",
-		pickup: "Pickup scheduled for Fri, 8:00 AM",
-		total: 4800,
-		items: 6,
-		action: "Track order",
-		pickupOtp: "QF-2048",
-		deliveryOtp: "QF-4187",
-		pickedUp: true,
-		pickupDate: "Today, 09:10 AM",
-		notes: "Separate whites and handle the silk top carefully. Please keep the bag zipped and avoid any fabric softener.",
-		service: "Wash + Iron",
-		paymentStatus: "Paid",
-		pickupLocation: "Lekki Phase 1 pickup point"
-	},
-	{
-		id: "QF-1038",
-		customerId: "ID-1038",
-		title: "Wash only",
-		status: "In progress",
-		statusTone: "bg-amber-50 text-amber-700",
-		date: "Yesterday, 04:18 PM",
-		pickup: "Ready for delivery today",
-		total: 7200,
-		items: 9,
-		action: "View details",
-		pickupOtp: "QF-3219",
-		pickedUp: false,
-		notes: "Please check the denim and towels separately. One pair of white jeans needs extra care.",
-		service: "Wash only",
-		paymentStatus: "Pending",
-		pickupLocation: "Lekki Phase 1 pickup point"
-	},
-	{
-		id: "QF-1027",
-		customerId: "ID-1027",
-		title: "Wash + Iron",
-		status: "Delivered",
-		statusTone: "bg-slate-100 text-slate-700",
-		date: "Mon, 11:40 AM",
-		pickup: "Delivered to your address",
-		total: 5500,
-		items: 7,
-		action: "Reorder",
-		pickupOtp: "QF-9081",
-		deliveryOtp: "QF-7703",
-		pickedUp: true,
-		pickupDate: "Mon, 11:40 AM",
-		notes: "Customer collected the order successfully and the delivery OTP was verified on arrival.",
-		service: "Wash + Iron",
-		paymentStatus: "Paid",
-		pickupLocation: "Lekki Phase 1 pickup point"
-	}
-];
-function createOtp(prefix, number) {
-	return `${prefix}-${String(number).padStart(4, "0")}`;
+var initialOrders = [];
+var initialTransactions = [];
+function createOtp(_prefix, number) {
+	return String(Math.abs(number) % 1e5).padStart(5, "0");
 }
-function CustomerStoreProvider({ children }) {
-	const [orders, setOrders] = useState(initialOrders);
-	const [balance, setBalance] = useState(18750);
-	const store = useMemo(() => ({
-		customerId: "ID-1042",
-		customerName: "Aisha",
-		balance,
-		debt: Math.max(0, -balance),
-		subscription: {
-			name: "Silver",
-			billingPeriod: "semester"
-		},
-		pickupLocations: [
-			"Lekki Phase 1 pickup point",
-			"Ikoyi collection desk",
-			"Victoria Island hub"
-		],
+function mapDatabaseTransaction(transaction) {
+	const isCredit = transaction.txn_type === "topup";
+	const amount = `${isCredit ? "+" : "-"}₦${Number(transaction.amount).toLocaleString()}`;
+	return {
+		title: isCredit ? "Wallet top up" : "Order payment",
+		reference: transaction.related_invoice_id ? `Invoice • ${transaction.related_invoice_id.slice(0, 8)}` : `Wallet • ${transaction.id.slice(0, 8)}`,
+		date: new Date(transaction.created_at).toLocaleString(),
+		amount,
+		direction: isCredit ? "credit" : "debit",
+		status: transaction.txn_type === "topup" ? "Successful" : "Successful"
+	};
+}
+function mapDatabaseInvoice(invoice) {
+	return {
+		id: invoice.id,
+		reference: `QF-${invoice.id.slice(0, 6).toUpperCase()}`,
+		status: invoice.status === "paid" ? "Paid" : "Awaiting payment",
+		total: Number(invoice.amount),
+		dueDate: invoice.paid_at ? new Date(invoice.paid_at).toLocaleDateString() : "Due today",
+		items: [{
+			label: "Laundry service",
+			quantity: "1 order",
+			amount: Number(invoice.amount)
+		}]
+	};
+}
+function mapDatabaseOrder(order, persistedItems = [], unpaidInvoiceOrderIds) {
+	const statusMap = {
+		pending_pickup: "Awaiting pickup",
+		picked_up: "Picked up",
+		at_vendor: "In progress",
+		invoiced: "Ready for delivery",
+		paid: "Ready for delivery",
+		out_for_delivery: "Ready for delivery",
+		delivered: "Delivered",
+		cancelled: "Delivered"
+	};
+	const serviceMap = {
+		wash: "Wash only",
+		wash_iron: "Wash + Iron",
+		mixed: "Mixed service"
+	};
+	return {
+		id: order.id,
+		customerId: order.customer_id,
+		title: serviceMap[order.order_type],
+		status: statusMap[order.status],
+		statusTone: order.status === "delivered" ? "bg-slate-100 text-slate-700" : "bg-amber-50 text-amber-700",
+		date: new Date(order.created_at).toLocaleDateString(),
+		pickup: order.status === "pending_pickup" ? "Pickup pending" : "Pickup confirmed",
+		total: order.billed_extra_amount ?? 0,
+		items: order.clothes_count_customer,
+		action: "View details",
+		pickupOtp: order.pickup_otp ?? "",
+		deliveryOtp: order.delivery_otp ?? void 0,
+		pickedUp: order.status !== "pending_pickup",
+		notes: order.notes ?? "",
+		service: serviceMap[order.order_type],
+		paymentStatus: unpaidInvoiceOrderIds ? unpaidInvoiceOrderIds.has(order.id) ? "Pending" : "Paid" : [
+			"paid",
+			"out_for_delivery",
+			"delivered"
+		].includes(order.status) ? "Paid" : "Pending",
+		isSubscriptionOrder: order.is_subscription_order,
+		pickupLocation: order.pickup_location_id ?? "Pickup location pending",
+		lines: persistedItems.filter((item) => item.order_id === order.id).map((item) => ({
+			category: item.category_name,
+			service: item.service === "wash_iron" ? "Wash + Iron" : item.service === "iron" ? "Iron" : "Wash",
+			quantity: item.quantity,
+			unitPrice: Number(item.unit_price)
+		}))
+	};
+}
+function CustomerStoreProvider({ children, profile, persistedOrders, persistedWallet, persistedWalletTransactions, persistedUnpaidInvoiceOrderIds, persistedInvoice, persistedSubscription, persistedPickupLocations, persistedOrderItems, persistedSubscriptionUsedUnits = 0 }) {
+	const unpaidInvoiceOrderIds = new Set(persistedUnpaidInvoiceOrderIds);
+	const [orders, setOrders] = useState(() => persistedOrders ? persistedOrders.map((order) => mapDatabaseOrder(order, persistedOrderItems, unpaidInvoiceOrderIds)) : initialOrders);
+	const [oneOffBalance, setOneOffBalance] = useState(persistedWallet?.one_off_balance ?? 0);
+	const [subscriptionBalance, setSubscriptionBalance] = useState(persistedWallet?.subscription_balance ?? 0);
+	const [transactions] = useState(() => persistedWalletTransactions ? persistedWalletTransactions.map(mapDatabaseTransaction) : initialTransactions);
+	const [invoice, setInvoice] = useState(() => persistedInvoice ? mapDatabaseInvoice(persistedInvoice) : null);
+	const [subscriptionUsedUnits, setSubscriptionUsedUnits] = useState(persistedSubscriptionUsedUnits);
+	const store = useMemo(() => {
+		const subscription = persistedSubscription ? {
+			name: persistedSubscription.plan.name,
+			billingPeriod: persistedSubscription.plan.type
+		} : null;
+		return {
+			customerId: profile?.qaffy_id ?? "Not available",
+			customerName: profile?.name ?? "Customer",
+			customerEmail: profile?.email ?? "Not available",
+			customerPhone: profile?.phone ?? "",
+			oneOffBalance,
+			subscriptionBalance,
+			balance: oneOffBalance,
+			debt: Math.max(0, -subscriptionBalance),
+			subscription,
+			subscriptionEndDate: persistedSubscription?.subscription.end_date ?? null,
+			activePlan: persistedSubscription?.plan ?? null,
+			subscriptionUsedUnits,
+			subscriptionRemainingUnits: persistedSubscription ? Math.max(0, persistedSubscription.plan.weekly_limit - subscriptionUsedUnits) : null,
+			pickupLocations: persistedPickupLocations ?? [],
+			orders,
+			transactions,
+			invoice,
+			topUpWallet: async (amount) => {
+				if (amount <= 0) throw new Error("Enter a valid top-up amount.");
+				setSubscriptionBalance((currentBalance) => {
+					if (currentBalance >= 0) return currentBalance;
+					return Math.min(0, currentBalance + amount);
+				});
+				setOneOffBalance((currentBalance) => currentBalance + Math.max(0, amount - Math.max(0, -subscriptionBalance)));
+				toast.success(`₦${amount.toLocaleString()} added to your wallet.`);
+			},
+			addOrder: async ({ items, notes, pickupLocation }) => {
+				const idNumber = 1042 + orders.length + 1;
+				const total = items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
+				const clothes = items.reduce((sum, item) => sum + item.quantity, 0);
+				const service = [...new Set(items.map((item) => item.service))].join(" + ");
+				let chargeAmountForWallet = total;
+				const order = {
+					id: `QF-${idNumber}`,
+					customerId: profile?.qaffy_id ?? "Not available",
+					title: service,
+					status: "Awaiting pickup",
+					statusTone: "bg-sky-50 text-sky-700",
+					date: "Just now",
+					pickup: "Pickup will be confirmed after OTP verification",
+					total,
+					items: clothes,
+					action: "View details",
+					pickupOtp: createOtp("QF", 2e3 + idNumber),
+					pickedUp: false,
+					notes: notes || "No special instructions added.",
+					service,
+					paymentStatus: "Pending",
+					isSubscriptionOrder: Boolean(persistedSubscription),
+					pickupLocation,
+					lines: items
+				};
+				let savedWeightedUnits = clothes;
+				setOrders((currentOrders) => [order, ...currentOrders]);
+				if (persistedSubscription) setSubscriptionBalance((currentBalance) => currentBalance - chargeAmountForWallet);
+				else setOneOffBalance((currentBalance) => currentBalance - chargeAmountForWallet);
+				if (persistedSubscription) setSubscriptionUsedUnits((currentUnits) => currentUnits + savedWeightedUnits);
+				return order;
+			}
+		};
+	}, [
+		invoice,
+		oneOffBalance,
 		orders,
-		addOrder: ({ items, notes, pickupLocation }) => {
-			const idNumber = 1042 + orders.length + 1;
-			const total = items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
-			const clothes = items.reduce((sum, item) => sum + item.quantity, 0);
-			const service = [...new Set(items.map((item) => item.service))].join(" + ");
-			const order = {
-				id: `QF-${idNumber}`,
-				customerId: "ID-1042",
-				title: service,
-				status: "Awaiting pickup",
-				statusTone: "bg-sky-50 text-sky-700",
-				date: "Just now",
-				pickup: "Pickup will be confirmed after OTP verification",
-				total,
-				items: clothes,
-				action: "View details",
-				pickupOtp: createOtp("QF", 2e3 + idNumber),
-				pickedUp: false,
-				notes: notes || "No special instructions added.",
-				service,
-				paymentStatus: "Pending",
-				pickupLocation,
-				lines: items
-			};
-			setOrders((currentOrders) => [order, ...currentOrders]);
-			setBalance((currentBalance) => currentBalance - total);
-			return order;
-		}
-	}), [balance, orders]);
+		profile,
+		persistedPickupLocations,
+		persistedSubscription,
+		subscriptionBalance,
+		subscriptionUsedUnits,
+		transactions
+	]);
 	return /* @__PURE__ */ jsx(CustomerStoreContext.Provider, {
 		value: store,
 		children
@@ -279,7 +391,7 @@ function useCustomerStore() {
 //#region src/portals/customer/CustomerLayout.tsx
 var CustomerLayout_exports = /* @__PURE__ */ __exportAll({
 	default: () => CustomerLayout_default,
-	loader: () => loader
+	loader: () => loader$1
 });
 var navItems$1 = [
 	{
@@ -309,15 +421,51 @@ var navItems$1 = [
 		icon: Settings
 	}
 ];
-async function loader({ request }) {
+async function loader$1({ request }) {
 	if (!isSupabaseServerConfigured) return null;
 	const { supabase: serverSupabase, headers } = getSupabaseServerClient(request);
 	const { data: userData } = await serverSupabase.auth.getUser();
 	if (!userData.user) throw redirect("/login", { headers });
-	return data({ user: userData.user }, { headers });
+	const { data: profile } = await serverSupabase.from("profiles").select("id, name, qaffy_id, email, phone").eq("id", userData.user.id).maybeSingle();
+	const { data: orders } = await serverSupabase.from("orders").select("*").eq("customer_id", userData.user.id).order("created_at", { ascending: false });
+	const invoiceOrderIds = (orders ?? []).map((order) => order.id);
+	const { data: unpaidInvoices } = invoiceOrderIds.length > 0 ? await serverSupabase.from("invoices").select("order_id").in("order_id", invoiceOrderIds).eq("status", "unpaid") : { data: [] };
+	const { data: pickupLocations } = await serverSupabase.from("pickup_locations").select("id, name").eq("active", true).order("name");
+	const orderIds = (orders ?? []).map((order) => order.id);
+	const { data: orderItems } = orderIds.length > 0 ? await serverSupabase.from("order_items").select("id, order_id, category_id, quantity, service, unit_price").in("order_id", orderIds) : { data: [] };
+	const categoryIds = [...new Set((orderItems ?? []).map((item) => item.category_id))];
+	const { data: orderCategories } = categoryIds.length > 0 ? await serverSupabase.from("cloth_categories").select("id, name").in("id", categoryIds) : { data: [] };
+	const categoryNameById = new Map((orderCategories ?? []).map((category) => [category.id, category.name]));
+	const persistedOrderItems = (orderItems ?? []).map((item) => ({
+		...item,
+		category_name: categoryNameById.get(item.category_id) ?? "Laundry item"
+	}));
+	const weekStart = /* @__PURE__ */ new Date();
+	weekStart.setHours(0, 0, 0, 0);
+	weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+	const subscriptionUsedUnits = (orders ?? []).filter((order) => order.is_subscription_order && new Date(order.created_at) >= weekStart).reduce((total, order) => total + order.clothes_count_customer, 0);
+	const { data: wallet } = await serverSupabase.from("wallets").select("*").eq("customer_id", userData.user.id).maybeSingle();
+	const { data: walletTransactions } = await serverSupabase.from("wallet_transactions").select("*").eq("customer_id", userData.user.id).order("created_at", { ascending: false }).limit(20);
+	const { data: invoice } = await serverSupabase.from("invoices").select("*, orders!inner(customer_id)").eq("orders.customer_id", userData.user.id).order("created_at", { ascending: false }).limit(1).maybeSingle();
+	const { data: subscription } = await serverSupabase.from("subscriptions").select("*").eq("customer_id", userData.user.id).eq("status", "active").order("created_at", { ascending: false }).limit(1).maybeSingle();
+	const { data: subscriptionPlan } = subscription ? await serverSupabase.from("plans").select("*").eq("id", subscription.plan_id).maybeSingle() : { data: null };
+	return data({
+		user: userData.user,
+		profile,
+		orders: orders ?? [],
+		unpaidInvoiceOrderIds: (unpaidInvoices ?? []).map((invoice) => invoice.order_id),
+		pickupLocations: pickupLocations ?? [],
+		orderItems: persistedOrderItems,
+		subscriptionUsedUnits,
+		wallet,
+		walletTransactions: walletTransactions ?? [],
+		invoice,
+		subscription,
+		subscriptionPlan
+	}, { headers });
 }
 function PlanSummary() {
-	const { balance } = useCustomerStore();
+	const { activePlan, subscription, subscriptionBalance } = useCustomerStore();
 	return /* @__PURE__ */ jsxs("div", {
 		className: "mt-auto rounded-2xl border border-[#a7d7d2] bg-[#eef9f7] p-3.5",
 		children: [
@@ -326,12 +474,12 @@ function PlanSummary() {
 				children: "Current plan"
 			}),
 			/* @__PURE__ */ jsx("p", {
-				className: "mt-2 text-sm font-semibold text-slate-800",
-				children: "Weekly Plus"
+				className: "mt-2 text-sm font-semibold capitalize text-slate-800",
+				children: activePlan && subscription ? `${subscription.name} ${subscription.billingPeriod}` : "No active plan"
 			}),
-			balance < 0 && /* @__PURE__ */ jsxs("p", {
-				className: "mt-1 text-xs text-[#d9364e]",
-				children: ["Balance due: ₦", Math.abs(balance).toLocaleString()]
+			subscriptionBalance < 0 && /* @__PURE__ */ jsxs("p", {
+				className: "mt-1 text-xs text-brand-primary",
+				children: ["Subscription debt: ₦", Math.abs(subscriptionBalance).toLocaleString()]
 			}),
 			/* @__PURE__ */ jsx("div", {
 				className: "mt-3 h-1.5 overflow-hidden bg-[#d3ebe8]",
@@ -342,146 +490,339 @@ function PlanSummary() {
 }
 var CustomerLayout_default = UNSAFE_withComponentProps(function CustomerLayout() {
 	const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+	const [logoutConfirmationOpen, setLogoutConfirmationOpen] = useState(false);
+	const [isLoggingOut, setIsLoggingOut] = useState(false);
 	const location = useLocation();
 	const navigate = useNavigate();
+	const loaderData = useLoaderData();
 	const pageTitle = location.pathname === "/" ? "Overview" : location.pathname.startsWith("/invoice") ? "Invoice" : location.pathname.startsWith("/otp") ? "OTP" : navItems$1.find((item) => item.to !== "/" && location.pathname.startsWith(item.to))?.label ?? "Overview";
 	const closeMobileMenu = () => setMobileMenuOpen(false);
 	const handleLogout = async () => {
+		setIsLoggingOut(true);
 		navigate("/login");
 	};
-	return /* @__PURE__ */ jsx(CustomerStoreProvider, { children: /* @__PURE__ */ jsx("div", {
-		className: "relative min-h-screen bg-[#fafafa] text-[#121212]",
-		children: /* @__PURE__ */ jsxs("div", {
-			className: "relative z-10 min-h-screen lg:flex",
-			children: [/* @__PURE__ */ jsxs("aside", {
-				className: "sticky top-0 hidden h-screen max-h-screen w-[221px] shrink-0 overflow-y-auto border-r border-[#f2f3f3] bg-white px-[13px] py-8 shadow-[1px_0_8px_rgba(18,18,18,0.04)] lg:flex lg:flex-col",
-				children: [
-					/* @__PURE__ */ jsx("div", {
-						className: "px-3",
-						children: /* @__PURE__ */ jsx(QaffyLogo, {})
-					}),
-					/* @__PURE__ */ jsx("nav", {
-						className: "mx-auto mt-12 w-[194px] space-y-[3px]",
-						children: navItems$1.map((item) => {
-							const Icon = item.icon;
-							return /* @__PURE__ */ jsxs(NavLink, {
-								to: item.to,
-								end: item.end,
-								className: ({ isActive }) => `flex h-10 items-center gap-3 rounded-[10px] px-4 text-sm font-medium transition ${isActive ? "bg-[#e8fbfd] text-[#00b7d4]" : "text-[#121212] hover:bg-[#fafafa]"}`,
-								children: [/* @__PURE__ */ jsx("span", {
-									className: "flex h-5 w-5 items-center justify-center rounded-[5px] text-[#121212]",
-									children: /* @__PURE__ */ jsx(Icon, { className: "h-4 w-4" })
-								}), /* @__PURE__ */ jsx("span", { children: item.label })]
-							}, item.to);
-						})
-					}),
-					/* @__PURE__ */ jsxs("div", {
-						className: "mt-auto space-y-1",
-						children: [/* @__PURE__ */ jsxs("button", {
-							type: "button",
-							onClick: handleLogout,
-							className: "flex h-10 w-full items-center gap-3 rounded-[10px] px-4 text-sm font-medium text-[#121212] hover:bg-[#fafafa]",
-							children: [/* @__PURE__ */ jsx(ClipboardList, { className: "h-4 w-4" }), /* @__PURE__ */ jsx("span", { children: "Activity log" })]
-						}), /* @__PURE__ */ jsxs("button", {
-							type: "button",
-							className: "flex h-10 w-full items-center gap-3 rounded-[10px] px-4 text-sm font-medium text-[#121212] hover:bg-[#fafafa]",
-							children: [/* @__PURE__ */ jsx(LogOut, { className: "h-4 w-4" }), /* @__PURE__ */ jsx("span", { children: "Log out" })]
-						})]
-					})
-				]
-			}), /* @__PURE__ */ jsxs("div", {
-				className: "min-w-0 flex-1",
-				children: [
-					/* @__PURE__ */ jsx("header", {
-						className: "sticky top-0 z-20 border-b border-[#f2f3f3] bg-white lg:hidden",
-						children: /* @__PURE__ */ jsxs("div", {
-							className: "mx-auto flex max-w-3xl items-center justify-between px-4 py-3.5 sm:px-6",
-							children: [
-								/* @__PURE__ */ jsx("button", {
-									type: "button",
-									"aria-label": "Open navigation menu",
-									"aria-expanded": mobileMenuOpen,
-									onClick: () => setMobileMenuOpen((open) => !open),
-									className: "flex h-9 w-9 items-center justify-center rounded-lg border border-[#e7e7e7] bg-white text-slate-600",
-									children: mobileMenuOpen ? /* @__PURE__ */ jsx(X, { className: "h-5 w-5" }) : /* @__PURE__ */ jsx(Menu, { className: "h-5 w-5" })
-								}),
-								/* @__PURE__ */ jsx(QaffyLogo, { className: "scale-[0.82]" }),
-								/* @__PURE__ */ jsx("button", {
-									type: "button",
-									"aria-label": "Open profile",
-									className: "flex h-9 w-9 items-center justify-center rounded-lg border border-[#e7e7e7] bg-white text-slate-600",
-									children: /* @__PURE__ */ jsx(UserCircle2, { className: "h-5 w-5" })
-								})
-							]
-						})
-					}),
-					mobileMenuOpen && /* @__PURE__ */ jsxs("div", {
-						className: "fixed inset-0 z-40 lg:hidden",
-						children: [/* @__PURE__ */ jsx("button", {
-							type: "button",
-							"aria-label": "Close navigation menu",
-							className: "absolute inset-0 bg-slate-950/35",
-							onClick: closeMobileMenu
-						}), /* @__PURE__ */ jsxs("aside", {
-							className: "relative z-10 flex h-full w-[82%] max-w-sm flex-col border-r border-[#e7e7e7] bg-white px-4 py-5 shadow-xl",
-							children: [
-								/* @__PURE__ */ jsxs("div", {
-									className: "mb-6 flex items-center justify-between",
-									children: [/* @__PURE__ */ jsx(QaffyLogo, { className: "scale-[0.82]" }), /* @__PURE__ */ jsx("button", {
-										type: "button",
-										"aria-label": "Close navigation menu",
-										onClick: closeMobileMenu,
-										className: "flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600",
-										children: /* @__PURE__ */ jsx(X, { className: "h-4 w-4" })
-									})]
-								}),
-								/* @__PURE__ */ jsx("nav", {
-									className: "space-y-1",
-									children: navItems$1.map((item) => {
-										const Icon = item.icon;
-										return /* @__PURE__ */ jsx(NavLink, {
-											to: item.to,
-											end: item.end,
-											onClick: closeMobileMenu,
-											className: ({ isActive }) => `flex items-center gap-3 rounded-[10px] px-3 py-2.5 text-sm font-medium transition ${isActive ? "bg-[#e8fbfd] text-[#00b7d4]" : "text-[#121212] hover:bg-[#fafafa]"}`,
-											children: ({ isActive }) => /* @__PURE__ */ jsxs(Fragment, { children: [/* @__PURE__ */ jsx("span", {
-												className: `flex h-8 w-8 items-center justify-center rounded-md ${isActive ? "text-[#00b7d4]" : "text-[#121212]"}`,
-												children: /* @__PURE__ */ jsx(Icon, { className: "h-4 w-4" })
-											}), /* @__PURE__ */ jsx("span", { children: item.label })] })
-										}, item.to);
-									})
-								}),
-								/* @__PURE__ */ jsx(PlanSummary, {})
-							]
-						})]
-					}),
-					/* @__PURE__ */ jsxs("div", {
-						className: "hidden h-[70px] items-center justify-between gap-4 px-7 pt-[22px] lg:flex",
-						children: [/* @__PURE__ */ jsx("h2", {
-							className: "text-2xl font-bold tracking-tight text-[#121212]",
-							children: pageTitle
-						}), /* @__PURE__ */ jsxs("div", {
-							className: "flex items-center gap-4",
-							children: [/* @__PURE__ */ jsxs("div", {
-								className: "flex h-12 w-[288px] items-center gap-2 rounded-full border border-[#f2f3f3] bg-white px-4 text-sm text-[#505959]",
-								children: [/* @__PURE__ */ jsx(Search, { className: "h-3.5 w-3.5 text-[#8e9a9a]" }), /* @__PURE__ */ jsx("span", { children: "Search" })]
+	return /* @__PURE__ */ jsxs(CustomerStoreProvider, {
+		profile: loaderData?.profile ?? void 0,
+		persistedOrders: loaderData ? loaderData.orders : void 0,
+		persistedUnpaidInvoiceOrderIds: loaderData?.unpaidInvoiceOrderIds,
+		persistedPickupLocations: loaderData ? loaderData.pickupLocations : void 0,
+		persistedOrderItems: loaderData ? loaderData.orderItems : void 0,
+		persistedSubscriptionUsedUnits: loaderData?.subscriptionUsedUnits,
+		persistedWallet: loaderData?.wallet,
+		persistedWalletTransactions: loaderData?.walletTransactions,
+		persistedInvoice: loaderData?.invoice,
+		persistedSubscription: loaderData?.subscription && loaderData.subscriptionPlan ? {
+			subscription: loaderData.subscription,
+			plan: loaderData.subscriptionPlan
+		} : null,
+		children: [/* @__PURE__ */ jsx("div", {
+			className: "relative min-h-screen bg-[#fafafa] text-[#121212]",
+			children: /* @__PURE__ */ jsxs("div", {
+				className: "relative z-10 min-h-screen lg:flex",
+				children: [/* @__PURE__ */ jsxs("aside", {
+					className: "sticky top-0 hidden h-screen max-h-screen w-[221px] shrink-0 overflow-y-auto border-r border-[#f2f3f3] bg-white px-[13px] py-8 shadow-[1px_0_8px_rgba(18,18,18,0.04)] lg:flex lg:flex-col",
+					children: [
+						/* @__PURE__ */ jsx("div", {
+							className: "px-3",
+							children: /* @__PURE__ */ jsx(QaffyLogo, {})
+						}),
+						/* @__PURE__ */ jsx("nav", {
+							className: "mx-auto mt-12 w-[194px] space-y-[3px]",
+							children: navItems$1.map((item) => {
+								const Icon = item.icon;
+								return /* @__PURE__ */ jsxs(NavLink, {
+									to: item.to,
+									end: item.end,
+									className: ({ isActive }) => `flex h-10 items-center gap-3 rounded-[10px] px-4 text-sm font-medium transition ${isActive ? "bg-brand-surface text-brand-strong" : "text-[#121212] hover:bg-[#fafafa]"}`,
+									children: [/* @__PURE__ */ jsx("span", {
+										className: "flex h-5 w-5 items-center justify-center rounded-[5px] text-[#121212]",
+										children: /* @__PURE__ */ jsx(Icon, { className: "h-4 w-4" })
+									}), /* @__PURE__ */ jsx("span", { children: item.label })]
+								}, item.to);
+							})
+						}),
+						/* @__PURE__ */ jsxs("div", {
+							className: "mt-auto space-y-1",
+							children: [/* @__PURE__ */ jsxs(NavLink, {
+								to: "/transactions",
+								className: "flex h-10 w-full items-center gap-3 rounded-[10px] px-4 text-sm font-medium text-[#121212] hover:bg-[#fafafa]",
+								children: [/* @__PURE__ */ jsx(ClipboardList, { className: "h-4 w-4" }), /* @__PURE__ */ jsx("span", { children: "Activity log" })]
 							}), /* @__PURE__ */ jsxs("button", {
 								type: "button",
-								"aria-label": "Notifications",
-								className: "relative flex h-10 w-10 items-center justify-center rounded-full border border-[#f2f3f3] bg-white text-[#121212]",
-								children: [/* @__PURE__ */ jsx(Bell, { className: "h-4 w-4" }), /* @__PURE__ */ jsx("span", { className: "absolute right-2 top-1 h-2 w-2 rounded-full border-2 border-white bg-[#f59e0b]" })]
+								onClick: () => setLogoutConfirmationOpen(true),
+								className: "flex h-10 w-full items-center gap-3 rounded-[10px] px-4 text-sm font-medium text-[#121212] hover:bg-[#fafafa]",
+								children: [/* @__PURE__ */ jsx(LogOut, { className: "h-4 w-4" }), /* @__PURE__ */ jsx("span", { children: "Log out" })]
 							})]
-						})]
+						})
+					]
+				}), /* @__PURE__ */ jsxs("div", {
+					className: "min-w-0 flex-1",
+					children: [
+						/* @__PURE__ */ jsx("header", {
+							className: "sticky top-0 z-20 border-b border-[#f2f3f3] bg-white lg:hidden",
+							children: /* @__PURE__ */ jsxs("div", {
+								className: "mx-auto flex max-w-3xl items-center justify-between px-4 py-3.5 sm:px-6",
+								children: [
+									/* @__PURE__ */ jsx("button", {
+										type: "button",
+										"aria-label": "Open navigation menu",
+										"aria-expanded": mobileMenuOpen,
+										onClick: () => setMobileMenuOpen((open) => !open),
+										className: "flex h-9 w-9 items-center justify-center rounded-lg border border-[#e7e7e7] bg-white text-slate-600",
+										children: mobileMenuOpen ? /* @__PURE__ */ jsx(X, { className: "h-5 w-5" }) : /* @__PURE__ */ jsx(Menu, { className: "h-5 w-5" })
+									}),
+									/* @__PURE__ */ jsx(QaffyLogo, { className: "scale-[0.82]" }),
+									/* @__PURE__ */ jsx(NavLink, {
+										to: "/settings",
+										type: "button",
+										"aria-label": "Open profile",
+										className: "flex h-9 w-9 items-center justify-center rounded-lg border border-[#e7e7e7] bg-white text-slate-600",
+										children: /* @__PURE__ */ jsx(UserCircle2, { className: "h-5 w-5" })
+									})
+								]
+							})
+						}),
+						mobileMenuOpen && /* @__PURE__ */ jsxs("div", {
+							className: "fixed inset-0 z-40 lg:hidden",
+							children: [/* @__PURE__ */ jsx("button", {
+								type: "button",
+								"aria-label": "Close navigation menu",
+								className: "absolute inset-0 bg-slate-950/35",
+								onClick: closeMobileMenu
+							}), /* @__PURE__ */ jsxs("aside", {
+								className: "relative z-10 flex h-full w-[82%] max-w-sm flex-col border-r border-[#e7e7e7] bg-white px-4 py-5 shadow-xl",
+								children: [
+									/* @__PURE__ */ jsxs("div", {
+										className: "mb-6 flex items-center justify-between",
+										children: [/* @__PURE__ */ jsx(QaffyLogo, { className: "scale-[0.82]" }), /* @__PURE__ */ jsx("button", {
+											type: "button",
+											"aria-label": "Close navigation menu",
+											onClick: closeMobileMenu,
+											className: "flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600",
+											children: /* @__PURE__ */ jsx(X, { className: "h-4 w-4" })
+										})]
+									}),
+									/* @__PURE__ */ jsx("nav", {
+										className: "space-y-1",
+										children: navItems$1.map((item) => {
+											const Icon = item.icon;
+											return /* @__PURE__ */ jsx(NavLink, {
+												to: item.to,
+												end: item.end,
+												onClick: closeMobileMenu,
+												className: ({ isActive }) => `flex items-center gap-3 rounded-[10px] px-3 py-2.5 text-sm font-medium transition ${isActive ? "bg-brand-surface text-brand-strong" : "text-[#121212] hover:bg-[#fafafa]"}`,
+												children: ({ isActive }) => /* @__PURE__ */ jsxs(Fragment, { children: [/* @__PURE__ */ jsx("span", {
+													className: `flex h-8 w-8 items-center justify-center rounded-md ${isActive ? "text-brand-strong" : "text-[#121212]"}`,
+													children: /* @__PURE__ */ jsx(Icon, { className: "h-4 w-4" })
+												}), /* @__PURE__ */ jsx("span", { children: item.label })] })
+											}, item.to);
+										})
+									}),
+									/* @__PURE__ */ jsx(PlanSummary, {})
+								]
+							})]
+						}),
+						/* @__PURE__ */ jsxs("div", {
+							className: "hidden h-[70px] items-center justify-between gap-4 px-7 pt-[22px] lg:flex",
+							children: [/* @__PURE__ */ jsx("h2", {
+								className: "text-2xl font-bold tracking-tight text-[#121212]",
+								children: pageTitle
+							}), /* @__PURE__ */ jsxs("div", {
+								className: "flex items-center gap-4",
+								children: [/* @__PURE__ */ jsxs(NavLink, {
+									to: "/orders",
+									className: "flex h-12 w-[288px] items-center gap-2 rounded-full border border-[#f2f3f3] bg-white px-4 text-sm text-[#505959]",
+									children: [/* @__PURE__ */ jsx(Search, { className: "h-3.5 w-3.5 text-[#8e9a9a]" }), /* @__PURE__ */ jsx("span", { children: "Search orders" })]
+								}), /* @__PURE__ */ jsxs(NavLink, {
+									to: "/transactions",
+									"aria-label": "Open notifications",
+									className: "relative flex h-10 w-10 items-center justify-center rounded-full border border-[#f2f3f3] bg-white text-[#121212]",
+									children: [/* @__PURE__ */ jsx(Bell, { className: "h-4 w-4" }), /* @__PURE__ */ jsx("span", { className: "absolute right-2 top-1 h-2 w-2 rounded-full border-2 border-white bg-[#f59e0b]" })]
+								})]
+							})]
+						}),
+						/* @__PURE__ */ jsx("main", {
+							className: "mx-auto w-full max-w-300 px-4 pb-8 pt-5 sm:px-6 sm:pt-6 lg:pb-10 lg:pt-5",
+							children: /* @__PURE__ */ jsx(Outlet, {})
+						})
+					]
+				})]
+			})
+		}), logoutConfirmationOpen && /* @__PURE__ */ jsx("div", {
+			className: "fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4 backdrop-blur-sm",
+			role: "presentation",
+			onMouseDown: () => !isLoggingOut && setLogoutConfirmationOpen(false),
+			children: /* @__PURE__ */ jsxs("section", {
+				role: "dialog",
+				"aria-modal": "true",
+				"aria-labelledby": "logout-title",
+				onMouseDown: (event) => event.stopPropagation(),
+				className: "w-full max-w-sm rounded-2xl border border-[#e7e7e7] bg-white p-6 shadow-2xl",
+				children: [
+					/* @__PURE__ */ jsx("h2", {
+						id: "logout-title",
+						className: "text-xl font-bold text-slate-900",
+						children: "Log out of Qaffy?"
 					}),
-					/* @__PURE__ */ jsx("main", {
-						className: "mx-auto w-full max-w-300 px-4 pb-8 pt-5 sm:px-6 sm:pt-6 lg:pb-10 lg:pt-5",
-						children: /* @__PURE__ */ jsx(Outlet, {})
+					/* @__PURE__ */ jsx("p", {
+						className: "mt-2 text-sm leading-6 text-slate-500",
+						children: "You will need to sign in again to access your laundry account."
+					}),
+					/* @__PURE__ */ jsxs("div", {
+						className: "mt-6 flex gap-3",
+						children: [/* @__PURE__ */ jsx("button", {
+							type: "button",
+							onClick: () => setLogoutConfirmationOpen(false),
+							disabled: isLoggingOut,
+							className: "flex-1 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60",
+							children: "Cancel"
+						}), /* @__PURE__ */ jsx("button", {
+							type: "button",
+							onClick: handleLogout,
+							disabled: isLoggingOut,
+							className: "flex-1 rounded-xl bg-brand-primary px-4 py-3 text-sm font-semibold text-white transition hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-60",
+							children: isLoggingOut ? "Logging out..." : "Log out"
+						})]
 					})
 				]
-			})]
-		})
-	}) });
+			})
+		})]
+	});
 });
+//#endregion
+//#region src/lib/db.server.ts
+var connectionString = process.env.DATABASE_URL;
+if (!connectionString) throw new Error("Missing DATABASE_URL (direct Postgres connection string from your Supabase project settings).");
+var sql = postgres(connectionString);
+//#endregion
+//#region src/lib/wallet.server.ts
+var InsufficientBalanceError = class extends Error {
+	constructor() {
+		super("INSUFFICIENT_BALANCE");
+	}
+};
+/** Credits the customer's wallet after a Paystack top-up payment is verified server-side. */
+async function creditWallet(customerId, balanceType, amount, paymentReference) {
+	if (amount <= 0) throw new Error("Amount must be positive");
+	return sql.begin(async (tx) => {
+		await tx`insert into wallets (customer_id) values (${customerId}) on conflict (customer_id) do nothing`;
+		await tx`
+      insert into payments (customer_id, reference, amount, balance_type, status)
+      values (${customerId}, ${paymentReference}, ${amount}, ${balanceType}, 'pending')
+      on conflict (reference) do nothing
+    `;
+		const [wallet] = await tx`select * from wallets where customer_id = ${customerId} for update`;
+		const subscriptionDebt = Math.max(0, -Number(wallet.subscription_balance));
+		const subscriptionCredit = balanceType === "subscription" ? amount : Math.min(amount, subscriptionDebt);
+		const oneOffCredit = balanceType === "one_off" ? amount - subscriptionCredit : 0;
+		const subscriptionBalance = Number(wallet.subscription_balance) + subscriptionCredit;
+		const oneOffBalance = Number(wallet.one_off_balance) + oneOffCredit;
+		await tx`
+      update wallets
+      set one_off_balance = ${oneOffBalance}, subscription_balance = ${subscriptionBalance}, updated_at = ${/* @__PURE__ */ new Date()}
+      where customer_id = ${customerId}
+    `;
+		const [payment] = await tx`update payments set status = 'success' where reference = ${paymentReference} returning id`;
+		if (subscriptionCredit > 0) await tx`
+        insert into wallet_transactions (customer_id, balance_type, txn_type, amount, balance_after, related_payment_id)
+        values (${customerId}, 'subscription', 'topup', ${subscriptionCredit}, ${subscriptionBalance}, ${payment?.id ?? null})
+      `;
+		if (oneOffCredit > 0) {
+			let settlementBudget = oneOffCredit;
+			const unpaidInvoices = await tx`
+        select i.id, i.amount, o.id as order_id
+        from invoices i
+        join orders o on o.id = i.order_id
+        where o.customer_id = ${customerId}
+          and o.is_subscription_order = false
+          and i.status = 'unpaid'
+        order by i.created_at asc, i.id asc
+        for update of i
+      `;
+			for (const invoice of unpaidInvoices) {
+				const invoiceAmount = Number(invoice.amount);
+				if (settlementBudget < invoiceAmount) break;
+				const deliveryOtp = String(Math.floor(Math.random() * 1e6)).padStart(6, "0");
+				await tx`update invoices set status = 'paid', paid_at = now() where id = ${invoice.id}`;
+				await tx`update orders set delivery_otp = ${deliveryOtp} where id = ${invoice.order_id}`;
+				settlementBudget -= invoiceAmount;
+			}
+			await tx`
+        insert into wallet_transactions (customer_id, balance_type, txn_type, amount, balance_after, related_payment_id)
+        values (${customerId}, 'one_off', 'topup', ${oneOffCredit}, ${oneOffBalance}, ${payment?.id ?? null})
+      `;
+		}
+		return { newBalance: balanceType === "subscription" ? subscriptionBalance : oneOffBalance };
+	});
+}
+/** Records a normal one-time invoice as wallet debt when the order is created. */
+async function debitOneOffInvoice(customerId, invoiceId) {
+	return sql.begin(async (tx) => {
+		await tx`insert into wallets (customer_id) values (${customerId}) on conflict (customer_id) do nothing`;
+		const [invoice] = await tx`
+      select i.id, i.amount, i.status, o.customer_id, o.is_subscription_order
+      from invoices i
+      join orders o on o.id = i.order_id
+      where i.id = ${invoiceId}
+      for update of i
+    `;
+		if (!invoice || invoice.customer_id !== customerId || invoice.is_subscription_order) throw new Error("Invoice not found");
+		if (invoice.status === "paid") return {
+			invoiceId,
+			alreadyPaid: true
+		};
+		const [wallet] = await tx`select one_off_balance from wallets where customer_id = ${customerId} for update`;
+		const newBalance = Number(wallet.one_off_balance) - Number(invoice.amount);
+		await tx`update wallets set one_off_balance = ${newBalance}, updated_at = now() where customer_id = ${customerId}`;
+		await tx`
+      insert into wallet_transactions (customer_id, balance_type, txn_type, amount, balance_after, related_invoice_id)
+      values (${customerId}, 'one_off', 'debit', ${invoice.amount}, ${newBalance}, ${invoiceId})
+    `;
+		return {
+			invoiceId,
+			newBalance,
+			alreadyPaid: false
+		};
+	});
+}
+/** Charges subscription excess from the customer's subscription balance. */
+async function chargeSubscriptionInvoice(customerId, invoiceId) {
+	return sql.begin(async (tx) => {
+		await tx`insert into wallets (customer_id) values (${customerId}) on conflict (customer_id) do nothing`;
+		const [invoice] = await tx`
+      select i.*, o.customer_id, o.is_subscription_order
+      from invoices i
+      join orders o on o.id = i.order_id
+      where i.id = ${invoiceId}
+      for update of i
+    `;
+		if (!invoice || invoice.customer_id !== customerId || !invoice.is_subscription_order) throw new Error("Invoice not found");
+		if (invoice.status === "paid") return {
+			amount: Number(invoice.amount),
+			alreadyPaid: true
+		};
+		const [wallet] = await tx`
+      select subscription_balance from wallets where customer_id = ${customerId} for update
+    `;
+		const currentBalance = Number(wallet?.subscription_balance ?? 0);
+		const amount = Number(invoice.amount);
+		const newBalance = currentBalance - amount;
+		const deliveryOtp = newBalance >= 0 ? String(Math.floor(Math.random() * 1e6)).padStart(6, "0") : null;
+		await tx`update wallets set subscription_balance = ${newBalance}, updated_at = now() where customer_id = ${customerId}`;
+		await tx`update invoices set status = 'paid', paid_at = now() where id = ${invoiceId}`;
+		if (deliveryOtp) await tx`update orders set delivery_otp = ${deliveryOtp} where id = ${invoice.order_id}`;
+		await tx`
+      insert into wallet_transactions (customer_id, balance_type, txn_type, amount, balance_after, related_invoice_id)
+      values (${customerId}, 'subscription', 'debit', ${amount}, ${newBalance}, ${invoiceId})
+    `;
+		return {
+			amount,
+			newBalance,
+			deliveryOtp,
+			alreadyPaid: false
+		};
+	});
+}
 //#endregion
 //#region src/components/BubblyBackground.tsx
 var bubbles = [
@@ -555,7 +896,7 @@ var centeredPositions = [
 	56,
 	68
 ];
-function BubblyBackground({ count = bubbles.length, color = "#00b7d4", opacity = .12, scale = 1, className = "", contained = false, centered = false }) {
+function BubblyBackground({ count = bubbles.length, color = "#d9364e", opacity = .12, scale = 1, className = "", contained = false, centered = false }) {
 	return /* @__PURE__ */ jsx("div", {
 		className: `qaffy-bubbles ${contained ? "qaffy-bubbles--contained" : ""} ${centered ? "qaffy-bubbles--centered" : ""} ${className}`,
 		"aria-hidden": "true",
@@ -575,41 +916,73 @@ function BubblyBackground({ count = bubbles.length, color = "#00b7d4", opacity =
 	});
 }
 //#endregion
+//#region src/components/CopyableOrderId.tsx
+function getDisplayId(id) {
+	return id.length > 8 ? `${id.slice(0, 8)}...` : id;
+}
+function CopyableOrderId({ id, className = "" }) {
+	async function copyOrderId() {
+		await navigator.clipboard.writeText(id);
+		toast.success("Order ID copied");
+	}
+	return /* @__PURE__ */ jsxs("span", {
+		className: `inline-flex items-center gap-1.5 ${className}`,
+		children: [/* @__PURE__ */ jsx("span", {
+			title: id,
+			children: getDisplayId(id)
+		}), /* @__PURE__ */ jsx("button", {
+			type: "button",
+			onClick: copyOrderId,
+			"aria-label": "Copy order ID",
+			title: "Copy order ID",
+			className: "inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-brand-primary",
+			children: /* @__PURE__ */ jsx(Copy, { className: "h-3.5 w-3.5" })
+		})]
+	});
+}
+//#endregion
 //#region src/portals/customer/pages/NewOrder.tsx
 var categories = [
 	{
 		name: "General clothing",
 		price: 350,
+		subscriptionUnits: 1,
 		description: "Shirts, trousers, blouses, skirts and native wear"
 	},
 	{
 		name: "Bedsheet",
 		price: 700,
+		subscriptionUnits: 3,
 		description: "Bedsheets and duvet covers"
 	},
 	{
 		name: "Towel",
 		price: 700,
+		subscriptionUnits: 1,
 		description: "Bath and hand towels"
 	},
 	{
 		name: "Suit",
 		price: 3e3,
+		subscriptionUnits: 2,
 		description: "Two-piece and three-piece suits"
 	},
 	{
 		name: "Hoodie",
 		price: 500,
+		subscriptionUnits: 2,
 		description: "Hoodies and heavy tops"
 	},
 	{
 		name: "Duvet",
 		price: 2500,
+		subscriptionUnits: 6,
 		description: "Duvets and large bedding"
 	},
 	{
 		name: "Pair of shoes",
 		price: 1200,
+		subscriptionUnits: 2,
 		description: "One pair of shoes or one bag"
 	}
 ];
@@ -627,25 +1000,50 @@ var services = [
 		description: "Clean, pressed and folded"
 	}
 ];
-function NewOrder({ onClose }) {
-	const { addOrder, pickupLocations } = useCustomerStore();
+function NewOrder({ onClose, order }) {
+	const { addOrder, pickupLocations, subscription, subscriptionRemainingUnits } = useCustomerStore();
+	const isReadOnly = Boolean(order);
 	const [category, setCategory] = useState(categories[0]);
 	const [service, setService] = useState(services[2]);
 	const [quantity, setQuantity] = useState(1);
 	const [items, setItems] = useState([]);
-	const [pickupLocation, setPickupLocation] = useState(pickupLocations[0]);
+	const [pickupLocation, setPickupLocation] = useState(pickupLocations[0]?.name ?? "");
 	const [notes, setNotes] = useState("");
+	const [isSaving, setIsSaving] = useState(false);
 	const draftLine = {
 		category: category.name,
 		service: service.name,
 		quantity,
-		unitPrice: category.price
+		unitPrice: category.price,
+		subscriptionUnits: category.subscriptionUnits
 	};
-	const total = items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
-	const itemCount = items.reduce((sum, item) => sum + item.quantity, 0);
+	const displayItems = order?.lines ?? (order ? [{
+		category: order.service,
+		service: order.service,
+		quantity: order.items,
+		unitPrice: order.items ? order.total / order.items : order.total
+	}] : items);
+	const total = order?.total ?? items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
+	const itemCount = order?.items ?? items.reduce((sum, item) => sum + item.quantity, 0);
+	const weightedItemCount = items.reduce((sum, item) => sum + item.quantity * (item.subscriptionUnits ?? 1), 0);
 	const addItem = () => {
 		setItems((currentItems) => [...currentItems, draftLine]);
 		setQuantity(1);
+	};
+	const handleCreateOrder = async () => {
+		setIsSaving(true);
+		try {
+			await addOrder({
+				items,
+				notes,
+				pickupLocation
+			});
+			onClose();
+		} catch (error) {
+			toast.error(error instanceof Error ? error.message : "Order could not be saved. Please try again.");
+		} finally {
+			setIsSaving(false);
+		}
 	};
 	return /* @__PURE__ */ jsx("div", {
 		className: "fixed inset-0 z-50 flex items-end justify-center bg-slate-950/35 p-0 sm:items-center sm:p-4",
@@ -664,24 +1062,89 @@ function NewOrder({ onClose }) {
 					count: 4,
 					scale: 7,
 					opacity: .38,
-					color: "#00b7d4"
+					color: "var(--color-brand-primary)"
 				}),
 				/* @__PURE__ */ jsxs("header", {
 					className: "flex items-start justify-between gap-3",
 					children: [/* @__PURE__ */ jsxs("div", { children: [/* @__PURE__ */ jsx("h2", {
 						id: "new-order-title",
 						className: "text-2xl font-bold tracking-tight text-[#121212]",
-						children: "Create an order"
+						children: isReadOnly ? "Order details" : "Create an order"
 					}), /* @__PURE__ */ jsx("p", {
 						className: "mt-1 text-sm text-slate-500",
-						children: "Add each type of item and choose how you want it cared for."
+						children: isReadOnly ? /* @__PURE__ */ jsxs(Fragment, { children: [
+							/* @__PURE__ */ jsx(CopyableOrderId, { id: order?.id ?? "" }),
+							" · ",
+							order?.status
+						] }) : "Add each type of item and choose how you want it cared for."
 					})] }), /* @__PURE__ */ jsx("button", {
 						type: "button",
 						onClick: onClose,
-						"aria-label": "Close new order",
-						className: "flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-white text-xl text-slate-500 transition hover:border-[#a8eaf0] hover:text-[#00b7d4]",
+						"aria-label": isReadOnly ? "Close order details" : "Close new order",
+						className: "flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-white text-xl text-slate-500 transition hover:border-brand-border hover:text-brand-primary",
 						children: "×"
 					})]
+				}),
+				isReadOnly && /* @__PURE__ */ jsxs("section", {
+					className: "mt-5 grid gap-3 sm:grid-cols-2",
+					children: [
+						/* @__PURE__ */ jsxs("div", {
+							className: "rounded-2xl border border-[#e7e7e7] bg-slate-50 p-4",
+							children: [/* @__PURE__ */ jsx("p", {
+								className: "text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400",
+								children: "Payment status"
+							}), /* @__PURE__ */ jsx("p", {
+								className: "mt-2 font-semibold text-slate-900",
+								children: order?.paymentStatus
+							})]
+						}),
+						/* @__PURE__ */ jsxs("div", {
+							className: "rounded-2xl border border-[#e7e7e7] bg-slate-50 p-4",
+							children: [/* @__PURE__ */ jsx("p", {
+								className: "text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400",
+								children: "Customer ID"
+							}), /* @__PURE__ */ jsx("p", {
+								className: "mt-2 font-semibold text-slate-900",
+								children: order?.customerId
+							})]
+						}),
+						/* @__PURE__ */ jsxs("div", {
+							className: "rounded-2xl border border-[#e7e7e7] bg-slate-50 p-4",
+							children: [/* @__PURE__ */ jsx("p", {
+								className: "text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400",
+								children: "Pickup OTP"
+							}), /* @__PURE__ */ jsx("div", {
+								className: "mt-2 flex gap-1.5",
+								children: Array.from({ length: 5 }).map((_, index) => /* @__PURE__ */ jsx("span", {
+									className: "flex h-9 w-9 items-center justify-center rounded-md border border-[#ff4a4a] bg-white text-sm font-bold text-[#ff4a4a]",
+									children: order?.pickupOtp[index] ?? ""
+								}, `pickup-${index}`))
+							})]
+						}),
+						/* @__PURE__ */ jsxs("div", {
+							className: "rounded-2xl border border-[#e7e7e7] bg-slate-50 p-4",
+							children: [/* @__PURE__ */ jsx("p", {
+								className: "text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400",
+								children: "Delivery OTP"
+							}), /* @__PURE__ */ jsx("div", {
+								className: "mt-2 flex gap-1.5",
+								children: Array.from({ length: 5 }).map((_, index) => /* @__PURE__ */ jsx("span", {
+									className: "flex h-9 w-9 items-center justify-center rounded-md border border-[#ff4a4a] bg-white text-sm font-bold text-[#ff4a4a]",
+									children: (order?.deliveryOtp ?? "").replace(/\D/g, "")[index] ?? ""
+								}, `delivery-${index}`))
+							})]
+						}),
+						/* @__PURE__ */ jsxs("div", {
+							className: "rounded-2xl border border-[#e7e7e7] bg-slate-50 p-4 sm:col-span-2",
+							children: [/* @__PURE__ */ jsx("p", {
+								className: "text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400",
+								children: "Pickup date"
+							}), /* @__PURE__ */ jsx("p", {
+								className: "mt-2 font-semibold text-slate-900",
+								children: order?.pickupDate ?? "Not confirmed yet"
+							})]
+						})
+					]
 				}),
 				/* @__PURE__ */ jsxs("section", {
 					className: "mt-5 rounded-2xl border border-[#e7e7e7] p-4 sm:p-5",
@@ -690,20 +1153,20 @@ function NewOrder({ onClose }) {
 							className: "flex items-center justify-between gap-3",
 							children: [/* @__PURE__ */ jsxs("div", { children: [/* @__PURE__ */ jsx("h3", {
 								className: "text-lg font-bold text-slate-900",
-								children: "Add laundry items"
+								children: isReadOnly ? "Laundry items" : "Add laundry items"
 							}), /* @__PURE__ */ jsx("p", {
 								className: "mt-1 text-sm text-slate-500",
-								children: "Choose a category, service and quantity. Add another row for more items."
+								children: isReadOnly ? "The items and service details for this order." : "Choose a category, service and quantity. Add another row for more items."
 							})] }), /* @__PURE__ */ jsxs("span", {
-								className: "rounded-full bg-[#e8fbfd] px-2.5 py-1 text-xs font-medium text-[#00b7d4]",
+								className: "rounded-full bg-brand-soft px-2.5 py-1 text-xs font-medium text-brand-primary",
 								children: [
-									items.length,
+									displayItems.length,
 									" item type",
-									items.length === 1 ? "" : "s"
+									displayItems.length === 1 ? "" : "s"
 								]
 							})]
 						}),
-						/* @__PURE__ */ jsxs("div", {
+						!isReadOnly && /* @__PURE__ */ jsxs("div", {
 							className: "mt-4 grid gap-3 sm:grid-cols-[1.2fr_1fr_120px]",
 							children: [
 								/* @__PURE__ */ jsxs("label", { children: [/* @__PURE__ */ jsx("span", {
@@ -712,13 +1175,13 @@ function NewOrder({ onClose }) {
 								}), /* @__PURE__ */ jsx("select", {
 									value: category.name,
 									onChange: (event) => setCategory(categories.find((item) => item.name === event.target.value) ?? categories[0]),
-									className: "w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-900 focus:border-[#00b7d4] focus:ring-2 focus:ring-[#d1f5f8]",
+									className: "w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-900 focus:border-brand-primary focus:ring-2 focus:ring-brand-focus",
 									children: categories.map((item) => /* @__PURE__ */ jsxs("option", {
 										value: item.name,
 										children: [
 											item.name,
-											" · ₦",
-											item.price.toLocaleString()
+											" · ",
+											subscription ? `${item.subscriptionUnits} unit${item.subscriptionUnits === 1 ? "" : "s"}` : `₦${item.price.toLocaleString()}`
 										]
 									}, item.name))
 								})] }),
@@ -728,7 +1191,7 @@ function NewOrder({ onClose }) {
 								}), /* @__PURE__ */ jsx("select", {
 									value: service.name,
 									onChange: (event) => setService(services.find((item) => item.name === event.target.value) ?? services[0]),
-									className: "w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-900 focus:border-[#00b7d4] focus:ring-2 focus:ring-[#d1f5f8]",
+									className: "w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-900 focus:border-brand-primary focus:ring-2 focus:ring-brand-focus",
 									children: services.map((item) => /* @__PURE__ */ jsx("option", {
 										value: item.name,
 										children: item.name
@@ -762,23 +1225,22 @@ function NewOrder({ onClose }) {
 								})] })
 							]
 						}),
-						/* @__PURE__ */ jsxs("p", {
+						!isReadOnly && /* @__PURE__ */ jsxs(Fragment, { children: [/* @__PURE__ */ jsxs("p", {
 							className: "mt-2 text-xs text-slate-500",
 							children: [
 								category.description,
 								" · ",
 								service.description
 							]
-						}),
-						/* @__PURE__ */ jsxs("button", {
+						}), /* @__PURE__ */ jsxs("button", {
 							type: "button",
 							onClick: addItem,
-							className: "mt-4 inline-flex items-center gap-2 rounded-2xl border border-[#a8eaf0] bg-[#f0fcfd] px-3.5 py-2.5 text-sm font-semibold text-[#00b7d4] hover:bg-[#e8fbfd]",
+							className: "mt-4 inline-flex items-center gap-2 rounded-2xl border border-brand-border bg-brand-soft-hover px-3.5 py-2.5 text-sm font-semibold text-brand-primary hover:bg-brand-soft",
 							children: [/* @__PURE__ */ jsx(Plus, { className: "h-4 w-4" }), " Add item"]
-						}),
-						items.length > 0 && /* @__PURE__ */ jsx("div", {
+						})] }),
+						displayItems.length > 0 && /* @__PURE__ */ jsx("div", {
 							className: "mt-5 divide-y divide-slate-100 rounded-2xl border border-slate-200",
-							children: items.map((item, index) => /* @__PURE__ */ jsxs("div", {
+							children: displayItems.map((item, index) => /* @__PURE__ */ jsxs("div", {
 								className: "flex items-center gap-3 p-3 text-sm",
 								children: [
 									/* @__PURE__ */ jsxs("div", {
@@ -797,15 +1259,15 @@ function NewOrder({ onClose }) {
 											]
 										})]
 									}),
-									/* @__PURE__ */ jsxs("span", {
+									/* @__PURE__ */ jsx("span", {
 										className: "font-semibold text-slate-900",
-										children: ["₦", (item.quantity * item.unitPrice).toLocaleString()]
+										children: subscription ? `${item.quantity * (item.subscriptionUnits ?? 1)} unit${item.quantity * (item.subscriptionUnits ?? 1) === 1 ? "" : "s"}` : `₦${(item.quantity * item.unitPrice).toLocaleString()}`
 									}),
-									/* @__PURE__ */ jsx("button", {
+									!isReadOnly && /* @__PURE__ */ jsx("button", {
 										type: "button",
 										"aria-label": `Remove ${item.category}`,
 										onClick: () => setItems((currentItems) => currentItems.filter((_, itemIndex) => itemIndex !== index)),
-										className: "flex h-8 w-8 items-center justify-center rounded-2xl text-slate-400 hover:bg-[#e8fbfd] hover:text-[#00b7d4]",
+										className: "flex h-8 w-8 items-center justify-center rounded-2xl text-slate-400 hover:bg-brand-soft hover:text-brand-primary",
 										children: /* @__PURE__ */ jsx(Trash2, { className: "h-4 w-4" })
 									})
 								]
@@ -824,21 +1286,35 @@ function NewOrder({ onClose }) {
 					}), /* @__PURE__ */ jsx("textarea", {
 						rows: 3,
 						placeholder: "Separate whites, handle silk carefully...",
-						value: notes,
+						value: order?.notes ?? notes,
 						onChange: (event) => setNotes(event.target.value),
-						className: "w-full resize-none rounded-2xl border border-slate-200 bg-white px-3 py-3 text-base text-slate-900 placeholder:text-slate-400 focus:border-[#00b7d4] focus:ring-2 focus:ring-[#d1f5f8]"
+						readOnly: isReadOnly,
+						className: "w-full resize-none rounded-2xl border border-slate-200 bg-white px-3 py-3 text-base text-slate-900 placeholder:text-slate-400 focus:border-brand-primary focus:ring-2 focus:ring-brand-focus read-only:cursor-default read-only:bg-slate-50"
 					})] }), /* @__PURE__ */ jsxs("label", {
 						className: "mt-4 block",
 						children: [/* @__PURE__ */ jsx("span", {
 							className: "mb-1.5 block text-sm font-medium text-slate-600",
 							children: "Pickup location"
-						}), /* @__PURE__ */ jsx("select", {
-							value: pickupLocation,
+						}), /* @__PURE__ */ jsxs("select", {
+							value: order?.pickupLocation ?? pickupLocation,
 							onChange: (event) => setPickupLocation(event.target.value),
-							className: "w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-base text-slate-900 focus:border-[#00b7d4] focus:ring-2 focus:ring-[#d1f5f8]",
-							children: pickupLocations.map((location) => /* @__PURE__ */ jsx("option", { children: location }, location))
+							disabled: isReadOnly,
+							className: "w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-base text-slate-900 focus:border-brand-primary focus:ring-2 focus:ring-brand-focus disabled:cursor-default disabled:bg-slate-50 disabled:opacity-100",
+							children: [pickupLocations.map((location) => /* @__PURE__ */ jsx("option", {
+								value: location.name,
+								children: location.name
+							}, location.id)), order && !pickupLocations.some((location) => location.name === order.pickupLocation) && /* @__PURE__ */ jsx("option", { children: order.pickupLocation })]
 						})]
 					})]
+				}),
+				!isReadOnly && subscription && /* @__PURE__ */ jsxs("p", {
+					className: "mt-4 rounded-2xl bg-brand-soft p-3 text-sm text-brand-strong",
+					children: [
+						subscriptionRemainingUnits,
+						" weighted units remain on your ",
+						subscription.name,
+						" plan this week."
+					]
 				}),
 				/* @__PURE__ */ jsxs("section", {
 					className: "mt-4 rounded-2xl border border-[#a7d7d2] bg-[#eef9f7] p-5 text-slate-900 sm:p-6",
@@ -846,35 +1322,31 @@ function NewOrder({ onClose }) {
 						className: "flex items-start justify-between gap-4",
 						children: [/* @__PURE__ */ jsxs("div", { children: [/* @__PURE__ */ jsx("p", {
 							className: "text-xs font-semibold uppercase tracking-[0.16em] text-[#418d87]",
-							children: "Order estimate"
+							children: isReadOnly ? "Order total" : "Order estimate"
 						}), /* @__PURE__ */ jsxs("p", {
 							className: "mt-2 text-sm text-slate-600",
 							children: [
-								itemCount,
-								" item",
-								itemCount === 1 ? "" : "s",
+								subscription ? `${order ? itemCount : weightedItemCount} weighted unit${(order ? itemCount : weightedItemCount) === 1 ? "" : "s"}` : `${itemCount} item${itemCount === 1 ? "" : "s"}`,
 								" across ",
-								items.length,
+								displayItems.length,
 								" item type",
-								items.length === 1 ? "" : "s"
+								displayItems.length === 1 ? "" : "s"
 							]
-						})] }), /* @__PURE__ */ jsxs("p", {
+						})] }), !subscription && /* @__PURE__ */ jsxs("p", {
 							className: "text-2xl font-bold",
 							children: ["₦", total.toLocaleString()]
 						})]
-					}), /* @__PURE__ */ jsx("button", {
+					}), isReadOnly ? /* @__PURE__ */ jsx("button", {
 						type: "button",
-						disabled: items.length === 0,
-						onClick: () => {
-							addOrder({
-								items,
-								notes,
-								pickupLocation
-							});
-							onClose();
-						},
-						className: "mt-5 w-full rounded-2xl bg-[#00b7d4] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#007f99] disabled:cursor-not-allowed disabled:opacity-50",
-						children: "Continue to pickup details"
+						onClick: onClose,
+						className: "mt-5 w-full rounded-2xl bg-brand-primary px-4 py-3 text-sm font-semibold text-white transition hover:bg-brand-primary-hover",
+						children: "Close details"
+					}) : /* @__PURE__ */ jsx("button", {
+						type: "button",
+						disabled: items.length === 0 || isSaving,
+						onClick: handleCreateOrder,
+						className: "mt-5 w-full rounded-2xl bg-brand-primary px-4 py-3 text-sm font-semibold text-white transition hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50",
+						children: isSaving ? "Saving order..." : "Continue to pickup details"
 					})]
 				})
 			]
@@ -883,23 +1355,29 @@ function NewOrder({ onClose }) {
 }
 //#endregion
 //#region src/portals/customer/pages/TopUpModal.tsx
-var pendingOrders = [{
-	id: "QF-1038",
-	amount: 7200
-}, {
-	id: "QF-1042",
-	amount: 4800
-}];
-function TopUpModal({ currentBalance, onClose }) {
-	const debt = useMemo(() => {
-		const pendingTotal = pendingOrders.reduce((sum, order) => sum + order.amount, 0);
-		return Math.max(pendingTotal - currentBalance, 0);
-	}, [currentBalance]);
+function TopUpModal({ currentBalance, subscriptionBalance, pendingOrders, onTopUp, onClose }) {
+	const negativeBalance = Math.max(0, -subscriptionBalance);
+	const pendingTotal = pendingOrders.reduce((sum, order) => sum + order.amount, 0);
+	const debt = Math.max(negativeBalance, pendingTotal);
 	const suggestedAmount = useMemo(() => {
 		const minimum = 1e3;
 		return Math.max(debt > 0 ? debt : minimum, minimum);
 	}, [debt]);
 	const [amount, setAmount] = useState(suggestedAmount);
+	const [isProcessing, setIsProcessing] = useState(false);
+	const balanceAfterTopUp = currentBalance + Math.max(0, amount - negativeBalance);
+	const appliedToDebt = Math.min(amount, negativeBalance);
+	const newBalance = Math.max(0, balanceAfterTopUp);
+	const handleSimulatedTopUp = async () => {
+		if (amount < 1e3) return;
+		setIsProcessing(true);
+		try {
+			await onTopUp(amount);
+			onClose();
+		} finally {
+			setIsProcessing(false);
+		}
+	};
 	return /* @__PURE__ */ jsx("div", {
 		className: "fixed inset-0 z-50 flex items-end justify-center bg-slate-950/45 p-0 backdrop-blur-sm sm:items-center sm:p-4",
 		role: "presentation",
@@ -931,7 +1409,7 @@ function TopUpModal({ currentBalance, onClose }) {
 						className: "flex items-center justify-between gap-3",
 						children: [/* @__PURE__ */ jsxs("div", { children: [/* @__PURE__ */ jsx("p", {
 							className: "text-xs font-medium uppercase tracking-[0.18em] text-sky-200",
-							children: "Current balance"
+							children: "One-time balance"
 						}), /* @__PURE__ */ jsxs("p", {
 							className: "mt-2 text-3xl font-bold",
 							children: ["₦", currentBalance.toLocaleString()]
@@ -959,13 +1437,20 @@ function TopUpModal({ currentBalance, onClose }) {
 						}),
 						/* @__PURE__ */ jsx("div", {
 							className: "mt-4 rounded-2xl bg-sky-50 p-3 text-sm text-slate-700",
-							children: debt > 0 ? /* @__PURE__ */ jsxs("p", { children: [
-								"Your recent unpaid orders total ",
+							children: negativeBalance > 0 ? /* @__PURE__ */ jsxs("p", { children: [
+								"Your subscription debt of ",
 								/* @__PURE__ */ jsxs("span", {
 									className: "font-semibold text-sky-700",
-									children: ["₦", debt.toLocaleString()]
+									children: ["₦", negativeBalance.toLocaleString()]
 								}),
-								". This amount is prefilled so the most recent debt is settled first."
+								" will be cleared first. Any remaining amount becomes your one-time balance."
+							] }) : pendingTotal > 0 ? /* @__PURE__ */ jsxs("p", { children: [
+								"Your pending orders total ",
+								/* @__PURE__ */ jsxs("span", {
+									className: "font-semibold text-sky-700",
+									children: ["₦", pendingTotal.toLocaleString()]
+								}),
+								". Add funds to cover them before delivery."
 							] }) : /* @__PURE__ */ jsxs("p", { children: [
 								"Minimum top-up is ",
 								/* @__PURE__ */ jsx("span", {
@@ -976,25 +1461,46 @@ function TopUpModal({ currentBalance, onClose }) {
 							] })
 						}),
 						/* @__PURE__ */ jsxs("div", {
+							className: "mt-4 grid gap-2 rounded-2xl border border-slate-200 bg-white p-3 text-sm",
+							children: [/* @__PURE__ */ jsxs("div", {
+								className: "flex items-center justify-between text-slate-600",
+								children: [/* @__PURE__ */ jsx("span", { children: "Applied to balance" }), /* @__PURE__ */ jsxs("span", {
+									className: "font-semibold text-slate-900",
+									children: ["₦", appliedToDebt.toLocaleString()]
+								})]
+							}), /* @__PURE__ */ jsxs("div", {
+								className: "flex items-center justify-between text-slate-600",
+								children: [/* @__PURE__ */ jsx("span", { children: "New balance" }), /* @__PURE__ */ jsxs("span", {
+									className: `font-semibold ${newBalance > 0 ? "text-emerald-700" : "text-slate-900"}`,
+									children: ["₦", newBalance.toLocaleString()]
+								})]
+							})]
+						}),
+						/* @__PURE__ */ jsxs("div", {
 							className: "mt-4 rounded-2xl bg-slate-50 p-3",
 							children: [/* @__PURE__ */ jsx("p", {
 								className: "text-[10px] uppercase tracking-[0.22em] text-slate-400",
 								children: "Pending orders"
 							}), /* @__PURE__ */ jsx("div", {
 								className: "mt-3 space-y-2",
-								children: pendingOrders.map((order) => /* @__PURE__ */ jsxs("div", {
+								children: pendingOrders.length > 0 ? pendingOrders.map((order) => /* @__PURE__ */ jsxs("div", {
 									className: "flex items-center justify-between text-sm text-slate-600",
 									children: [/* @__PURE__ */ jsx("span", { children: order.id }), /* @__PURE__ */ jsxs("span", {
 										className: "font-semibold text-slate-900",
 										children: ["₦", order.amount.toLocaleString()]
 									})]
-								}, order.id))
+								}, order.id)) : /* @__PURE__ */ jsx("p", {
+									className: "text-sm text-slate-500",
+									children: "No pending orders."
+								})
 							})]
 						}),
 						/* @__PURE__ */ jsx("button", {
 							type: "button",
-							className: "mt-5 w-full rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white shadow-md shadow-slate-200 transition hover:bg-slate-800",
-							children: "Continue to Paystack"
+							disabled: amount < 1e3 || isProcessing,
+							onClick: handleSimulatedTopUp,
+							className: "mt-5 w-full rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white shadow-md shadow-slate-200 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50",
+							children: isProcessing ? "Processing..." : "Add funds"
 						})
 					]
 				})
@@ -1003,13 +1509,125 @@ function TopUpModal({ currentBalance, onClose }) {
 	});
 }
 //#endregion
+//#region src/components/PlanEndingBanner.tsx
+function getDaysRemaining(endDate) {
+	const end = /* @__PURE__ */ new Date(`${endDate}T23:59:59`);
+	const today = /* @__PURE__ */ new Date();
+	const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+	return Math.ceil((end.getTime() - startOfToday.getTime()) / 864e5);
+}
+function PlanEndingBanner({ planName, endDate }) {
+	const [dismissedAt, setDismissedAt] = useState(null);
+	const daysRemaining = endDate ? getDaysRemaining(endDate) : null;
+	const storageKey = endDate ? `qaffy-plan-ending-banner:${endDate}` : null;
+	const storedDismissal = storageKey && typeof window !== "undefined" ? window.localStorage.getItem(storageKey) : null;
+	const dismissalStage = dismissedAt ?? (storedDismissal ? Number(storedDismissal) : null);
+	if (!endDate || daysRemaining === null || daysRemaining < 0 || daysRemaining > 7 || !(dismissalStage === null || daysRemaining !== null && daysRemaining <= 3 && dismissalStage === 7)) return null;
+	const dismiss = () => {
+		const dismissalStage = daysRemaining <= 3 ? 3 : 7;
+		if (storageKey) window.localStorage.setItem(storageKey, String(dismissalStage));
+		setDismissedAt(dismissalStage);
+	};
+	return /* @__PURE__ */ jsxs("section", {
+		className: "flex items-center gap-3 rounded-2xl border border-brand-border bg-brand-soft p-4 text-slate-900 sm:p-5",
+		role: "status",
+		children: [/* @__PURE__ */ jsxs("div", {
+			className: "flex min-w-0 flex-1 items-start gap-3",
+			children: [/* @__PURE__ */ jsx("span", {
+				className: "mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white text-brand-primary shadow-sm",
+				children: /* @__PURE__ */ jsx(Clock3, { className: "h-4 w-4" })
+			}), /* @__PURE__ */ jsx("div", { children: /* @__PURE__ */ jsxs("p", {
+				className: "text-sm font-bold text-brand-strong",
+				children: [
+					"Your ",
+					planName,
+					" plan is ending in ",
+					daysRemaining,
+					" days"
+				]
+			}) })]
+		}), /* @__PURE__ */ jsx("button", {
+			type: "button",
+			onClick: dismiss,
+			"aria-label": "Dismiss plan ending notification",
+			title: "Dismiss notification",
+			className: "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-brand-primary transition hover:bg-white",
+			children: /* @__PURE__ */ jsx(X, { className: "h-4 w-4" })
+		})]
+	});
+}
+//#endregion
 //#region src/portals/customer/pages/Home.tsx
-var Home_exports$3 = /* @__PURE__ */ __exportAll({ default: () => Home_default$3 });
+var Home_exports$3 = /* @__PURE__ */ __exportAll({
+	action: () => action$3,
+	default: () => Home_default$3
+});
+async function action$3({ request }) {
+	if (!isSupabaseServerConfigured) return data({
+		ok: false,
+		message: "Supabase is not configured."
+	}, { status: 500 });
+	const { supabase: serverSupabase, headers } = getSupabaseServerClient(request);
+	const { data: userData } = await serverSupabase.auth.getUser();
+	if (!userData.user) return data({
+		ok: false,
+		message: "Please sign in again."
+	}, {
+		status: 401,
+		headers
+	});
+	const formData = await request.formData();
+	const amount = Number(formData.get("amount"));
+	if (!Number.isFinite(amount) || amount < 1e3) return data({
+		ok: false,
+		message: "Minimum top-up is ₦1,000."
+	}, {
+		status: 400,
+		headers
+	});
+	const reference = `topup_${crypto.randomUUID()}`;
+	try {
+		const result = await creditWallet(userData.user.id, "one_off", amount, reference);
+		return data({
+			ok: true,
+			newBalance: result.newBalance
+		}, { headers });
+	} catch (error) {
+		const message = error instanceof Error ? error.message : "Top-up failed.";
+		return data({
+			ok: false,
+			message
+		}, {
+			status: 500,
+			headers
+		});
+	}
+}
 var Home_default$3 = UNSAFE_withComponentProps(function Home() {
-	const { balance, customerName, orders, subscription } = useCustomerStore();
+	const { balance, subscriptionBalance, customerName, orders, subscription, subscriptionEndDate } = useCustomerStore();
 	const [isOrderModalOpen, setIsOrderModalOpen] = useState(false);
 	const [isTopUpModalOpen, setIsTopUpModalOpen] = useState(false);
 	const activeOrderCount = orders.filter((order) => order.status !== "Delivered").length;
+	const pendingOrders = orders.filter((order) => order.paymentStatus === "Pending" && !order.isSubscriptionOrder).map((order) => ({
+		id: order.id,
+		amount: order.total
+	}));
+	const nextPickup = orders.find((order) => order.status !== "Delivered")?.pickup ?? "No pickup scheduled";
+	const today = new Intl.DateTimeFormat(void 0, {
+		weekday: "long",
+		day: "numeric",
+		month: "short",
+		year: "numeric"
+	}).format(/* @__PURE__ */ new Date());
+	const handleTopUp = async (amount) => {
+		const response = await fetch("/?index", {
+			method: "POST",
+			body: new URLSearchParams({ amount: String(amount) })
+		});
+		const result = await response.json().catch(() => null);
+		if (!response.ok || !result?.ok) throw new Error(result?.message ?? "Top-up failed.");
+		window.location.reload();
+	};
 	return /* @__PURE__ */ jsxs("div", {
 		className: "space-y-6 pb-8",
 		children: [
@@ -1024,7 +1642,7 @@ var Home_default$3 = UNSAFE_withComponentProps(function Home() {
 					}),
 					/* @__PURE__ */ jsxs("div", { children: [
 						/* @__PURE__ */ jsxs("p", {
-							className: "relative text-base font-semibold text-[#00b7d4]",
+							className: "relative text-base font-semibold text-brand-primary",
 							children: ["Good morning, ", customerName]
 						}),
 						/* @__PURE__ */ jsx("h2", {
@@ -1038,9 +1656,13 @@ var Home_default$3 = UNSAFE_withComponentProps(function Home() {
 					] }),
 					/* @__PURE__ */ jsx("p", {
 						className: "text-sm text-slate-500",
-						children: "Tuesday, 4 Sep 2026"
+						children: today
 					})
 				]
+			}),
+			subscription && /* @__PURE__ */ jsx(PlanEndingBanner, {
+				planName: `${subscription.name} ${subscription.billingPeriod}`,
+				endDate: subscriptionEndDate
 			}),
 			/* @__PURE__ */ jsx("section", {
 				className: "relative rounded-2xl overflow-hidden border border-[#e7e7e7] bg-[#f8f8f8] p-5 sm:p-6",
@@ -1052,32 +1674,51 @@ var Home_default$3 = UNSAFE_withComponentProps(function Home() {
 							children: [/* @__PURE__ */ jsxs("div", { children: [/* @__PURE__ */ jsx("p", {
 								className: "text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500",
 								children: subscription ? "Subscription" : "Available balance"
-							}), subscription ? /* @__PURE__ */ jsxs("p", {
+							}), subscription ? /* @__PURE__ */ jsxs(Fragment, { children: [/* @__PURE__ */ jsxs("p", {
 								className: "mt-3 text-3xl font-semibold capitalize tracking-tight text-slate-900 sm:text-4xl",
 								children: [
 									subscription.name,
 									" ",
 									subscription.billingPeriod
 								]
-							}) : /* @__PURE__ */ jsxs(Fragment, { children: [/* @__PURE__ */ jsxs("p", {
-								className: `mt-3 text-3xl font-semibold tracking-tight sm:text-4xl ${balance < 0 ? "text-[#d9364e]" : "text-slate-900"}`,
-								children: ["₦", Math.abs(balance).toLocaleString()]
+							}), /* @__PURE__ */ jsxs("p", {
+								className: "mt-2 text-sm font-medium text-slate-600",
+								children: [
+									"Available balance: ₦",
+									balance < 0 ? "-" : "",
+									Math.abs(balance).toLocaleString()
+								]
+							})] }) : /* @__PURE__ */ jsxs(Fragment, { children: [/* @__PURE__ */ jsxs("p", {
+								className: `mt-3 text-3xl font-semibold tracking-tight sm:text-4xl ${balance < 0 ? "text-brand-primary" : "text-slate-900"}`,
+								children: [
+									"₦",
+									balance < 0 ? "-" : "",
+									Math.abs(balance).toLocaleString()
+								]
 							}), balance < 0 && /* @__PURE__ */ jsx("p", {
-								className: "mt-1 text-sm font-medium text-[#d9364e]",
+								className: "mt-1 text-sm font-medium text-brand-primary",
 								children: "Outstanding order balance"
 							})] })] }), /* @__PURE__ */ jsx("span", {
 								className: "flex h-9 w-9 items-center justify-center rounded-lg border border-[#e1e1e1] bg-white text-sm",
 								children: subscription ? "✦" : "₦"
 							})]
 						}),
+						subscriptionBalance < 0 && /* @__PURE__ */ jsxs("p", {
+							className: "mt-2 text-sm font-medium text-brand-primary",
+							children: ["Subscription debt: ₦", Math.abs(subscriptionBalance).toLocaleString()]
+						}),
 						/* @__PURE__ */ jsxs("div", {
 							className: "mt-6 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-slate-500",
-							children: [/* @__PURE__ */ jsxs("span", { children: ["Added this month ", /* @__PURE__ */ jsx("strong", {
+							children: [/* @__PURE__ */ jsxs("span", { children: ["Available balance ", /* @__PURE__ */ jsxs("strong", {
+								className: `ml-1 ${balance < 0 ? "text-brand-primary" : "text-slate-800"}`,
+								children: [
+									"₦",
+									balance < 0 ? "-" : "",
+									Math.abs(balance).toLocaleString()
+								]
+							})] }), /* @__PURE__ */ jsxs("span", { children: ["Active orders ", /* @__PURE__ */ jsx("strong", {
 								className: "ml-1 text-slate-800",
-								children: "₦25,000"
-							})] }), /* @__PURE__ */ jsxs("span", { children: ["Spent ", /* @__PURE__ */ jsx("strong", {
-								className: "ml-1 text-slate-800",
-								children: "₦12,000"
+								children: activeOrderCount
 							})] })]
 						}),
 						/* @__PURE__ */ jsxs("div", {
@@ -1085,12 +1726,12 @@ var Home_default$3 = UNSAFE_withComponentProps(function Home() {
 							children: [/* @__PURE__ */ jsx("button", {
 								type: "button",
 								onClick: () => setIsTopUpModalOpen(true),
-								className: "flex-1 rounded-lg bg-[#00b7d4] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#007f99]",
+								className: "flex-1 rounded-lg bg-brand-primary px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-primary-hover",
 								children: "Top up"
 							}), /* @__PURE__ */ jsx("button", {
 								type: "button",
 								onClick: () => setIsOrderModalOpen(true),
-								className: "flex-1 rounded-lg border border-[#00b7d4] bg-white px-4 py-2.5 text-sm font-semibold text-[#00b7d4] transition hover:bg-[#e8fbfd]",
+								className: "flex-1 rounded-lg border border-brand-primary bg-white px-4 py-2.5 text-sm font-semibold text-brand-primary transition hover:bg-brand-soft",
 								children: "New order"
 							})]
 						})
@@ -1108,12 +1749,12 @@ var Home_default$3 = UNSAFE_withComponentProps(function Home() {
 								children: "Plan"
 							}),
 							/* @__PURE__ */ jsx("p", {
-								className: "mt-3 text-lg font-semibold text-slate-900",
-								children: "Weekly Plus"
+								className: "mt-3 text-lg font-semibold capitalize text-slate-900",
+								children: subscription ? `${subscription.name} ${subscription.billingPeriod}` : "No active plan"
 							}),
 							/* @__PURE__ */ jsx("p", {
 								className: "mt-1 text-sm text-slate-500",
-								children: "4 bags remaining"
+								children: subscription ? "Subscription active" : "Choose a plan to get started"
 							})
 						]
 					}),
@@ -1143,11 +1784,11 @@ var Home_default$3 = UNSAFE_withComponentProps(function Home() {
 							}),
 							/* @__PURE__ */ jsx("p", {
 								className: "mt-3 text-lg font-bold text-slate-900",
-								children: "Tomorrow"
+								children: nextPickup
 							}),
 							/* @__PURE__ */ jsx("p", {
 								className: "mt-1 text-sm text-slate-500",
-								children: "7:00 AM"
+								children: "From your active orders"
 							})
 						]
 					})
@@ -1201,8 +1842,8 @@ var Home_default$3 = UNSAFE_withComponentProps(function Home() {
 						const Icon = item.icon;
 						return /* @__PURE__ */ jsxs(Link, {
 							to: item.to,
-							className: "flex min-h-20 flex-col justify-between rounded-2xl border border-slate-200 bg-[#fafafa] p-3 text-left transition hover:border-[#a8eaf0] hover:bg-[#f0fcfd]",
-							children: [/* @__PURE__ */ jsx(Icon, { className: "h-4 w-4 text-[#00b7d4]" }), /* @__PURE__ */ jsx("span", {
+							className: "flex min-h-20 flex-col justify-between rounded-2xl border border-slate-200 bg-[#fafafa] p-3 text-left transition hover:border-brand-border hover:bg-brand-soft-hover",
+							children: [/* @__PURE__ */ jsx(Icon, { className: "h-4 w-4 text-brand-primary" }), /* @__PURE__ */ jsx("span", {
 								className: "text-xs font-semibold text-slate-700",
 								children: item.label
 							})]
@@ -1220,7 +1861,7 @@ var Home_default$3 = UNSAFE_withComponentProps(function Home() {
 					}), /* @__PURE__ */ jsx("button", {
 						type: "button",
 						onClick: () => setIsOrderModalOpen(true),
-						className: "rounded-lg bg-[#e8fbfd] px-2.5 py-1 text-xs font-medium text-[#00b7d4]",
+						className: "rounded-lg bg-brand-soft px-2.5 py-1 text-xs font-medium text-brand-primary",
 						children: "Start"
 					})]
 				}), /* @__PURE__ */ jsxs("div", {
@@ -1234,7 +1875,7 @@ var Home_default$3 = UNSAFE_withComponentProps(function Home() {
 					})] }), /* @__PURE__ */ jsx("button", {
 						type: "button",
 						onClick: () => setIsOrderModalOpen(true),
-						className: "shrink-0 rounded-lg bg-[#00b7d4] px-4 py-3 text-sm font-semibold text-white",
+						className: "shrink-0 rounded-lg bg-brand-primary px-4 py-3 text-sm font-semibold text-white",
 						children: "Create order"
 					})]
 				})]
@@ -1246,9 +1887,9 @@ var Home_default$3 = UNSAFE_withComponentProps(function Home() {
 					children: [/* @__PURE__ */ jsx("h3", {
 						className: "text-lg font-bold text-slate-900",
 						children: "Recent orders"
-					}), /* @__PURE__ */ jsx("button", {
-						type: "button",
-						className: "text-sm font-medium text-[#00b7d4]",
+					}), /* @__PURE__ */ jsx(Link, {
+						to: "/orders",
+						className: "text-sm font-medium text-brand-primary",
 						children: "View all"
 					})]
 				}), /* @__PURE__ */ jsx("div", {
@@ -1277,6 +1918,9 @@ var Home_default$3 = UNSAFE_withComponentProps(function Home() {
 			isOrderModalOpen && /* @__PURE__ */ jsx(NewOrder, { onClose: () => setIsOrderModalOpen(false) }),
 			isTopUpModalOpen && /* @__PURE__ */ jsx(TopUpModal, {
 				currentBalance: balance,
+				subscriptionBalance,
+				pendingOrders,
+				onTopUp: handleTopUp,
 				onClose: () => setIsTopUpModalOpen(false)
 			})
 		]
@@ -1285,46 +1929,34 @@ var Home_default$3 = UNSAFE_withComponentProps(function Home() {
 //#endregion
 //#region src/portals/customer/pages/Transactions.tsx
 var Transactions_exports = /* @__PURE__ */ __exportAll({ default: () => Transactions_default });
-var transactions = [
-	{
-		title: "Wallet top up",
-		reference: "via Paystack • QF-8821",
-		date: "Today, 09:42 AM",
-		amount: "+₦10,000",
-		direction: "credit",
-		status: "Successful"
-	},
-	{
-		title: "Order payment",
-		reference: "QF-1042 • Wash + Iron",
-		date: "Yesterday, 04:18 PM",
-		amount: "-₦4,800",
-		direction: "debit",
-		status: "Successful"
-	},
-	{
-		title: "Wallet top up",
-		reference: "via Paystack • QF-8794",
-		date: "28 Aug 2026, 11:06 AM",
-		amount: "+₦15,000",
-		direction: "credit",
-		status: "Successful"
-	},
-	{
-		title: "Order payment",
-		reference: "QF-1038 • Wash",
-		date: "27 Aug 2026, 02:35 PM",
-		amount: "-₦7,200",
-		direction: "debit",
-		status: "Successful"
-	}
-];
 var filterItems = [
 	"All activity",
 	"Top ups",
 	"Payments"
 ];
 var Transactions_default = UNSAFE_withComponentProps(function Transactions() {
+	const { transactions } = useCustomerStore();
+	const exportTransactions = () => {
+		const csv = [[
+			"Type",
+			"Reference",
+			"Amount",
+			"Date",
+			"Status"
+		], ...transactions.map((transaction) => [
+			transaction.title,
+			transaction.reference,
+			transaction.amount,
+			transaction.date,
+			transaction.status
+		])].map((row) => row.map((value) => `"${value.replaceAll("\"", "\"\"")}"`).join(",")).join("\n");
+		const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+		const link = document.createElement("a");
+		link.href = url;
+		link.download = "qaffy-transactions.csv";
+		link.click();
+		URL.revokeObjectURL(url);
+	};
 	return /* @__PURE__ */ jsxs("div", {
 		className: "space-y-5 pb-8",
 		children: [
@@ -1361,6 +1993,7 @@ var Transactions_default = UNSAFE_withComponentProps(function Transactions() {
 						children: "A record of your wallet and payments"
 					})] }), /* @__PURE__ */ jsx("button", {
 						type: "button",
+						onClick: exportTransactions,
 						className: "hidden rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 hover:border-sky-200 hover:text-sky-700 sm:block",
 						children: "Export"
 					})]
@@ -1410,158 +2043,66 @@ var Transactions_default = UNSAFE_withComponentProps(function Transactions() {
 //#endregion
 //#region src/portals/customer/pages/OrderDetailModal.tsx
 function OrderDetailModal({ order, onClose }) {
-	return /* @__PURE__ */ jsx("div", {
-		className: "fixed inset-0 z-50 flex items-end justify-center bg-slate-950/45 p-0 backdrop-blur-sm sm:items-center sm:p-4",
-		role: "presentation",
-		onMouseDown: onClose,
-		children: /* @__PURE__ */ jsxs("section", {
-			role: "dialog",
-			"aria-modal": "true",
-			"aria-labelledby": "order-details-title",
-			onMouseDown: (event) => event.stopPropagation(),
-			className: "max-h-[94vh] w-full overflow-y-auto rounded-t-[30px] bg-slate-50 p-4 shadow-2xl shadow-slate-950/20 sm:max-w-2xl sm:rounded-[30px] sm:p-6",
-			children: [
-				/* @__PURE__ */ jsxs("header", {
-					className: "flex items-start justify-between gap-3",
-					children: [/* @__PURE__ */ jsx("div", { children: /* @__PURE__ */ jsx("h2", {
-						id: "order-details-title",
-						className: "mt-1 text-2xl font-bold tracking-tight text-[#121212]",
-						children: order.id
-					}) }), /* @__PURE__ */ jsx("button", {
-						type: "button",
-						onClick: onClose,
-						"aria-label": "Close order details",
-						className: "flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-xl text-slate-500 shadow-sm transition hover:border-violet-200 hover:text-violet-700",
-						children: "×"
-					})]
-				}),
-				/* @__PURE__ */ jsxs("div", {
-					className: "mt-5 rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-100 sm:p-5",
-					children: [/* @__PURE__ */ jsxs("div", {
-						className: "flex items-center justify-between gap-3",
-						children: [/* @__PURE__ */ jsxs("div", { children: [/* @__PURE__ */ jsx("p", {
-							className: "text-[10px] uppercase tracking-[0.22em] text-slate-400",
-							children: "Status"
-						}), /* @__PURE__ */ jsx("p", {
-							className: "mt-2 text-lg font-bold text-slate-900",
-							children: order.status
-						})] }), /* @__PURE__ */ jsx("span", {
-							className: `inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${order.statusTone}`,
-							children: order.paymentStatus
-						})]
-					}), /* @__PURE__ */ jsxs("div", {
-						className: "mt-5 grid gap-3 sm:grid-cols-2",
-						children: [/* @__PURE__ */ jsxs("div", {
-							className: "rounded-2xl bg-slate-50 p-3",
-							children: [/* @__PURE__ */ jsx("p", {
-								className: "text-[10px] uppercase tracking-[0.22em] text-slate-400",
-								children: "Pickup OTP"
-							}), /* @__PURE__ */ jsx("p", {
-								className: "mt-2 text-2xl font-bold tracking-[0.18em] text-slate-900",
-								children: order.pickupOtp
-							})]
-						}), /* @__PURE__ */ jsxs("div", {
-							className: "rounded-2xl bg-slate-50 p-3",
-							children: [/* @__PURE__ */ jsx("p", {
-								className: "text-[10px] uppercase tracking-[0.22em] text-slate-400",
-								children: "Delivery OTP"
-							}), /* @__PURE__ */ jsx("p", {
-								className: "mt-2 text-2xl font-bold tracking-[0.18em] text-slate-900",
-								children: order.deliveryOtp ?? "Pending"
-							})]
-						})]
-					})]
-				}),
-				/* @__PURE__ */ jsxs("div", {
-					className: "mt-5 grid gap-4 lg:grid-cols-2",
-					children: [/* @__PURE__ */ jsxs("div", {
-						className: "rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-100 sm:p-5",
-						children: [/* @__PURE__ */ jsx("h3", {
-							className: "text-lg font-bold text-slate-900",
-							children: "Order summary"
-						}), /* @__PURE__ */ jsxs("dl", {
-							className: "mt-4 space-y-3 text-sm text-slate-600",
-							children: [
-								/* @__PURE__ */ jsxs("div", {
-									className: "flex items-center justify-between gap-3",
-									children: [/* @__PURE__ */ jsx("dt", { children: "Service" }), /* @__PURE__ */ jsx("dd", {
-										className: "font-semibold text-slate-900",
-										children: order.service
-									})]
-								}),
-								/* @__PURE__ */ jsxs("div", {
-									className: "flex items-center justify-between gap-3",
-									children: [/* @__PURE__ */ jsx("dt", { children: "Items" }), /* @__PURE__ */ jsxs("dd", {
-										className: "font-semibold text-slate-900",
-										children: [order.items, " clothes"]
-									})]
-								}),
-								/* @__PURE__ */ jsxs("div", {
-									className: "flex items-center justify-between gap-3",
-									children: [/* @__PURE__ */ jsx("dt", { children: "Total" }), /* @__PURE__ */ jsxs("dd", {
-										className: "font-semibold text-slate-900",
-										children: ["₦", order.total.toLocaleString()]
-									})]
-								}),
-								/* @__PURE__ */ jsxs("div", {
-									className: "flex items-center justify-between gap-3",
-									children: [/* @__PURE__ */ jsx("dt", { children: "Customer ID" }), /* @__PURE__ */ jsx("dd", {
-										className: "font-semibold text-slate-900",
-										children: order.customerId
-									})]
-								})
-							]
-						})]
-					}), /* @__PURE__ */ jsxs("div", {
-						className: "rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-100 sm:p-5",
-						children: [/* @__PURE__ */ jsx("h3", {
-							className: "text-lg font-bold text-slate-900",
-							children: "Pickup details"
-						}), /* @__PURE__ */ jsxs("dl", {
-							className: "mt-4 space-y-3 text-sm text-slate-600",
-							children: [
-								/* @__PURE__ */ jsxs("div", {
-									className: "flex items-center justify-between gap-3",
-									children: [/* @__PURE__ */ jsx("dt", { children: "Picked up" }), /* @__PURE__ */ jsx("dd", {
-										className: "font-semibold text-slate-900",
-										children: order.pickedUp ? "Yes" : "No"
-									})]
-								}),
-								/* @__PURE__ */ jsxs("div", {
-									className: "flex items-center justify-between gap-3",
-									children: [/* @__PURE__ */ jsx("dt", { children: "Pickup date" }), /* @__PURE__ */ jsx("dd", {
-										className: "font-semibold text-slate-900",
-										children: order.pickupDate ?? "Not confirmed yet"
-									})]
-								}),
-								/* @__PURE__ */ jsxs("div", {
-									className: "flex items-center justify-between gap-3",
-									children: [/* @__PURE__ */ jsx("dt", { children: "Pickup time" }), /* @__PURE__ */ jsx("dd", {
-										className: "font-semibold text-slate-900",
-										children: order.pickup
-									})]
-								})
-							]
-						})]
-					})]
-				}),
-				/* @__PURE__ */ jsxs("div", {
-					className: "mt-5 rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-100 sm:p-5",
-					children: [/* @__PURE__ */ jsx("h3", {
-						className: "text-lg font-bold text-slate-900",
-						children: "Notes"
-					}), /* @__PURE__ */ jsx("p", {
-						className: "mt-3 text-sm leading-6 text-slate-600",
-						children: order.notes
-					})]
-				})
-			]
-		})
+	return /* @__PURE__ */ jsx(NewOrder, {
+		order,
+		onClose
 	});
 }
 //#endregion
 //#region src/portals/customer/pages/Orders.tsx
-var Orders_exports = /* @__PURE__ */ __exportAll({ default: () => Orders_default });
+var Orders_exports = /* @__PURE__ */ __exportAll({
+	action: () => action$2,
+	default: () => Orders_default
+});
+async function action$2({ request }) {
+	if (!isSupabaseServerConfigured) return data({
+		ok: false,
+		message: "Supabase is not configured."
+	}, { status: 500 });
+	const { supabase: serverSupabase, headers } = getSupabaseServerClient(request);
+	const { data: userData } = await serverSupabase.auth.getUser();
+	if (!userData.user) return data({
+		ok: false,
+		message: "Please sign in again."
+	}, {
+		status: 401,
+		headers
+	});
+	const formData = await request.formData();
+	const invoiceId = String(formData.get("invoiceId") ?? "");
+	const balanceType = String(formData.get("balanceType") ?? "subscription");
+	if (!invoiceId) return data({
+		ok: false,
+		message: "Invoice is missing."
+	}, {
+		status: 400,
+		headers
+	});
+	try {
+		if (balanceType === "one_off") {
+			await debitOneOffInvoice(userData.user.id, invoiceId);
+			return data({ ok: true }, { headers });
+		}
+		await chargeSubscriptionInvoice(userData.user.id, invoiceId);
+		return data({ ok: true }, { headers });
+	} catch (error) {
+		if (error instanceof InsufficientBalanceError) return data({
+			ok: false,
+			message: "Your subscription balance is too low for the extra units."
+		}, {
+			status: 402,
+			headers
+		});
+		const message = error instanceof Error ? error.message : "Unknown wallet error";
+		return data({
+			ok: false,
+			message: `The extra charge could not be paid from your wallet: ${message}`
+		}, {
+			status: 500,
+			headers
+		});
+	}
+}
 var Orders_default = UNSAFE_withComponentProps(function Orders() {
 	const { orders } = useCustomerStore();
 	const [isOrderModalOpen, setIsOrderModalOpen] = useState(false);
@@ -1573,6 +2114,25 @@ var Orders_default = UNSAFE_withComponentProps(function Orders() {
 		if (activeFilter === "Pending payment") return order.paymentStatus === "Pending";
 		return true;
 	});
+	const exportOrders = () => {
+		const csv = [[
+			"Order",
+			"Status",
+			"Total",
+			"Date"
+		], ...filteredOrders.map((order) => [
+			order.id,
+			order.status,
+			String(order.total),
+			order.date
+		])].map((row) => row.map((value) => `"${value.replaceAll("\"", "\"\"")}"`).join(",")).join("\n");
+		const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+		const link = document.createElement("a");
+		link.href = url;
+		link.download = "qaffy-orders.csv";
+		link.click();
+		URL.revokeObjectURL(url);
+	};
 	const stats = [
 		{
 			label: "Total orders",
@@ -1606,7 +2166,7 @@ var Orders_default = UNSAFE_withComponentProps(function Orders() {
 				}) }), /* @__PURE__ */ jsx("button", {
 					type: "button",
 					onClick: () => setIsOrderModalOpen(true),
-					className: "rounded-lg bg-[#00b7d4] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#007f99]",
+					className: "rounded-lg bg-brand-primary px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-primary-hover",
 					children: "New order"
 				})]
 			}),
@@ -1642,7 +2202,7 @@ var Orders_default = UNSAFE_withComponentProps(function Orders() {
 					].map((filter) => /* @__PURE__ */ jsx("button", {
 						type: "button",
 						onClick: () => setActiveFilter(filter),
-						className: `rounded-full px-4 py-2 text-sm font-medium transition ${activeFilter === filter ? "bg-[#e8fbfd] text-[#00b7d4] ring-1 ring-[#a8eaf0]" : "bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-900"}`,
+						className: `rounded-full px-4 py-2 text-sm font-medium transition ${activeFilter === filter ? "bg-brand-soft text-brand-primary ring-1 ring-brand-border" : "bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-900"}`,
 						children: filter
 					}, filter))
 				})
@@ -1659,7 +2219,8 @@ var Orders_default = UNSAFE_withComponentProps(function Orders() {
 						children: "Track pickup, delivery, and payment status"
 					})] }), /* @__PURE__ */ jsx("button", {
 						type: "button",
-						className: "text-sm font-medium text-[#00b7d4]",
+						onClick: exportOrders,
+						className: "text-sm font-medium text-brand-primary",
 						children: "Export"
 					})]
 				}), /* @__PURE__ */ jsxs("div", {
@@ -1673,7 +2234,7 @@ var Orders_default = UNSAFE_withComponentProps(function Orders() {
 									className: "flex items-center gap-2",
 									children: [/* @__PURE__ */ jsx("p", {
 										className: "text-lg font-semibold text-slate-900",
-										children: order.id
+										children: /* @__PURE__ */ jsx(CopyableOrderId, { id: order.id })
 									}), /* @__PURE__ */ jsx("span", {
 										className: `inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${order.statusTone}`,
 										children: order.status
@@ -1687,15 +2248,27 @@ var Orders_default = UNSAFE_withComponentProps(function Orders() {
 									className: "mt-1 text-xs text-slate-500",
 									children: order.date
 								})
-							] }), /* @__PURE__ */ jsxs("div", {
+							] }), /* @__PURE__ */ jsx("div", {
 								className: "text-left sm:text-right",
-								children: [/* @__PURE__ */ jsxs("p", {
+								children: order.status === "Awaiting pickup" ? /* @__PURE__ */ jsxs("div", {
+									className: "flex flex-col items-start sm:items-end",
+									children: [/* @__PURE__ */ jsx("p", {
+										className: "text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-primary",
+										children: "Pickup OTP"
+									}), /* @__PURE__ */ jsx("div", {
+										className: "mt-2 flex gap-2",
+										children: Array.from({ length: 5 }).map((_, index) => /* @__PURE__ */ jsx("div", {
+											className: "flex h-11 w-11 items-center justify-center rounded-md border border-[#ff4a4a] bg-white text-lg font-bold text-[#ff4a4a] shadow-[inset_0_0_0_1px_rgba(255,74,74,0.05)]",
+											children: order.pickupOtp[index] ?? ""
+										}, `${order.id}-${index}`))
+									})]
+								}) : /* @__PURE__ */ jsxs(Fragment, { children: [/* @__PURE__ */ jsxs("p", {
 									className: "text-xl font-bold text-slate-900",
 									children: ["₦", order.total.toLocaleString()]
 								}), /* @__PURE__ */ jsxs("p", {
 									className: "mt-1 text-xs text-slate-500",
 									children: [order.items, " clothes"]
-								})]
+								})] })
 							})]
 						}), /* @__PURE__ */ jsxs("div", {
 							className: "mt-4 flex flex-col gap-3 border-t border-slate-200 pt-3 sm:flex-row sm:items-center sm:justify-between",
@@ -1705,7 +2278,7 @@ var Orders_default = UNSAFE_withComponentProps(function Orders() {
 							}), /* @__PURE__ */ jsx("button", {
 								type: "button",
 								onClick: () => setSelectedOrder(order),
-								className: "rounded-lg border border-[#a8eaf0] bg-white px-3.5 py-2 text-sm font-semibold text-[#00b7d4] hover:bg-[#e8fbfd]",
+								className: "rounded-lg border border-brand-border bg-white px-3.5 py-2 text-sm font-semibold text-brand-primary hover:bg-brand-soft",
 								children: order.action
 							})]
 						})]
@@ -1725,7 +2298,10 @@ var Orders_default = UNSAFE_withComponentProps(function Orders() {
 });
 //#endregion
 //#region src/portals/customer/pages/Plans.tsx
-var Plans_exports = /* @__PURE__ */ __exportAll({ default: () => Plans_default });
+var Plans_exports = /* @__PURE__ */ __exportAll({
+	action: () => action$1,
+	default: () => Plans_default
+});
 var plans = [
 	{
 		id: "lite-monthly",
@@ -1824,14 +2400,103 @@ var plans = [
 		featured: false
 	}
 ];
-var currentPlanId = "silver-semester";
+async function action$1({ request }) {
+	if (!isSupabaseServerConfigured) return data({
+		ok: false,
+		message: "Supabase is not configured."
+	}, { status: 500 });
+	const { supabase: serverSupabase, headers } = getSupabaseServerClient(request);
+	const { data: userData } = await serverSupabase.auth.getUser();
+	if (!userData.user) return data({
+		ok: false,
+		message: "Please sign in first."
+	}, {
+		status: 401,
+		headers
+	});
+	const formData = await request.formData();
+	const planKey = String(formData.get("planKey") ?? "");
+	const selectedPlan = plans.find((plan) => plan.id === planKey);
+	if (!selectedPlan) return data({
+		ok: false,
+		message: "That plan is not available."
+	}, {
+		status: 400,
+		headers
+	});
+	const { data: planRows, error: planError } = await serverSupabase.from("plans").select("*").eq("name", selectedPlan.name).eq("type", selectedPlan.billingPeriod).eq("active", true).order("created_at", { ascending: false }).limit(1);
+	if (planError || !planRows?.[0]) return data({
+		ok: false,
+		message: "This plan is not configured in the database."
+	}, {
+		status: 400,
+		headers
+	});
+	const plan = planRows[0];
+	const { data: existingSubscription, error: existingError } = await serverSupabase.from("subscriptions").select("id, end_date").eq("customer_id", userData.user.id).eq("status", "active").limit(1).maybeSingle();
+	if (existingError) return data({
+		ok: false,
+		message: "Could not check your current subscription."
+	}, {
+		status: 500,
+		headers
+	});
+	if (existingSubscription && (!existingSubscription.end_date || existingSubscription.end_date >= (/* @__PURE__ */ new Date()).toISOString().slice(0, 10))) return data({
+		ok: false,
+		message: "You already have an active subscription."
+	}, {
+		status: 409,
+		headers
+	});
+	const startDate = /* @__PURE__ */ new Date();
+	const endDate = selectedPlan.billingPeriod === "semester" ? plan.semester_end_date ?? new Date(startDate.getFullYear(), startDate.getMonth() + 6, startDate.getDate()).toISOString().slice(0, 10) : new Date(startDate.getFullYear(), startDate.getMonth() + 1, startDate.getDate()).toISOString().slice(0, 10);
+	const { error: insertError } = await serverSupabase.from("subscriptions").insert({
+		customer_id: userData.user.id,
+		plan_id: plan.id,
+		status: "active",
+		start_date: startDate.toISOString().slice(0, 10),
+		end_date: endDate
+	});
+	if (insertError) return data({
+		ok: false,
+		message: "Subscription could not be activated."
+	}, {
+		status: 500,
+		headers
+	});
+	return data({
+		ok: true,
+		message: `${plan.name} ${plan.type} activated successfully.`
+	}, { headers });
+}
 function formatPrice(price) {
 	return `₦${price.toLocaleString()}`;
 }
 var Plans_default = UNSAFE_withComponentProps(function Plans() {
+	const { activePlan, subscriptionEndDate } = useCustomerStore();
+	const fetcher = useFetcher();
+	const revalidator = useRevalidator();
 	const [billingPeriod, setBillingPeriod] = useState("semester");
 	const visiblePlans = plans.filter((plan) => plan.billingPeriod === billingPeriod);
-	const currentPlan = plans.find((plan) => plan.id === currentPlanId);
+	const currentPlan = activePlan ? {
+		id: activePlan.id,
+		name: activePlan.name,
+		billingPeriod: activePlan.type,
+		price: activePlan.price,
+		currency: "NGN",
+		weeklyLimit: activePlan.weekly_limit,
+		service: "Current service",
+		description: "Your active Qaffy subscription.",
+		benefits: [],
+		featured: false
+	} : null;
+	const isSubscribing = fetcher.state !== "idle";
+	useEffect(() => {
+		if (fetcher.data?.ok) {
+			toast.success(fetcher.data.message);
+			revalidator.revalidate();
+		}
+	}, [fetcher.data, revalidator]);
 	return /* @__PURE__ */ jsxs("div", {
 		className: "space-y-6 pb-8",
 		children: [
@@ -1877,16 +2542,20 @@ var Plans_default = UNSAFE_withComponentProps(function Plans() {
 						className: "text-left sm:text-right",
 						children: [/* @__PURE__ */ jsx("p", {
 							className: "text-sm font-semibold text-slate-900",
-							children: "Renews on 12 Sep"
-						}), /* @__PURE__ */ jsx("p", {
+							children: subscriptionEndDate ? `Ends on ${subscriptionEndDate}` : "Active subscription"
+						}), /* @__PURE__ */ jsxs("p", {
 							className: "mt-1 text-xs text-slate-500",
-							children: "4 clothes remaining this week"
+							children: [currentPlan.weeklyLimit, " clothes per week"]
 						})]
 					})]
 				}), /* @__PURE__ */ jsx("div", {
 					className: "mt-5 h-2 overflow-hidden rounded-full bg-[#d3ebe8]",
 					children: /* @__PURE__ */ jsx("div", { className: "h-full w-4/5 rounded-full bg-[#55aaa3]" })
 				})]
+			}),
+			currentPlan && /* @__PURE__ */ jsx(PlanEndingBanner, {
+				planName: `${currentPlan.name} ${currentPlan.billingPeriod}`,
+				endDate: subscriptionEndDate
 			}),
 			/* @__PURE__ */ jsxs("section", {
 				className: "flex flex-col gap-4 border-b border-[#e7e7e7] pb-4 sm:flex-row sm:items-center sm:justify-between",
@@ -1905,7 +2574,7 @@ var Plans_default = UNSAFE_withComponentProps(function Plans() {
 						role: "tab",
 						"aria-selected": billingPeriod === period,
 						onClick: () => setBillingPeriod(period),
-						className: `rounded-2xl px-4 py-2 text-sm font-semibold capitalize transition ${billingPeriod === period ? "bg-[#e8fbfd] text-[#00b7d4]" : "text-slate-500 hover:text-slate-900"}`,
+						className: `rounded-2xl px-4 py-2 text-sm font-semibold capitalize transition ${billingPeriod === period ? "bg-brand-soft text-brand-strong" : "text-slate-500 hover:text-slate-900"}`,
 						children: period
 					}, period))
 				})]
@@ -1913,18 +2582,18 @@ var Plans_default = UNSAFE_withComponentProps(function Plans() {
 			/* @__PURE__ */ jsx("section", {
 				className: "grid gap-4 xl:grid-cols-3",
 				children: visiblePlans.map((plan) => {
-					const isCurrent = plan.id === currentPlanId;
+					const isCurrent = plan.id === activePlan?.id;
 					return /* @__PURE__ */ jsxs("article", {
-						className: `relative flex flex-col rounded-2xl border p-5 shadow-sm ${plan.featured ? "border-[#00b7d4] bg-[#f0fcfd]" : "border-[#e7e7e7] bg-white"}`,
+						className: `relative flex flex-col rounded-2xl border p-5 shadow-sm ${plan.featured ? "border-brand-strong bg-brand-surface" : "border-[#e7e7e7] bg-white"}`,
 						children: [
 							plan.featured && /* @__PURE__ */ jsx("span", {
-								className: "absolute right-5 top-5 rounded-full bg-[#00b7d4] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-white",
+								className: "absolute right-5 top-5 rounded-full bg-brand-strong px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-white",
 								children: "Popular"
 							}),
 							/* @__PURE__ */ jsxs("div", {
 								className: "pr-16",
 								children: [/* @__PURE__ */ jsx("p", {
-									className: "text-sm font-semibold text-[#00b7d4]",
+									className: "text-sm font-semibold text-brand-strong",
 									children: plan.name
 								}), /* @__PURE__ */ jsxs("div", {
 									className: "mt-3 flex items-baseline gap-1.5",
@@ -1975,20 +2644,28 @@ var Plans_default = UNSAFE_withComponentProps(function Plans() {
 							}),
 							/* @__PURE__ */ jsx("button", {
 								type: "button",
-								disabled: isCurrent,
-								className: `mt-6 flex w-full items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold transition ${isCurrent ? "cursor-default bg-[#eef9f7] text-[#418d87]" : plan.featured ? "bg-[#00b7d4] text-white hover:bg-[#007f99]" : "border border-[#a8eaf0] bg-white text-[#00b7d4] hover:bg-[#e8fbfd]"}`,
-								children: isCurrent ? /* @__PURE__ */ jsxs(Fragment, { children: ["Current plan ", /* @__PURE__ */ jsx(Check, { className: "h-4 w-4" })] }) : /* @__PURE__ */ jsxs(Fragment, { children: ["Choose plan ", /* @__PURE__ */ jsx(ChevronRight, { className: "h-4 w-4" })] })
+								disabled: isCurrent || isSubscribing,
+								onClick: () => {
+									fetcher.submit({ planKey: plan.id }, { method: "post" });
+								},
+								className: `mt-6 flex w-full items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold transition ${isCurrent ? "cursor-default bg-[#eef9f7] text-[#418d87]" : plan.featured ? "bg-brand-strong text-white hover:bg-brand-strong-hover" : "border border-brand-border bg-white text-brand-strong hover:bg-brand-soft"}`,
+								children: isCurrent ? /* @__PURE__ */ jsxs(Fragment, { children: ["Current plan ", /* @__PURE__ */ jsx(Check, { className: "h-4 w-4" })] }) : isSubscribing ? "Activating..." : /* @__PURE__ */ jsxs(Fragment, { children: ["Choose plan ", /* @__PURE__ */ jsx(ChevronRight, { className: "h-4 w-4" })] })
 							})
 						]
 					}, plan.id);
 				})
+			}),
+			fetcher.data && !fetcher.data.ok && /* @__PURE__ */ jsx("p", {
+				role: "alert",
+				className: "rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700",
+				children: fetcher.data.message
 			}),
 			/* @__PURE__ */ jsxs("section", {
 				className: "flex items-start gap-3 rounded-2xl border border-[#e7e7e7] bg-white p-4 text-sm text-slate-600",
 				children: [
 					/* @__PURE__ */ jsx(Clock3, { className: "mt-0.5 h-4 w-4 shrink-0 text-[#418d87]" }),
 					/* @__PURE__ */ jsx("p", { children: "Pay ahead for your next plan and it will begin after your current plan ends. Clothes above the weekly limit are billed separately." }),
-					/* @__PURE__ */ jsx(Sparkles, { className: "ml-auto mt-0.5 hidden h-4 w-4 shrink-0 text-[#00b7d4] sm:block" })
+					/* @__PURE__ */ jsx(Sparkles, { className: "ml-auto mt-0.5 hidden h-4 w-4 shrink-0 text-brand-strong sm:block" })
 				]
 			})
 		]
@@ -1997,49 +2674,30 @@ var Plans_default = UNSAFE_withComponentProps(function Plans() {
 //#endregion
 //#region src/portals/customer/pages/Settings.tsx
 var Settings_exports = /* @__PURE__ */ __exportAll({ default: () => Settings_default });
-var quickStats = [
-	{
-		label: "Phone",
-		value: "+234 801 234 5678",
-		helper: "Primary number"
-	},
-	{
-		label: "Referral code",
-		value: "QFY-AISHA",
-		helper: "Share to earn"
-	},
-	{
-		label: "Plan status",
-		value: "Active",
-		helper: "Weekly Plus"
-	},
-	{
-		label: "Next renewal",
-		value: "12 Sep",
-		helper: "Auto-renews"
-	}
-];
-var recentPayments = [
-	{
-		title: "Weekly Plus",
-		date: "04 Sep 2026",
-		amount: "₦6,500",
-		status: "Paid"
-	},
-	{
-		title: "Extra bags",
-		date: "28 Aug 2026",
-		amount: "₦1,800",
-		status: "Paid"
-	},
-	{
-		title: "Pickup fee",
-		date: "22 Aug 2026",
-		amount: "₦600",
-		status: "Pending"
-	}
-];
 var Settings_default = UNSAFE_withComponentProps(function Settings() {
+	const { customerName, customerEmail, customerPhone, customerId, subscription } = useCustomerStore();
+	const quickStats = [
+		{
+			label: "Phone",
+			value: customerPhone || "Not added",
+			helper: "Primary number"
+		},
+		{
+			label: "Profile ID",
+			value: customerId,
+			helper: "Your Qaffy ID"
+		},
+		{
+			label: "Plan status",
+			value: subscription ? "Active" : "No plan",
+			helper: subscription ? `${subscription.name} ${subscription.billingPeriod}` : "Choose a plan"
+		},
+		{
+			label: "Next renewal",
+			value: subscription ? "12 Sep" : "Not scheduled",
+			helper: subscription ? "Auto-renews" : "No active plan"
+		}
+	];
 	return /* @__PURE__ */ jsxs("div", {
 		className: "space-y-5 pb-8",
 		children: [
@@ -2064,11 +2722,15 @@ var Settings_default = UNSAFE_withComponentProps(function Settings() {
 						}),
 						/* @__PURE__ */ jsx("h3", {
 							className: "mt-3 text-3xl font-bold",
-							children: "Aisha Bello"
+							children: customerName
 						}),
-						/* @__PURE__ */ jsx("p", {
+						/* @__PURE__ */ jsxs("p", {
 							className: "mt-2 text-sm text-violet-100",
-							children: "aisha@qaffy.app • QF-2048"
+							children: [
+								customerEmail,
+								" • ",
+								customerId
+							]
 						})
 					] }), /* @__PURE__ */ jsx("div", {
 						className: "flex h-14 w-14 items-center justify-center rounded-2xl bg-white/15 text-2xl backdrop-blur-sm",
@@ -2100,19 +2762,15 @@ var Settings_default = UNSAFE_withComponentProps(function Settings() {
 				className: "grid gap-4 lg:grid-cols-[1.2fr_0.8fr]",
 				children: [/* @__PURE__ */ jsxs("div", {
 					className: "rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-100 sm:p-5",
-					children: [/* @__PURE__ */ jsxs("div", {
+					children: [/* @__PURE__ */ jsx("div", {
 						className: "flex items-center justify-between gap-3",
-						children: [/* @__PURE__ */ jsxs("div", { children: [/* @__PURE__ */ jsx("h3", {
+						children: /* @__PURE__ */ jsxs("div", { children: [/* @__PURE__ */ jsx("h3", {
 							className: "text-lg font-bold text-slate-900",
 							children: "Profile details"
 						}), /* @__PURE__ */ jsx("p", {
 							className: "mt-1 text-sm text-slate-500",
 							children: "Keep your account info current"
-						})] }), /* @__PURE__ */ jsx("button", {
-							type: "button",
-							className: "rounded-full border border-violet-200 bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-700",
-							children: "Edit"
-						})]
+						})] })
 					}), /* @__PURE__ */ jsxs("div", {
 						className: "mt-5 space-y-4",
 						children: [
@@ -2122,7 +2780,7 @@ var Settings_default = UNSAFE_withComponentProps(function Settings() {
 									className: "mb-1.5 block text-sm font-medium text-slate-600",
 									children: "Full name"
 								}), /* @__PURE__ */ jsx("input", {
-									defaultValue: "Aisha Bello",
+									value: customerName,
 									readOnly: true,
 									"aria-readonly": "true",
 									className: "w-full cursor-not-allowed rounded-2xl border border-slate-200 bg-slate-100 px-3 py-3 text-base text-slate-500 focus:border-slate-200 focus:ring-0"
@@ -2134,7 +2792,9 @@ var Settings_default = UNSAFE_withComponentProps(function Settings() {
 									className: "mb-1.5 block text-sm font-medium text-slate-600",
 									children: "Phone number"
 								}), /* @__PURE__ */ jsx("input", {
-									defaultValue: "+234 801 234 5678",
+									value: customerPhone,
+									readOnly: true,
+									"aria-readonly": "true",
 									className: "w-full rounded-2xl border border-violet-200 bg-white px-3 py-3 text-base text-slate-900 focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
 								})]
 							}),
@@ -2144,7 +2804,7 @@ var Settings_default = UNSAFE_withComponentProps(function Settings() {
 									className: "mb-1.5 block text-sm font-medium text-slate-600",
 									children: "Email address"
 								}), /* @__PURE__ */ jsx("input", {
-									defaultValue: "aisha@qaffy.app",
+									value: customerEmail,
 									readOnly: true,
 									"aria-readonly": "true",
 									className: "w-full cursor-not-allowed rounded-2xl border border-slate-200 bg-slate-100 px-3 py-3 text-base text-slate-500 focus:border-slate-200 focus:ring-0"
@@ -2160,19 +2820,16 @@ var Settings_default = UNSAFE_withComponentProps(function Settings() {
 					}), /* @__PURE__ */ jsxs("div", {
 						className: "mt-4 space-y-3",
 						children: [
-							/* @__PURE__ */ jsxs("button", {
-								type: "button",
-								className: "flex w-full items-center justify-between rounded-2xl bg-slate-50 px-3.5 py-3 text-left text-sm font-medium text-slate-700 hover:bg-violet-50 hover:text-violet-700",
-								children: [/* @__PURE__ */ jsx("span", { children: "Payment method" }), /* @__PURE__ */ jsx("span", { children: "Visa •••• 2094" })]
+							/* @__PURE__ */ jsxs("div", {
+								className: "flex w-full items-center justify-between rounded-2xl bg-slate-50 px-3.5 py-3 text-left text-sm font-medium text-slate-700",
+								children: [/* @__PURE__ */ jsx("span", { children: "Payment method" }), /* @__PURE__ */ jsx("span", { children: "Not added" })]
 							}),
-							/* @__PURE__ */ jsxs("button", {
-								type: "button",
-								className: "flex w-full items-center justify-between rounded-2xl bg-slate-50 px-3.5 py-3 text-left text-sm font-medium text-slate-700 hover:bg-violet-50 hover:text-violet-700",
-								children: [/* @__PURE__ */ jsx("span", { children: "Referral program" }), /* @__PURE__ */ jsx("span", { children: "Earn 10%" })]
+							/* @__PURE__ */ jsxs("div", {
+								className: "flex w-full items-center justify-between rounded-2xl bg-slate-50 px-3.5 py-3 text-left text-sm font-medium text-slate-700",
+								children: [/* @__PURE__ */ jsx("span", { children: "Referral program" }), /* @__PURE__ */ jsx("span", { children: "Coming soon" })]
 							}),
-							/* @__PURE__ */ jsxs("button", {
-								type: "button",
-								className: "flex w-full items-center justify-between rounded-2xl bg-slate-50 px-3.5 py-3 text-left text-sm font-medium text-slate-700 hover:bg-violet-50 hover:text-violet-700",
+							/* @__PURE__ */ jsxs("div", {
+								className: "flex w-full items-center justify-between rounded-2xl bg-slate-50 px-3.5 py-3 text-left text-sm font-medium text-slate-700",
 								children: [/* @__PURE__ */ jsx("span", { children: "Notifications" }), /* @__PURE__ */ jsx("span", { children: "Enabled" })]
 							})
 						]
@@ -2189,32 +2846,14 @@ var Settings_default = UNSAFE_withComponentProps(function Settings() {
 					}), /* @__PURE__ */ jsx("p", {
 						className: "mt-1 text-sm text-slate-500",
 						children: "Your latest plan and service payments"
-					})] }), /* @__PURE__ */ jsx("button", {
-						type: "button",
+					})] }), /* @__PURE__ */ jsx(Link, {
+						to: "/transactions",
 						className: "text-sm font-medium text-violet-600",
 						children: "View all"
 					})]
-				}), /* @__PURE__ */ jsx("div", {
-					className: "space-y-3",
-					children: recentPayments.map((payment) => /* @__PURE__ */ jsxs("div", {
-						className: "flex items-center justify-between rounded-2xl bg-slate-50 p-3",
-						children: [/* @__PURE__ */ jsxs("div", { children: [/* @__PURE__ */ jsx("p", {
-							className: "font-semibold text-slate-900",
-							children: payment.title
-						}), /* @__PURE__ */ jsx("p", {
-							className: "mt-1 text-xs text-slate-500",
-							children: payment.date
-						})] }), /* @__PURE__ */ jsxs("div", {
-							className: "text-right",
-							children: [/* @__PURE__ */ jsx("p", {
-								className: "font-semibold text-slate-900",
-								children: payment.amount
-							}), /* @__PURE__ */ jsx("p", {
-								className: `mt-1 text-[11px] font-medium ${payment.status === "Paid" ? "text-emerald-600" : "text-amber-600"}`,
-								children: payment.status
-							})]
-						})]
-					}, `${payment.title}-${payment.date}`))
+				}), /* @__PURE__ */ jsx("p", {
+					className: "rounded-2xl bg-slate-50 p-4 text-sm text-slate-500",
+					children: "No payments recorded yet."
 				})]
 			})
 		]
@@ -2222,43 +2861,85 @@ var Settings_default = UNSAFE_withComponentProps(function Settings() {
 });
 //#endregion
 //#region src/portals/customer/pages/Invoice.tsx
-var Invoice_exports = /* @__PURE__ */ __exportAll({ default: () => Invoice_default });
-var invoiceItems = [
-	{
-		label: "Wash + Iron",
-		quantity: "6 clothes",
-		amount: "₦4,800"
-	},
-	{
-		label: "Pickup fee",
-		quantity: "Standard",
-		amount: "₦600"
-	},
-	{
-		label: "Express handling",
-		quantity: "Priority",
-		amount: "₦1,200"
-	}
-];
-var paymentBreakdown = [
-	{
-		label: "Subtotal",
-		value: "₦4,800"
-	},
-	{
-		label: "Pickup",
-		value: "₦600"
-	},
-	{
-		label: "Handling",
-		value: "₦1,200"
-	},
-	{
-		label: "Discount",
-		value: "-₦600"
-	}
-];
+var Invoice_exports = /* @__PURE__ */ __exportAll({
+	action: () => action,
+	default: () => Invoice_default
+});
+async function action({ request }) {
+	if (!isSupabaseServerConfigured) return data({
+		ok: false,
+		message: "Supabase is not configured."
+	}, { status: 500 });
+	const { supabase: serverSupabase, headers } = getSupabaseServerClient(request);
+	const { data: userData } = await serverSupabase.auth.getUser();
+	if (!userData.user) return data({
+		ok: false,
+		message: "Please sign in again."
+	}, {
+		status: 401,
+		headers
+	});
+	const formData = await request.formData();
+	if (!String(formData.get("invoiceId") ?? "")) return data({
+		ok: false,
+		message: "Invoice is missing."
+	}, {
+		status: 400,
+		headers
+	});
+	return data({
+		ok: false,
+		message: "Top up your wallet from the overview to settle this invoice."
+	}, {
+		status: 409,
+		headers
+	});
+}
 var Invoice_default = UNSAFE_withComponentProps(function Invoice() {
+	const { invoice } = useCustomerStore();
+	const fetcher = useFetcher();
+	const revalidator = useRevalidator();
+	useEffect(() => {
+		if (fetcher.data?.ok) {
+			toast.success("Invoice paid. Delivery OTP is now available.");
+			revalidator.revalidate();
+		}
+		if (fetcher.data && !fetcher.data.ok && "message" in fetcher.data) toast.error(fetcher.data.message);
+	}, [fetcher.data, revalidator]);
+	if (!invoice) return /* @__PURE__ */ jsxs("div", {
+		className: "space-y-5 pb-8",
+		children: [/* @__PURE__ */ jsx("header", {
+			className: "flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between",
+			children: /* @__PURE__ */ jsxs("div", { children: [/* @__PURE__ */ jsx("p", {
+				className: "text-sm font-medium text-violet-600",
+				children: "Billing"
+			}), /* @__PURE__ */ jsx("h2", {
+				className: "mt-1 text-2xl font-bold tracking-tight text-[#121212] lg:hidden",
+				children: "Invoice"
+			})] })
+		}), /* @__PURE__ */ jsx("section", {
+			className: "rounded-[26px] border border-slate-200 bg-white p-5 shadow-sm shadow-slate-100",
+			children: /* @__PURE__ */ jsx("p", {
+				className: "text-sm text-slate-500",
+				children: "No invoice is available yet for this account."
+			})
+		})]
+	});
+	const total = `₦${invoice.total.toLocaleString()}`;
+	const paymentBreakdown = [
+		{
+			label: "Subtotal",
+			value: total
+		},
+		{
+			label: "Service",
+			value: "Included"
+		},
+		{
+			label: "Status",
+			value: invoice.status
+		}
+	];
 	return /* @__PURE__ */ jsxs("div", {
 		className: "space-y-5 pb-8",
 		children: [
@@ -2271,8 +2952,8 @@ var Invoice_default = UNSAFE_withComponentProps(function Invoice() {
 					className: "mt-1 text-2xl font-bold tracking-tight text-[#121212] lg:hidden",
 					children: "Invoice"
 				})] }), /* @__PURE__ */ jsx("span", {
-					className: "rounded-full bg-amber-50 px-3 py-1.5 text-sm font-medium text-amber-700",
-					children: "Awaiting payment"
+					className: `rounded-full px-3 py-1.5 text-sm font-medium ${invoice.status === "Paid" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`,
+					children: invoice.status
 				})]
 			}),
 			/* @__PURE__ */ jsx("section", {
@@ -2286,15 +2967,15 @@ var Invoice_default = UNSAFE_withComponentProps(function Invoice() {
 						}),
 						/* @__PURE__ */ jsx("h3", {
 							className: "mt-3 text-3xl font-bold",
-							children: "QF-1042"
+							children: invoice.reference
 						}),
 						/* @__PURE__ */ jsx("p", {
 							className: "mt-2 text-sm text-violet-100",
-							children: "Pickup scheduled for Friday • 8:00 AM"
+							children: invoice.dueDate
 						})
 					] }), /* @__PURE__ */ jsx("div", {
 						className: "rounded-2xl bg-white/10 px-3 py-2 text-sm font-medium text-violet-50",
-						children: "Due today"
+						children: invoice.status
 					})]
 				})
 			}),
@@ -2312,12 +2993,13 @@ var Invoice_default = UNSAFE_withComponentProps(function Invoice() {
 							children: "This invoice reflects your active bag count"
 						})] }), /* @__PURE__ */ jsx("button", {
 							type: "button",
+							onClick: () => window.print(),
 							className: "rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-600",
-							children: "Download"
+							children: "Print invoice"
 						})]
 					}), /* @__PURE__ */ jsx("div", {
 						className: "mt-5 space-y-3",
-						children: invoiceItems.map((item) => /* @__PURE__ */ jsxs("div", {
+						children: invoice.items.map((item) => /* @__PURE__ */ jsxs("div", {
 							className: "flex items-center justify-between rounded-2xl bg-slate-50 p-3",
 							children: [/* @__PURE__ */ jsxs("div", { children: [/* @__PURE__ */ jsx("p", {
 								className: "font-semibold text-slate-900",
@@ -2325,9 +3007,9 @@ var Invoice_default = UNSAFE_withComponentProps(function Invoice() {
 							}), /* @__PURE__ */ jsx("p", {
 								className: "mt-1 text-xs text-slate-500",
 								children: item.quantity
-							})] }), /* @__PURE__ */ jsx("p", {
+							})] }), /* @__PURE__ */ jsxs("p", {
 								className: "font-semibold text-slate-900",
-								children: item.amount
+								children: ["₦", item.amount.toLocaleString()]
 							})]
 						}, item.label))
 					})]
@@ -2357,18 +3039,27 @@ var Invoice_default = UNSAFE_withComponentProps(function Invoice() {
 									children: "Total due"
 								}), /* @__PURE__ */ jsx("span", {
 									className: "text-2xl font-bold text-slate-900",
-									children: "₦6,000"
+									children: total
 								})]
 							})
 						}),
-						/* @__PURE__ */ jsx("button", {
-							type: "button",
-							className: "mt-6 w-full rounded-2xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white shadow-md shadow-violet-200 transition hover:bg-violet-500",
-							children: "Pay now"
+						/* @__PURE__ */ jsxs(fetcher.Form, {
+							method: "post",
+							children: [/* @__PURE__ */ jsx("input", {
+								type: "hidden",
+								name: "invoiceId",
+								value: invoice.id
+							}), /* @__PURE__ */ jsx("button", {
+								type: "submit",
+								disabled: true,
+								className: "mt-6 w-full rounded-2xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white shadow-md shadow-violet-200 transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50",
+								children: invoice.status === "Paid" ? "Paid" : "Top up from overview to pay"
+							})]
 						}),
-						/* @__PURE__ */ jsx("button", {
-							type: "button",
-							className: "mt-3 w-full rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3 text-sm font-semibold text-violet-700 transition hover:bg-violet-100",
+						/* @__PURE__ */ jsx(Link, {
+							to: "/otp",
+							className: `mt-3 block w-full rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3 text-center text-sm font-semibold text-violet-700 transition hover:bg-violet-100 ${invoice.status !== "Paid" ? "pointer-events-none opacity-50" : ""}`,
+							"aria-disabled": invoice.status !== "Paid",
 							children: "Continue to delivery OTP"
 						})
 					]
@@ -2404,6 +3095,7 @@ var OtpFlow_default = UNSAFE_withComponentProps(function OtpFlow() {
 		value: order?.deliveryOtp
 	}];
 	const currentStep = otpSteps[activeStep];
+	const otpDigits = (currentStep.value ?? "").replace(/\D/g, "").slice(0, 5);
 	return /* @__PURE__ */ jsxs("div", {
 		className: "space-y-5 pb-8",
 		children: [
@@ -2421,13 +3113,19 @@ var OtpFlow_default = UNSAFE_withComponentProps(function OtpFlow() {
 				className: "rounded-[28px] bg-gradient-to-br from-violet-600 via-violet-700 to-fuchsia-500 p-5 text-white shadow-lg shadow-violet-200 sm:p-6",
 				children: [/* @__PURE__ */ jsxs("div", {
 					className: "flex items-start justify-between gap-4",
-					children: [/* @__PURE__ */ jsxs("div", { children: [/* @__PURE__ */ jsx("p", {
-						className: "text-xs font-medium uppercase tracking-[0.18em] text-violet-100",
-						children: "Current code"
-					}), /* @__PURE__ */ jsx("h3", {
-						className: "mt-3 text-4xl font-bold tracking-[0.24em]",
-						children: currentStep.value ?? "Not available"
-					})] }), /* @__PURE__ */ jsx("button", {
+					children: [/* @__PURE__ */ jsxs("div", {
+						className: "w-full",
+						children: [/* @__PURE__ */ jsx("p", {
+							className: "text-xs font-medium uppercase tracking-[0.18em] text-violet-100",
+							children: "Current code"
+						}), /* @__PURE__ */ jsx("div", {
+							className: "mt-3 flex gap-2 sm:gap-3",
+							children: Array.from({ length: 5 }).map((_, index) => /* @__PURE__ */ jsx("div", {
+								className: "flex h-14 w-14 items-center justify-center rounded-md border-2 border-[#ff4a4a] bg-white text-2xl font-bold text-[#ff4a4a] shadow-sm sm:h-16 sm:w-16",
+								children: otpDigits[index] ?? ""
+							}, `${currentStep.label}-${index}`))
+						})]
+					}), /* @__PURE__ */ jsx("button", {
 						type: "button",
 						disabled: !currentStep.value,
 						onClick: () => currentStep.value && navigator.clipboard?.writeText(currentStep.value),
@@ -2513,9 +3211,9 @@ var OtpFlow_default = UNSAFE_withComponentProps(function OtpFlow() {
 							className: "mt-3 text-sm text-slate-600",
 							children: "If the code is not working, contact support or ask a staff member to verify the order manually."
 						}),
-						/* @__PURE__ */ jsx("button", {
-							type: "button",
-							className: "mt-5 rounded-full border border-violet-200 bg-violet-50 px-4 py-2.5 text-sm font-semibold text-violet-700",
+						/* @__PURE__ */ jsx("a", {
+							href: "mailto:support@qaffy.app",
+							className: "mt-5 inline-block rounded-full border border-violet-200 bg-violet-50 px-4 py-2.5 text-sm font-semibold text-violet-700",
 							children: "Contact support"
 						})
 					]
@@ -2531,6 +3229,7 @@ var Login_default$3 = UNSAFE_withComponentProps(function Login() {
 	useNavigate();
 	const [email, setEmail] = useState("");
 	const [phone, setPhone] = useState("");
+	const [showEmailAuth, setShowEmailAuth] = useState(false);
 	const [isSubmitting, setIsSubmitting] = useState(false);
 	const [error, setError] = useState("");
 	const handleContinue = async (event) => {
@@ -2540,6 +3239,10 @@ var Login_default$3 = UNSAFE_withComponentProps(function Login() {
 			setError("Enter your email address to continue.");
 			return;
 		}
+		setError("Supabase is not configured. Add the required environment variables to continue.");
+	};
+	const handleGoogleSignIn = async () => {
+		setError("");
 		setError("Supabase is not configured. Add the required environment variables to continue.");
 	};
 	return /* @__PURE__ */ jsx("div", {
@@ -2592,7 +3295,7 @@ var Login_default$3 = UNSAFE_withComponentProps(function Login() {
 					children: [
 						/* @__PURE__ */ jsxs("button", {
 							type: "button",
-							onClick: () => setError("Google sign-in will be connected after email OTP authentication."),
+							onClick: handleGoogleSignIn,
 							className: "flex w-full items-center justify-center gap-3 rounded-2xl bg-violet-600 px-4 py-3.5 text-sm font-semibold text-white shadow-md shadow-violet-200 transition hover:bg-violet-700",
 							children: [/* @__PURE__ */ jsxs("svg", {
 								viewBox: "0 0 48 48",
@@ -2620,7 +3323,21 @@ var Login_default$3 = UNSAFE_withComponentProps(function Login() {
 							}), "Continue with Google"]
 						}),
 						/* @__PURE__ */ jsxs("div", {
-							className: "space-y-4 pt-4",
+							className: "my-5 flex items-center gap-3 text-xs text-slate-400",
+							children: [
+								/* @__PURE__ */ jsx("span", { className: "h-px flex-1 bg-slate-200" }),
+								/* @__PURE__ */ jsx("span", { children: "or" }),
+								/* @__PURE__ */ jsx("span", { className: "h-px flex-1 bg-slate-200" })
+							]
+						}),
+						!showEmailAuth && /* @__PURE__ */ jsx("button", {
+							type: "button",
+							onClick: () => setShowEmailAuth(true),
+							className: "w-full rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-sm font-semibold text-slate-700 transition hover:border-violet-300 hover:bg-violet-50",
+							children: "Continue with email"
+						}),
+						showEmailAuth && /* @__PURE__ */ jsxs("div", {
+							className: "space-y-4",
 							children: [/* @__PURE__ */ jsx("label", {
 								className: "block",
 								children: /* @__PURE__ */ jsx("input", {
@@ -2629,7 +3346,7 @@ var Login_default$3 = UNSAFE_withComponentProps(function Login() {
 									value: email,
 									onChange: (event) => setEmail(event.target.value),
 									placeholder: "Enter your email",
-									className: "h-14 w-full rounded-lg border border-[#f24d4d] bg-white px-4 text-[14px] font-semibold text-black shadow-sm outline-none transition placeholder:text-[#8e9a9a] focus:border-[#2563eb] focus:ring-2 focus:ring-blue-100"
+									className: "h-14 w-full rounded-lg border border-field-border bg-white px-4 text-[14px] font-semibold text-black shadow-sm outline-none transition placeholder:text-field-placeholder focus:border-field-focus focus:ring-2 focus:ring-field-focus-soft"
 								})
 							}), /* @__PURE__ */ jsx("label", {
 								className: "block",
@@ -2639,7 +3356,7 @@ var Login_default$3 = UNSAFE_withComponentProps(function Login() {
 									value: phone,
 									onChange: (event) => setPhone(event.target.value),
 									placeholder: "0803 123 4567",
-									className: "h-14 w-full rounded-lg border border-[#f24d4d] bg-white px-4 text-[14px] font-semibold text-black shadow-sm outline-none transition placeholder:text-[#8e9a9a] focus:border-[#2563eb] focus:ring-2 focus:ring-blue-100"
+									className: "h-14 w-full rounded-lg border border-field-border bg-white px-4 text-[14px] font-semibold text-black shadow-sm outline-none transition placeholder:text-field-placeholder focus:border-field-focus focus:ring-2 focus:ring-field-focus-soft"
 								})
 							})]
 						}),
@@ -2648,7 +3365,7 @@ var Login_default$3 = UNSAFE_withComponentProps(function Login() {
 							className: "mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700",
 							children: error
 						}),
-						/* @__PURE__ */ jsxs("div", {
+						showEmailAuth && /* @__PURE__ */ jsxs("div", {
 							className: "mt-5 flex items-center justify-between gap-2 text-sm text-slate-500",
 							children: [/* @__PURE__ */ jsxs("label", {
 								className: "inline-flex items-center gap-2",
@@ -2658,11 +3375,12 @@ var Login_default$3 = UNSAFE_withComponentProps(function Login() {
 								}), "Stay signed in"]
 							}), /* @__PURE__ */ jsx("button", {
 								type: "button",
+								onClick: () => setError("Qaffy uses a one-time email code. Enter your email and request a new code below."),
 								className: "font-medium text-violet-600 hover:text-violet-700",
 								children: "Forgot password?"
 							})]
 						}),
-						/* @__PURE__ */ jsx("button", {
+						showEmailAuth && /* @__PURE__ */ jsx("button", {
 							type: "submit",
 							disabled: isSubmitting,
 							className: "mt-6 w-full rounded-2xl bg-slate-900 px-4 py-3.5 text-sm font-semibold text-white transition hover:bg-slate-800",
@@ -2694,6 +3412,7 @@ var CreateAccount_default = UNSAFE_withComponentProps(function CreateAccount() {
 	const [name, setName] = useState("");
 	const [email, setEmail] = useState("");
 	const [phone, setPhone] = useState("");
+	const [showEmailAuth, setShowEmailAuth] = useState(false);
 	const [isSubmitting, setIsSubmitting] = useState(false);
 	const [error, setError] = useState("");
 	const handleContinue = async (event) => {
@@ -2703,6 +3422,10 @@ var CreateAccount_default = UNSAFE_withComponentProps(function CreateAccount() {
 			setError("Enter your name, email, and phone number to continue.");
 			return;
 		}
+		setError("Supabase is not configured. Add the required environment variables to continue.");
+	};
+	const handleGoogleSignUp = async () => {
+		setError("");
 		setError("Supabase is not configured. Add the required environment variables to continue.");
 	};
 	return /* @__PURE__ */ jsx("div", {
@@ -2755,7 +3478,7 @@ var CreateAccount_default = UNSAFE_withComponentProps(function CreateAccount() {
 					children: [
 						/* @__PURE__ */ jsxs("button", {
 							type: "button",
-							onClick: () => setError("Google sign-in will be connected after email OTP authentication."),
+							onClick: handleGoogleSignUp,
 							className: "flex w-full items-center justify-center gap-3 rounded-2xl bg-violet-600 px-4 py-3.5 text-sm font-semibold text-white shadow-md shadow-violet-200 transition hover:bg-violet-700",
 							children: [/* @__PURE__ */ jsxs("svg", {
 								viewBox: "0 0 48 48",
@@ -2783,7 +3506,21 @@ var CreateAccount_default = UNSAFE_withComponentProps(function CreateAccount() {
 							}), "Continue with Google"]
 						}),
 						/* @__PURE__ */ jsxs("div", {
-							className: "space-y-4 pt-4",
+							className: "my-5 flex items-center gap-3 text-xs text-slate-400",
+							children: [
+								/* @__PURE__ */ jsx("span", { className: "h-px flex-1 bg-slate-200" }),
+								/* @__PURE__ */ jsx("span", { children: "or" }),
+								/* @__PURE__ */ jsx("span", { className: "h-px flex-1 bg-slate-200" })
+							]
+						}),
+						!showEmailAuth && /* @__PURE__ */ jsx("button", {
+							type: "button",
+							onClick: () => setShowEmailAuth(true),
+							className: "w-full rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-sm font-semibold text-slate-700 transition hover:border-violet-300 hover:bg-violet-50",
+							children: "Sign up with email"
+						}),
+						showEmailAuth && /* @__PURE__ */ jsxs("div", {
+							className: "space-y-4",
 							children: [
 								/* @__PURE__ */ jsx("label", {
 									className: "block",
@@ -2793,7 +3530,7 @@ var CreateAccount_default = UNSAFE_withComponentProps(function CreateAccount() {
 										value: name,
 										onChange: (event) => setName(event.target.value),
 										placeholder: "Enter your full name",
-										className: "h-14 w-full rounded-lg border border-[#f24d4d] bg-white px-4 text-[14px] font-semibold text-black shadow-sm outline-none transition placeholder:text-[#8e9a9a] focus:border-[#2563eb] focus:ring-2 focus:ring-blue-100"
+										className: "h-14 w-full rounded-lg border border-field-border bg-white px-4 text-[14px] font-semibold text-black shadow-sm outline-none transition placeholder:text-field-placeholder focus:border-field-focus focus:ring-2 focus:ring-field-focus-soft"
 									})
 								}),
 								/* @__PURE__ */ jsx("label", {
@@ -2804,7 +3541,7 @@ var CreateAccount_default = UNSAFE_withComponentProps(function CreateAccount() {
 										value: email,
 										onChange: (event) => setEmail(event.target.value),
 										placeholder: "Enter your email",
-										className: "h-14 w-full rounded-lg border border-[#f24d4d] bg-white px-4 text-[14px] font-semibold text-black shadow-sm outline-none transition placeholder:text-[#8e9a9a] focus:border-[#2563eb] focus:ring-2 focus:ring-blue-100"
+										className: "h-14 w-full rounded-lg border border-field-border bg-white px-4 text-[14px] font-semibold text-black shadow-sm outline-none transition placeholder:text-field-placeholder focus:border-field-focus focus:ring-2 focus:ring-field-focus-soft"
 									})
 								}),
 								/* @__PURE__ */ jsx("label", {
@@ -2815,7 +3552,7 @@ var CreateAccount_default = UNSAFE_withComponentProps(function CreateAccount() {
 										value: phone,
 										onChange: (event) => setPhone(event.target.value),
 										placeholder: "0803 123 4567",
-										className: "h-14 w-full rounded-lg border border-[#f24d4d] bg-white px-4 text-[14px] font-semibold text-black shadow-sm outline-none transition placeholder:text-[#8e9a9a] focus:border-[#2563eb] focus:ring-2 focus:ring-blue-100"
+										className: "h-14 w-full rounded-lg border border-field-border bg-white px-4 text-[14px] font-semibold text-black shadow-sm outline-none transition placeholder:text-field-placeholder focus:border-field-focus focus:ring-2 focus:ring-field-focus-soft"
 									})
 								})
 							]
@@ -2825,7 +3562,7 @@ var CreateAccount_default = UNSAFE_withComponentProps(function CreateAccount() {
 							className: "mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700",
 							children: error
 						}),
-						/* @__PURE__ */ jsx("div", {
+						showEmailAuth && /* @__PURE__ */ jsx("div", {
 							className: "mt-5 flex items-center justify-between gap-2 text-sm text-slate-500",
 							children: /* @__PURE__ */ jsxs("label", {
 								className: "inline-flex items-center gap-2",
@@ -2835,7 +3572,7 @@ var CreateAccount_default = UNSAFE_withComponentProps(function CreateAccount() {
 								}), "I agree to the terms"]
 							})
 						}),
-						/* @__PURE__ */ jsx("button", {
+						showEmailAuth && /* @__PURE__ */ jsx("button", {
 							type: "submit",
 							disabled: isSubmitting,
 							className: "mt-6 w-full rounded-2xl bg-slate-900 px-4 py-3.5 text-sm font-semibold text-white transition hover:bg-slate-800",
@@ -2974,7 +3711,7 @@ var VerifyOtp_default = UNSAFE_withComponentProps(function VerifyOtp() {
 								maxLength: 1,
 								value: digit,
 								onChange: (event) => updateCode(index, event.target.value),
-								className: "h-[80px] w-[72px] rounded-lg border border-[#f24d4d] bg-white text-center text-[1.5rem] font-semibold text-black shadow-sm outline-none transition focus:border-[#2563eb] focus:ring-2 focus:ring-blue-100"
+								className: "h-[80px] w-[72px] rounded-lg border border-field-border bg-white text-center text-[1.5rem] font-semibold text-black shadow-sm outline-none transition focus:border-field-focus focus:ring-2 focus:ring-field-focus-soft"
 							}, index))
 						}),
 						/* @__PURE__ */ jsxs("p", {
@@ -2986,7 +3723,7 @@ var VerifyOtp_default = UNSAFE_withComponentProps(function VerifyOtp() {
 									type: "button",
 									onClick: handleResend,
 									disabled: !canResend,
-									className: `font-semibold transition ${canResend ? "cursor-pointer text-[#2563eb] hover:text-blue-700" : "cursor-default text-slate-500"}`,
+									className: `font-semibold transition ${canResend ? "cursor-pointer text-field-focus hover:text-field-focus-hover" : "cursor-default text-slate-500"}`,
 									children: canResend ? "Resend code" : `Resend in ${secondsRemaining} secs`
 								})
 							]
@@ -2994,12 +3731,108 @@ var VerifyOtp_default = UNSAFE_withComponentProps(function VerifyOtp() {
 						/* @__PURE__ */ jsx("button", {
 							type: "button",
 							onClick: handleVerify,
-							className: `mt-2 flex w-full items-center justify-center rounded-full px-4 py-3 text-[1.05rem] font-semibold transition ${isComplete ? "bg-[#2563eb] text-white hover:bg-blue-700" : "cursor-not-allowed bg-[#dfe2e2] text-[#8e9a9a]"}`,
+							className: `mt-2 flex w-full items-center justify-center rounded-full px-4 py-3 text-[1.05rem] font-semibold transition ${isComplete ? "bg-field-focus text-white hover:bg-field-focus-hover" : "cursor-not-allowed bg-field-disabled text-field-disabled-text"}`,
 							disabled: !isComplete || isSubmitting,
 							children: isSubmitting ? "Verifying..." : "Proceed"
 						})
 					]
 				})]
+			})]
+		})
+	});
+});
+//#endregion
+//#region src/portals/customer/pages/AuthCallback.tsx
+var AuthCallback_exports = /* @__PURE__ */ __exportAll({
+	default: () => AuthCallback_default,
+	loader: () => loader
+});
+async function loader({ request }) {
+	const code = new URL(request.url).searchParams.get("code");
+	if (!isSupabaseServerConfigured || !code) throw redirect("/login");
+	const { supabase, headers } = getSupabaseServerClient(request);
+	const { error } = await supabase.auth.exchangeCodeForSession(code);
+	if (error) throw redirect(`/login?error=${encodeURIComponent(error.message)}`, { headers });
+	const { data: userData } = await supabase.auth.getUser();
+	const { data: profile } = userData.user ? await supabase.from("profiles").select("name, phone").eq("id", userData.user.id).maybeSingle() : { data: null };
+	if (!userData.user || !profile?.name || !profile.phone) throw redirect("/complete-profile", { headers });
+	throw redirect("/", { headers });
+}
+var AuthCallback_default = UNSAFE_withComponentProps(function AuthCallback() {
+	return null;
+});
+//#endregion
+//#region src/portals/customer/pages/CompleteProfile.tsx
+var CompleteProfile_exports = /* @__PURE__ */ __exportAll({ default: () => CompleteProfile_default });
+var CompleteProfile_default = UNSAFE_withComponentProps(function CompleteProfile() {
+	useNavigate();
+	const [name, setName] = useState("");
+	const [phone, setPhone] = useState("");
+	const [isSubmitting, setIsSubmitting] = useState(false);
+	const [error, setError] = useState("");
+	const handleSubmit = async (event) => {
+		event.preventDefault();
+		setError("");
+		if (!name.trim() || !phone.trim()) {
+			setError("Enter your name and phone number to continue.");
+			return;
+		}
+		setError("Supabase is not configured. Add the required environment variables to continue.");
+	};
+	return /* @__PURE__ */ jsx("div", {
+		className: "flex min-h-screen items-center justify-center bg-[#0d1016] px-4 py-6",
+		style: {
+			backgroundImage: "linear-gradient(90deg, rgba(12,15,22,0.82), rgba(12,15,22,0.1)), url(\"https://images.unsplash.com/photo-1567113463300-102a7eb3cb26?q=80&w=1470&auto=format&fit=crop\")",
+			backgroundSize: "cover",
+			backgroundPosition: "center"
+		},
+		children: /* @__PURE__ */ jsxs("div", {
+			className: "w-full max-w-[430px] rounded-[36px] bg-white/95 p-5 shadow-[0_30px_80px_rgba(0,0,0,0.28)] sm:p-7",
+			style: { fontFamily: "Qanelas, sans-serif" },
+			children: [/* @__PURE__ */ jsxs("div", {
+				className: "mb-7 text-center",
+				children: [
+					/* @__PURE__ */ jsx(QaffyLogo, { className: "mx-auto mb-5 inline-flex" }),
+					/* @__PURE__ */ jsx("h1", {
+						className: "text-2xl font-bold text-slate-900",
+						children: "Complete your profile"
+					}),
+					/* @__PURE__ */ jsx("p", {
+						className: "mt-2 text-sm text-slate-500",
+						children: "Add your name and phone number before continuing."
+					})
+				]
+			}), /* @__PURE__ */ jsxs("form", {
+				onSubmit: handleSubmit,
+				className: "space-y-4",
+				children: [
+					/* @__PURE__ */ jsx("input", {
+						"aria-label": "Full name",
+						value: name,
+						onChange: (event) => setName(event.target.value),
+						placeholder: "Enter your full name",
+						className: "h-14 w-full rounded-lg border border-field-border bg-white px-4 text-[14px] font-semibold text-black outline-none transition placeholder:text-field-placeholder focus:border-field-focus focus:ring-2 focus:ring-field-focus-soft"
+					}),
+					/* @__PURE__ */ jsx("input", {
+						"aria-label": "Phone number",
+						type: "tel",
+						value: phone,
+						onChange: (event) => setPhone(event.target.value),
+						placeholder: "0803 123 4567",
+						className: "h-14 w-full rounded-lg border border-field-border bg-white px-4 text-[14px] font-semibold text-black outline-none transition placeholder:text-field-placeholder focus:border-field-focus focus:ring-2 focus:ring-field-focus-soft"
+					}),
+					error && /* @__PURE__ */ jsx("p", {
+						role: "alert",
+						className: "rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700",
+						children: error
+					}),
+					/* @__PURE__ */ jsx("button", {
+						type: "submit",
+						disabled: isSubmitting,
+						className: "w-full rounded-2xl bg-brand-primary px-4 py-3.5 text-sm font-semibold text-white transition hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-60",
+						children: isSubmitting ? "Saving..." : "Continue"
+					})
+				]
 			})]
 		})
 	});
@@ -3048,14 +3881,19 @@ var LogisticsLayout_default = UNSAFE_withComponentProps(function LogisticsLayout
 var Home_exports$2 = /* @__PURE__ */ __exportAll({ default: () => Home_default$2 });
 var stats$1 = [{
 	label: "Picked up",
-	value: "18",
+	value: "0",
 	accent: "bg-violet-100 text-violet-700"
 }, {
 	label: "Delivered",
-	value: "12",
+	value: "0",
 	accent: "bg-emerald-100 text-emerald-700"
 }];
 var Home_default$2 = UNSAFE_withComponentProps(function Home() {
+	const [otp, setOtp] = useState("");
+	const [message, setMessage] = useState("");
+	const confirmPickup = () => {
+		setMessage(otp.trim() ? "No pickup was found for that OTP." : "Enter a customer OTP to search.");
+	};
 	return /* @__PURE__ */ jsxs("div", {
 		className: "space-y-5",
 		children: [/* @__PURE__ */ jsx("div", {
@@ -3091,7 +3929,9 @@ var Home_default$2 = UNSAFE_withComponentProps(function Home() {
 					}), /* @__PURE__ */ jsx("input", {
 						type: "text",
 						placeholder: "Enter OTP",
-						className: "w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-base text-slate-900 placeholder:text-slate-400"
+						className: "w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-base text-slate-900 placeholder:text-slate-400",
+						onChange: (event) => setOtp(event.target.value),
+						value: otp
 					})]
 				}),
 				/* @__PURE__ */ jsxs("div", {
@@ -3103,16 +3943,22 @@ var Home_default$2 = UNSAFE_withComponentProps(function Home() {
 						}),
 						/* @__PURE__ */ jsx("p", {
 							className: "mt-2 text-lg font-bold text-slate-900",
-							children: "Aisha Bello"
+							children: "No customer selected"
 						}),
 						/* @__PURE__ */ jsx("p", {
 							className: "mt-1 text-sm text-slate-500",
-							children: "3 bags • 2 orders"
+							children: "Search with a valid pickup OTP."
 						})
 					]
 				}),
+				message && /* @__PURE__ */ jsx("p", {
+					role: "status",
+					className: "mt-3 text-sm text-slate-600",
+					children: message
+				}),
 				/* @__PURE__ */ jsx("button", {
 					type: "button",
+					onClick: confirmPickup,
 					className: "mt-4 w-full rounded-2xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white shadow-md shadow-violet-200",
 					children: "Confirm pickup"
 				})
@@ -3125,14 +3971,19 @@ var Home_default$2 = UNSAFE_withComponentProps(function Home() {
 var Delivery_exports = /* @__PURE__ */ __exportAll({ default: () => Delivery_default });
 var stats = [{
 	label: "Collected today",
-	value: "18",
+	value: "0",
 	accent: "bg-violet-100 text-violet-700"
 }, {
 	label: "Delivered",
-	value: "12",
+	value: "0",
 	accent: "bg-emerald-100 text-emerald-700"
 }];
 var Delivery_default = UNSAFE_withComponentProps(function Delivery() {
+	const [otp, setOtp] = useState("");
+	const [message, setMessage] = useState("");
+	const confirmDelivery = () => {
+		setMessage(otp.trim() ? "No delivery was found for that OTP." : "Enter a customer OTP to search.");
+	};
 	return /* @__PURE__ */ jsxs("div", {
 		className: "space-y-5",
 		children: [/* @__PURE__ */ jsx("div", {
@@ -3168,7 +4019,9 @@ var Delivery_default = UNSAFE_withComponentProps(function Delivery() {
 					}), /* @__PURE__ */ jsx("input", {
 						type: "text",
 						placeholder: "Enter OTP",
-						className: "w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-base text-slate-900 placeholder:text-slate-400 focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+						className: "w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-base text-slate-900 placeholder:text-slate-400",
+						onChange: (event) => setOtp(event.target.value),
+						value: otp
 					})]
 				}),
 				/* @__PURE__ */ jsxs("div", {
@@ -3180,16 +4033,22 @@ var Delivery_default = UNSAFE_withComponentProps(function Delivery() {
 						}),
 						/* @__PURE__ */ jsx("p", {
 							className: "mt-2 text-lg font-bold text-slate-900",
-							children: "Aisha Bello"
+							children: "No customer selected"
 						}),
 						/* @__PURE__ */ jsx("p", {
 							className: "mt-1 text-sm text-slate-500",
-							children: "3 bags • Paid • Ready for collection"
+							children: "Search with a valid delivery OTP."
 						})
 					]
 				}),
+				message && /* @__PURE__ */ jsx("p", {
+					role: "status",
+					className: "mt-3 text-sm text-slate-600",
+					children: message
+				}),
 				/* @__PURE__ */ jsx("button", {
 					type: "button",
+					onClick: confirmDelivery,
 					className: "mt-4 w-full rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white shadow-md shadow-emerald-200",
 					children: "Confirm delivery"
 				})
@@ -3520,8 +4379,12 @@ var Login_default = UNSAFE_withComponentProps(function Login() {
 //#region \0virtual:react-router/server-manifest
 var server_manifest_default = {
 	"entry": {
-		"module": "/assets/entry.client-B8qahMO9.js",
-		"imports": ["/assets/jsx-runtime-DRqUxo5a.js"],
+		"module": "/assets/entry.client-DNTaljIq.js",
+		"imports": [
+			"/assets/chunk-BV7QT456-BDegQKJ4.js",
+			"/assets/react-dom-CNfWT6vQ.js",
+			"/assets/jsx-runtime-pNW8k5OS.js"
+		],
 		"css": []
 	},
 	"routes": {
@@ -3538,8 +4401,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-ifTGRue2.js",
-			"imports": ["/assets/jsx-runtime-DRqUxo5a.js"],
+			"module": "/assets/root-CsmH-xFB.js",
+			"imports": [
+				"/assets/chunk-BV7QT456-BDegQKJ4.js",
+				"/assets/react-dom-CNfWT6vQ.js",
+				"/assets/jsx-runtime-pNW8k5OS.js",
+				"/assets/dist-BbqvSyUb.js"
+			],
 			"css": [],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
@@ -3559,15 +4427,20 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/CustomerLayout-CZ-BYvk-.js",
+			"module": "/assets/CustomerLayout-B0u9MIWT.js",
 			"imports": [
-				"/assets/jsx-runtime-DRqUxo5a.js",
-				"/assets/supabase.client-B-ZSwB6b.js",
-				"/assets/createLucideIcon-hgiyojVj.js",
-				"/assets/clipboard-list-CQzGiMWi.js",
-				"/assets/sparkles-CxCiFjf6.js",
-				"/assets/customer-store-hook-CkmCtUwj.js",
-				"/assets/customer-store-BxTdowZI.js"
+				"/assets/chunk-BV7QT456-BDegQKJ4.js",
+				"/assets/supabase.client-Duq0p86w.js",
+				"/assets/jsx-runtime-pNW8k5OS.js",
+				"/assets/createLucideIcon-DDihqGja.js",
+				"/assets/clipboard-list-D6Dv0KEX.js",
+				"/assets/x-BbNm108-.js",
+				"/assets/QaffyLogo-DziVPfpA.js",
+				"/assets/customer-store-hook-DtGdhfzF.js",
+				"/assets/customer-store-CHXCVViv.js",
+				"/assets/dist-BbqvSyUb.js",
+				"/assets/toast-Du0uRnVy.js",
+				"/assets/react-dom-CNfWT6vQ.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -3581,21 +4454,26 @@ var server_manifest_default = {
 			"path": void 0,
 			"index": true,
 			"caseSensitive": void 0,
-			"hasAction": false,
+			"hasAction": true,
 			"hasLoader": false,
 			"hasClientAction": false,
 			"hasClientLoader": false,
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/Home-CDCFxY5V.js",
+			"module": "/assets/Home-BG-lNsh8.js",
 			"imports": [
-				"/assets/jsx-runtime-DRqUxo5a.js",
-				"/assets/createLucideIcon-hgiyojVj.js",
-				"/assets/clipboard-list-CQzGiMWi.js",
-				"/assets/NewOrder-Bh7SI8E1.js",
-				"/assets/sparkles-CxCiFjf6.js",
-				"/assets/customer-store-hook-CkmCtUwj.js"
+				"/assets/chunk-BV7QT456-BDegQKJ4.js",
+				"/assets/jsx-runtime-pNW8k5OS.js",
+				"/assets/createLucideIcon-DDihqGja.js",
+				"/assets/clipboard-list-D6Dv0KEX.js",
+				"/assets/PlanEndingBanner-gVmhtVjN.js",
+				"/assets/NewOrder-BABR1tTR.js",
+				"/assets/x-BbNm108-.js",
+				"/assets/customer-store-hook-DtGdhfzF.js",
+				"/assets/dist-BbqvSyUb.js",
+				"/assets/toast-Du0uRnVy.js",
+				"/assets/react-dom-CNfWT6vQ.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -3616,8 +4494,12 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/Transactions-Cfys7tUK.js",
-			"imports": ["/assets/jsx-runtime-DRqUxo5a.js"],
+			"module": "/assets/Transactions-Ay9O_ibG.js",
+			"imports": [
+				"/assets/chunk-BV7QT456-BDegQKJ4.js",
+				"/assets/jsx-runtime-pNW8k5OS.js",
+				"/assets/customer-store-hook-DtGdhfzF.js"
+			],
 			"css": [],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
@@ -3630,20 +4512,25 @@ var server_manifest_default = {
 			"path": "orders",
 			"index": void 0,
 			"caseSensitive": void 0,
-			"hasAction": false,
+			"hasAction": true,
 			"hasLoader": false,
 			"hasClientAction": false,
 			"hasClientLoader": false,
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/Orders-BM-9HD7y.js",
+			"module": "/assets/Orders-BxIdUUki.js",
 			"imports": [
-				"/assets/jsx-runtime-DRqUxo5a.js",
-				"/assets/NewOrder-Bh7SI8E1.js",
-				"/assets/customer-store-hook-CkmCtUwj.js",
-				"/assets/customer-store-BxTdowZI.js",
-				"/assets/createLucideIcon-hgiyojVj.js"
+				"/assets/chunk-BV7QT456-BDegQKJ4.js",
+				"/assets/jsx-runtime-pNW8k5OS.js",
+				"/assets/NewOrder-BABR1tTR.js",
+				"/assets/customer-store-hook-DtGdhfzF.js",
+				"/assets/customer-store-CHXCVViv.js",
+				"/assets/dist-BbqvSyUb.js",
+				"/assets/createLucideIcon-DDihqGja.js",
+				"/assets/toast-Du0uRnVy.js",
+				"/assets/react-dom-CNfWT6vQ.js",
+				"/assets/supabase.client-Duq0p86w.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -3657,18 +4544,24 @@ var server_manifest_default = {
 			"path": "plans",
 			"index": void 0,
 			"caseSensitive": void 0,
-			"hasAction": false,
+			"hasAction": true,
 			"hasLoader": false,
 			"hasClientAction": false,
 			"hasClientLoader": false,
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/Plans-FFzvJPD1.js",
+			"module": "/assets/Plans-DBlfveHn.js",
 			"imports": [
-				"/assets/jsx-runtime-DRqUxo5a.js",
-				"/assets/createLucideIcon-hgiyojVj.js",
-				"/assets/sparkles-CxCiFjf6.js"
+				"/assets/chunk-BV7QT456-BDegQKJ4.js",
+				"/assets/jsx-runtime-pNW8k5OS.js",
+				"/assets/dist-BbqvSyUb.js",
+				"/assets/createLucideIcon-DDihqGja.js",
+				"/assets/PlanEndingBanner-gVmhtVjN.js",
+				"/assets/x-BbNm108-.js",
+				"/assets/toast-Du0uRnVy.js",
+				"/assets/customer-store-hook-DtGdhfzF.js",
+				"/assets/react-dom-CNfWT6vQ.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -3689,8 +4582,12 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/Settings-BQqSFox2.js",
-			"imports": ["/assets/jsx-runtime-DRqUxo5a.js"],
+			"module": "/assets/Settings-DeM_4HvB.js",
+			"imports": [
+				"/assets/chunk-BV7QT456-BDegQKJ4.js",
+				"/assets/jsx-runtime-pNW8k5OS.js",
+				"/assets/customer-store-hook-DtGdhfzF.js"
+			],
 			"css": [],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
@@ -3703,15 +4600,22 @@ var server_manifest_default = {
 			"path": "invoice",
 			"index": void 0,
 			"caseSensitive": void 0,
-			"hasAction": false,
+			"hasAction": true,
 			"hasLoader": false,
 			"hasClientAction": false,
 			"hasClientLoader": false,
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/Invoice-BD38rNxY.js",
-			"imports": ["/assets/jsx-runtime-DRqUxo5a.js"],
+			"module": "/assets/Invoice-CU4WKgJb.js",
+			"imports": [
+				"/assets/chunk-BV7QT456-BDegQKJ4.js",
+				"/assets/jsx-runtime-pNW8k5OS.js",
+				"/assets/dist-BbqvSyUb.js",
+				"/assets/toast-Du0uRnVy.js",
+				"/assets/customer-store-hook-DtGdhfzF.js",
+				"/assets/react-dom-CNfWT6vQ.js"
+			],
 			"css": [],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
@@ -3731,8 +4635,12 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/OtpFlow-C9bWYKhW.js",
-			"imports": ["/assets/jsx-runtime-DRqUxo5a.js", "/assets/customer-store-hook-CkmCtUwj.js"],
+			"module": "/assets/OtpFlow-DVGBfwgR.js",
+			"imports": [
+				"/assets/chunk-BV7QT456-BDegQKJ4.js",
+				"/assets/jsx-runtime-pNW8k5OS.js",
+				"/assets/customer-store-hook-DtGdhfzF.js"
+			],
 			"css": [],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
@@ -3752,8 +4660,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/Login-BCFwjXRc.js",
-			"imports": ["/assets/jsx-runtime-DRqUxo5a.js", "/assets/supabase.client-B-ZSwB6b.js"],
+			"module": "/assets/Login-GQlXZIoF.js",
+			"imports": [
+				"/assets/chunk-BV7QT456-BDegQKJ4.js",
+				"/assets/supabase.client-Duq0p86w.js",
+				"/assets/jsx-runtime-pNW8k5OS.js",
+				"/assets/QaffyLogo-DziVPfpA.js"
+			],
 			"css": [],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
@@ -3773,8 +4686,13 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/CreateAccount-vWAKa7cQ.js",
-			"imports": ["/assets/jsx-runtime-DRqUxo5a.js", "/assets/supabase.client-B-ZSwB6b.js"],
+			"module": "/assets/CreateAccount-Bd7bXmly.js",
+			"imports": [
+				"/assets/chunk-BV7QT456-BDegQKJ4.js",
+				"/assets/supabase.client-Duq0p86w.js",
+				"/assets/jsx-runtime-pNW8k5OS.js",
+				"/assets/QaffyLogo-DziVPfpA.js"
+			],
 			"css": [],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
@@ -3794,8 +4712,63 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/VerifyOtp-D19MbEj2.js",
-			"imports": ["/assets/jsx-runtime-DRqUxo5a.js", "/assets/supabase.client-B-ZSwB6b.js"],
+			"module": "/assets/VerifyOtp-BKpZ0kYq.js",
+			"imports": [
+				"/assets/chunk-BV7QT456-BDegQKJ4.js",
+				"/assets/supabase.client-Duq0p86w.js",
+				"/assets/jsx-runtime-pNW8k5OS.js",
+				"/assets/QaffyLogo-DziVPfpA.js"
+			],
+			"css": [],
+			"clientActionModule": void 0,
+			"clientLoaderModule": void 0,
+			"clientMiddlewareModule": void 0,
+			"hydrateFallbackModule": void 0
+		},
+		"portals/customer/pages/AuthCallback": {
+			"id": "portals/customer/pages/AuthCallback",
+			"parentId": "root",
+			"path": "auth/callback",
+			"index": void 0,
+			"caseSensitive": void 0,
+			"hasAction": false,
+			"hasLoader": true,
+			"hasClientAction": false,
+			"hasClientLoader": false,
+			"hasClientMiddleware": false,
+			"hasDefaultExport": true,
+			"hasErrorBoundary": false,
+			"module": "/assets/AuthCallback-CQ2_Zur4.js",
+			"imports": ["/assets/chunk-BV7QT456-BDegQKJ4.js"],
+			"css": [],
+			"clientActionModule": void 0,
+			"clientLoaderModule": void 0,
+			"clientMiddlewareModule": void 0,
+			"hydrateFallbackModule": void 0
+		},
+		"portals/customer/pages/CompleteProfile": {
+			"id": "portals/customer/pages/CompleteProfile",
+			"parentId": "root",
+			"path": "complete-profile",
+			"index": void 0,
+			"caseSensitive": void 0,
+			"hasAction": false,
+			"hasLoader": false,
+			"hasClientAction": false,
+			"hasClientLoader": false,
+			"hasClientMiddleware": false,
+			"hasDefaultExport": true,
+			"hasErrorBoundary": false,
+			"module": "/assets/CompleteProfile-DQhPoxDA.js",
+			"imports": [
+				"/assets/chunk-BV7QT456-BDegQKJ4.js",
+				"/assets/supabase.client-Duq0p86w.js",
+				"/assets/jsx-runtime-pNW8k5OS.js",
+				"/assets/dist-BbqvSyUb.js",
+				"/assets/QaffyLogo-DziVPfpA.js",
+				"/assets/toast-Du0uRnVy.js",
+				"/assets/react-dom-CNfWT6vQ.js"
+			],
 			"css": [],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
@@ -3815,8 +4788,8 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/LogisticsLayout-CYKrWtQt.js",
-			"imports": ["/assets/jsx-runtime-DRqUxo5a.js"],
+			"module": "/assets/LogisticsLayout-DCNdKkP2.js",
+			"imports": ["/assets/chunk-BV7QT456-BDegQKJ4.js", "/assets/jsx-runtime-pNW8k5OS.js"],
 			"css": [],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
@@ -3836,8 +4809,8 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/Home-CmIslT6C.js",
-			"imports": ["/assets/jsx-runtime-DRqUxo5a.js"],
+			"module": "/assets/Home-DvAF8axV.js",
+			"imports": ["/assets/chunk-BV7QT456-BDegQKJ4.js", "/assets/jsx-runtime-pNW8k5OS.js"],
 			"css": [],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
@@ -3857,8 +4830,8 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/Delivery-QxkmEeyZ.js",
-			"imports": ["/assets/jsx-runtime-DRqUxo5a.js"],
+			"module": "/assets/Delivery-DcC4ds8p.js",
+			"imports": ["/assets/chunk-BV7QT456-BDegQKJ4.js", "/assets/jsx-runtime-pNW8k5OS.js"],
 			"css": [],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
@@ -3878,8 +4851,8 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/Login-D1Fc3V16.js",
-			"imports": ["/assets/jsx-runtime-DRqUxo5a.js"],
+			"module": "/assets/Login-KETp5iem.js",
+			"imports": ["/assets/chunk-BV7QT456-BDegQKJ4.js", "/assets/jsx-runtime-pNW8k5OS.js"],
 			"css": [],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
@@ -3899,8 +4872,8 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/VendorLayout-CpjNokn5.js",
-			"imports": ["/assets/jsx-runtime-DRqUxo5a.js"],
+			"module": "/assets/VendorLayout-6g3qEQ3A.js",
+			"imports": ["/assets/chunk-BV7QT456-BDegQKJ4.js", "/assets/jsx-runtime-pNW8k5OS.js"],
 			"css": [],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
@@ -3920,8 +4893,8 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/Home-BLxyfrO_.js",
-			"imports": ["/assets/jsx-runtime-DRqUxo5a.js"],
+			"module": "/assets/Home-D3Dd4XPZ.js",
+			"imports": ["/assets/chunk-BV7QT456-BDegQKJ4.js", "/assets/jsx-runtime-pNW8k5OS.js"],
 			"css": [],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
@@ -3941,8 +4914,8 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/Login-CAHjM0Bm.js",
-			"imports": ["/assets/jsx-runtime-DRqUxo5a.js"],
+			"module": "/assets/Login-DbyjX5cJ.js",
+			"imports": ["/assets/chunk-BV7QT456-BDegQKJ4.js", "/assets/jsx-runtime-pNW8k5OS.js"],
 			"css": [],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
@@ -3962,8 +4935,8 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/AdminLayout-BQK8HLBC.js",
-			"imports": ["/assets/jsx-runtime-DRqUxo5a.js"],
+			"module": "/assets/AdminLayout-BZ8Bv0uP.js",
+			"imports": ["/assets/chunk-BV7QT456-BDegQKJ4.js", "/assets/jsx-runtime-pNW8k5OS.js"],
 			"css": [],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
@@ -3983,8 +4956,8 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/Home-ecZ4AjV4.js",
-			"imports": ["/assets/jsx-runtime-DRqUxo5a.js"],
+			"module": "/assets/Home-DG7hHIHN.js",
+			"imports": ["/assets/chunk-BV7QT456-BDegQKJ4.js", "/assets/jsx-runtime-pNW8k5OS.js"],
 			"css": [],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
@@ -4004,8 +4977,8 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/Login-B9XmYl10.js",
-			"imports": ["/assets/jsx-runtime-DRqUxo5a.js"],
+			"module": "/assets/Login-vGeDcH-O.js",
+			"imports": ["/assets/chunk-BV7QT456-BDegQKJ4.js", "/assets/jsx-runtime-pNW8k5OS.js"],
 			"css": [],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
@@ -4013,8 +4986,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-680e5950.js",
-	"version": "680e5950",
+	"url": "/assets/manifest-9880f086.js",
+	"version": "9880f086",
 	"sri": void 0
 };
 //#endregion
@@ -4135,6 +5108,22 @@ var routes = {
 		index: void 0,
 		caseSensitive: void 0,
 		module: VerifyOtp_exports
+	},
+	"portals/customer/pages/AuthCallback": {
+		id: "portals/customer/pages/AuthCallback",
+		parentId: "root",
+		path: "auth/callback",
+		index: void 0,
+		caseSensitive: void 0,
+		module: AuthCallback_exports
+	},
+	"portals/customer/pages/CompleteProfile": {
+		id: "portals/customer/pages/CompleteProfile",
+		parentId: "root",
+		path: "complete-profile",
+		index: void 0,
+		caseSensitive: void 0,
+		module: CompleteProfile_exports
 	},
 	"portals/logistics/LogisticsLayout": {
 		id: "portals/logistics/LogisticsLayout",
