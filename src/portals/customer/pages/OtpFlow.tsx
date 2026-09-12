@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import ProtectedOtp from '../../../components/ProtectedOtp'
 import { useCustomerStore } from '../customer-store-hook'
 
 export default function OtpFlow() {
@@ -11,7 +12,6 @@ export default function OtpFlow() {
   ]
 
   const currentStep = otpSteps[activeStep]
-  const otpDigits = (currentStep.value ?? '').replace(/\D/g, '').slice(0, 5)
 
   return (
     <div className="space-y-5 pb-8">
@@ -26,15 +26,13 @@ export default function OtpFlow() {
         <div className="flex items-start justify-between gap-4">
           <div className="w-full">
             <p className="text-xs font-medium uppercase tracking-[0.18em] text-violet-100">Current code</p>
-            <div className="mt-3 flex gap-2 sm:gap-3">
-              {Array.from({ length: 5 }).map((_, index) => (
-                <div
-                  key={`${currentStep.label}-${index}`}
-                  className="flex h-14 w-14 items-center justify-center rounded-md border-2 border-[#ff4a4a] bg-white text-2xl font-bold text-[#ff4a4a] shadow-sm sm:h-16 sm:w-16"
-                >
-                  {otpDigits[index] ?? ''}
-                </div>
-              ))}
+            <div className="mt-3">
+              <ProtectedOtp
+                value={currentStep.value}
+                className="gap-2 sm:gap-3"
+                digitClassName="h-14 w-14 rounded-md border-2 text-2xl sm:h-16 sm:w-16"
+                containerClassName="inline-block"
+              />
             </div>
           </div>
           <button

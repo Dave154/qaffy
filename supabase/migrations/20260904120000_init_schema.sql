@@ -265,12 +265,13 @@ before update on public.profiles
 for each row execute function public.prevent_role_escalation();
 
 -- Pickup OTP is generated server-side on order creation; never client-set.
+-- Qaffy standard: pickup OTPs are always 4 digits.
 create or replace function public.generate_pickup_otp()
 returns trigger
 language plpgsql
 as $$
 begin
-  new.pickup_otp := lpad(floor(random() * 1000000)::text, 6, '0');
+  new.pickup_otp := lpad(floor(random() * 10000)::text, 4, '0');
   return new;
 end;
 $$;

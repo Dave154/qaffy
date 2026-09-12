@@ -43,7 +43,7 @@ export default function CreateAccount() {
       return
     }
 
-    navigate(`/verify-otp?email=${encodeURIComponent(email.trim())}&mode=create-account`)
+    navigate(`/verify-otp?email=${encodeURIComponent(email.trim())}&mode=create-account&portal=customer`)
   }
 
   const handleGoogleSignUp = async () => {
@@ -107,7 +107,7 @@ export default function CreateAccount() {
           <button
             type="button"
             onClick={handleGoogleSignUp}
-            className="flex w-full items-center justify-center gap-3 rounded-2xl bg-violet-600 px-4 py-3.5 text-sm font-semibold text-white shadow-md shadow-violet-200 transition hover:bg-violet-700"
+            className="flex w-full items-center justify-center gap-3 rounded-2xl bg-brand-primary px-4 py-3.5 text-sm font-semibold text-white shadow-md shadow-brand-soft transition hover:bg-brand-primary-hover"
           >
             <svg viewBox="0 0 48 48" aria-hidden="true" className="h-5 w-5" role="img">
               <path fill="#EA4335" d="M24 9.5c3.54 0 6.72 1.22 9.23 3.61l6.86-6.86C35.47 2.39 30.27 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.2C12.13 13.52 17.6 9.5 24 9.5Z"/>
@@ -128,7 +128,7 @@ export default function CreateAccount() {
             <button
               type="button"
               onClick={() => setShowEmailAuth(true)}
-              className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-sm font-semibold text-slate-700 transition hover:border-violet-300 hover:bg-violet-50"
+              className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-sm font-semibold text-slate-700 transition hover:border-brand-border hover:bg-brand-soft"
             >
               Sign up with email
             </button>
@@ -142,7 +142,7 @@ export default function CreateAccount() {
                 value={name}
                 onChange={(event) => setName(event.target.value)}
                 placeholder="Enter your full name"
-                className="h-14 w-full rounded-lg border border-field-border bg-white px-4 text-[14px] font-semibold text-black shadow-sm outline-none transition placeholder:text-field-placeholder focus:border-field-focus focus:ring-2 focus:ring-field-focus-soft"
+                className="h-14 w-full rounded-lg border border-brand-border bg-white px-4 text-[14px] font-semibold text-black shadow-sm outline-none transition placeholder:text-field-placeholder focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
               />
             </label>
 
@@ -173,7 +173,7 @@ export default function CreateAccount() {
 
           {showEmailAuth && <div className="mt-5 flex items-center justify-between gap-2 text-sm text-slate-500">
             <label className="inline-flex items-center gap-2">
-              <input type="checkbox" className="h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500" />
+              <input type="checkbox" className="h-4 w-4 rounded border-slate-300 text-brand-primary focus:ring-brand-primary" />
               I agree to the terms
             </label>
           </div>}
@@ -188,7 +188,7 @@ export default function CreateAccount() {
 
           <p className="mt-6 text-center text-sm text-slate-500">
             Already have an account?{' '}
-            <Link to="/login" className="font-semibold text-violet-600 hover:text-violet-700">
+            <Link to="/login" className="font-semibold text-brand-primary hover:text-brand-primary-hover">
               Sign in
             </Link>
           </p>

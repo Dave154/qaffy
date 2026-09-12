@@ -83,6 +83,8 @@ export type CustomerStore = {
   activePlan: Plan | null
   subscriptionUsedUnits: number
   subscriptionRemainingUnits: number | null
+  preferredPickupLocationId: string | null
+  preferredPickupLocationName: string | null
   pickupLocations: PickupLocationOption[]
   orders: CustomerOrder[]
   transactions: CustomerTransaction[]
@@ -96,7 +98,7 @@ const initialOrders: CustomerOrder[] = []
 const initialTransactions: CustomerTransaction[] = []
 
 function createOtp(_prefix: string, number: number) {
-  return String(Math.abs(number) % 100000).padStart(5, '0')
+  return String(1000 + (Math.abs(number) % 9000))
 }
 
 function mapDatabaseTransaction(transaction: WalletTransaction): CustomerTransaction {
@@ -178,7 +180,7 @@ function mapDatabaseOrder(order: Order, persistedItems: PersistedOrderItem[] = [
 
 type CustomerStoreProviderProps = {
   children: React.ReactNode
-  profile?: { id: string; name: string | null; qaffy_id: string | null; email: string | null; phone: string | null }
+  profile?: { id: string; name: string | null; qaffy_id: string | null; email: string | null; phone: string | null; pickup_location_id: string | null }
   persistedOrders?: Order[]
   persistedWallet?: Wallet | null
   persistedWalletTransactions?: WalletTransaction[]
@@ -205,6 +207,7 @@ export function CustomerStoreProvider({
 }: CustomerStoreProviderProps) {
   const unpaidInvoiceOrderIds = new Set(persistedUnpaidInvoiceOrderIds)
   const [orders, setOrders] = useState(() => persistedOrders ? persistedOrders.map((order) => mapDatabaseOrder(order, persistedOrderItems, unpaidInvoiceOrderIds)) : initialOrders)
+  const [savedPickupLocationId, setSavedPickupLocationId] = useState(profile?.pickup_location_id ?? null)
   const [oneOffBalance, setOneOffBalance] = useState(persistedWallet?.one_off_balance ?? 0)
   const [subscriptionBalance, setSubscriptionBalance] = useState(persistedWallet?.subscription_balance ?? 0)
   const [transactions] = useState(() => persistedWalletTransactions ? persistedWalletTransactions.map(mapDatabaseTransaction) : initialTransactions)
@@ -215,6 +218,7 @@ export function CustomerStoreProvider({
     const subscription = persistedSubscription
       ? { name: persistedSubscription.plan.name, billingPeriod: persistedSubscription.plan.type }
       : null
+    const preferredPickupLocation = persistedPickupLocations?.find((location) => location.id === savedPickupLocationId) ?? null
 
     return {
       customerId: profile?.qaffy_id ?? 'Not available',
@@ -232,6 +236,8 @@ export function CustomerStoreProvider({
       subscriptionRemainingUnits: persistedSubscription
         ? Math.max(0, persistedSubscription.plan.weekly_limit - subscriptionUsedUnits)
         : null,
+      preferredPickupLocationId: preferredPickupLocation?.id ?? null,
+      preferredPickupLocationName: preferredPickupLocation?.name ?? null,
       pickupLocations: persistedPickupLocations ?? [],
       orders,
       transactions,
@@ -282,6 +288,17 @@ export function CustomerStoreProvider({
               ? 'wash_iron'
               : 'wash'
           const selectedLocation = persistedPickupLocations?.find((location) => location.name === pickupLocation)
+          if (!savedPickupLocationId && selectedLocation) {
+            const { error: profileLocationError } = await supabase
+              .from('profiles')
+              .update({ pickup_location_id: selectedLocation.id })
+              .eq('id', profile.id)
+            if (profileLocationError) {
+              toast.error(`Pickup location could not be saved: ${profileLocationError.message}`)
+              throw profileLocationError
+            }
+            setSavedPickupLocationId(selectedLocation.id)
+          }
           const { data: categoryRows, error: categoryError } = await supabase
             .from('cloth_categories')
             .select('id, name')
@@ -437,7 +454,7 @@ export function CustomerStoreProvider({
         return order
       },
     }
-  }, [invoice, oneOffBalance, orders, profile, persistedPickupLocations, persistedSubscription, subscriptionBalance, subscriptionUsedUnits, transactions])
+  }, [invoice, oneOffBalance, orders, profile, persistedPickupLocations, persistedSubscription, savedPickupLocationId, subscriptionBalance, subscriptionUsedUnits, transactions])
 
   return <CustomerStoreContext.Provider value={store}>{children}</CustomerStoreContext.Provider>
 }

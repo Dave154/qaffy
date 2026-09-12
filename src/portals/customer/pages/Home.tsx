@@ -7,6 +7,7 @@ import { ArrowUpRight, ClipboardList, CreditCard, FileText, Gift, Settings2, Spa
 import { Link } from 'react-router'
 import NewOrder from './NewOrder'
 import TopUpModal from './TopUpModal'
+import CopyableOrderId from '../../../components/CopyableOrderId'
 import { useCustomerStore } from '../customer-store-hook'
 import BubblyBackground from '../../../components/BubblyBackground'
 import PlanEndingBanner from '../../../components/PlanEndingBanner'
@@ -42,6 +43,7 @@ export default function Home() {
   const pendingOrders = orders
     .filter((order) => order.paymentStatus === 'Pending' && !order.isSubscriptionOrder)
     .map((order) => ({ id: order.id, amount: order.total }))
+  const pickupOrder = orders.find((order) => order.status === 'Awaiting pickup' && order.pickupOtp)
   const nextPickup = orders.find((order) => order.status !== 'Delivered')?.pickup ?? 'No pickup scheduled'
   const today = new Intl.DateTimeFormat(undefined, { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' }).format(new Date())
 
@@ -106,11 +108,23 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="grid gap-3 sm:grid-cols-3">
+      <section className="grid gap-3 md:grid-cols-3">
         <div className="border rounded-2xl border-[#e7e7e7] bg-white p-4">
-          <p className="text-[10px] uppercase tracking-[0.22em] text-slate-400">Plan</p>
-          <p className="mt-3 text-lg font-semibold capitalize text-slate-900">{subscription ? `${subscription.name} ${subscription.billingPeriod}` : 'No active plan'}</p>
-          <p className="mt-1 text-sm text-slate-500">{subscription ? 'Subscription active' : 'Choose a plan to get started'}</p>
+          <p className="text-[10px] uppercase tracking-[0.22em] text-brand-primary">Pickup OTP</p>
+          {pickupOrder ? (
+            <>
+              <p className="mt-3 text-3xl font-bold tracking-[0.2em] text-brand-primary">{pickupOrder.pickupOtp}</p>
+              <div className="mt-3 flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-3 py-2">
+                <span className="text-xs font-medium text-slate-500">Order</span>
+                <CopyableOrderId id={pickupOrder.id} className="text-sm font-semibold text-slate-800" />
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="mt-3 text-lg font-semibold text-slate-700">No pickup pending</p>
+              <p className="mt-1 text-sm text-slate-500">Create a new order to get started.</p>
+            </>
+          )}
         </div>
 
         <div className="border rounded-2xl border-[#e7e7e7] bg-white p-4">
@@ -177,7 +191,7 @@ export default function Home() {
           {orders.slice(0, 3).map((order) => (
             <div key={order.id} className="flex items-center justify-between border-b border-[#eeeeee] p-3 last:border-b-0">
               <div>
-                <p className="font-semibold text-slate-900">{order.id}</p>
+                <CopyableOrderId id={order.id} className="font-semibold text-slate-900" />
                 <p className="text-xs text-slate-500">{order.date}</p>
               </div>
               <div className="text-right">

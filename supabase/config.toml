@@ -18,7 +18,13 @@ port = 54323
 [auth]
 enabled = true
 site_url = "http://localhost:5173"
-additional_redirect_urls = ["http://localhost:5173"]
+additional_redirect_urls = [
+	"http://localhost:5173",
+	"http://localhost:5173/auth/callback",
+	"http://localhost:5173/vendor/auth/callback",
+	"http://localhost:5173/logistics/auth/callback",
+	"http://localhost:5173/admin/auth/callback",
+]
 
 [auth.external.google]
 enabled = true

@@ -7,6 +7,10 @@ class InsufficientBalanceError extends Error {
   }
 }
 
+function generateFourDigitOtp() {
+  return String(1000 + Math.floor(Math.random() * 9000))
+}
+
 /** Debits the customer's wallet, marks the invoice paid, and issues the delivery OTP — all in one transaction. */
 export async function payFromWallet(customerId: string, invoiceId: string, balanceType: WalletBalanceType) {
   return sql.begin(async (tx) => {
@@ -31,7 +35,7 @@ export async function payFromWallet(customerId: string, invoiceId: string, balan
     if (currentBalance < Number(invoice.amount)) throw new InsufficientBalanceError()
 
     const newBalance = currentBalance - Number(invoice.amount)
-    const deliveryOtp = String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0')
+    const deliveryOtp = generateFourDigitOtp()
 
     await tx`update wallets set ${tx({ [balanceColumn]: newBalance, updated_at: new Date() })} where customer_id = ${customerId}`
     await tx`update invoices set status = 'paid', paid_at = now() where id = ${invoiceId}`
@@ -93,7 +97,7 @@ export async function creditWallet(customerId: string, balanceType: WalletBalanc
         const invoiceAmount = Number(invoice.amount)
         if (settlementBudget < invoiceAmount) break
 
-        const deliveryOtp = String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0')
+        const deliveryOtp = generateFourDigitOtp()
         await tx`update invoices set status = 'paid', paid_at = now() where id = ${invoice.id}`
         await tx`update orders set delivery_otp = ${deliveryOtp} where id = ${invoice.order_id}`
         settlementBudget -= invoiceAmount
@@ -160,7 +164,7 @@ export async function chargeSubscriptionInvoice(customerId: string, invoiceId: s
     const amount = Number(invoice.amount)
     const newBalance = currentBalance - amount
     const deliveryOtp = newBalance >= 0
-      ? String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0')
+      ? generateFourDigitOtp()
       : null
     await tx`update wallets set subscription_balance = ${newBalance}, updated_at = now() where customer_id = ${customerId}`
     await tx`update invoices set status = 'paid', paid_at = now() where id = ${invoiceId}`

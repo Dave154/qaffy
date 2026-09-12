@@ -9,7 +9,9 @@ export default function VerifyOtp() {
   const params = new URLSearchParams(location.search)
   const email = params.get('email') ?? ''
   const mode = params.get('mode') ?? 'login'
-  const [code, setCode] = useState(['', '', '', '', '', ''])
+  const portal = params.get('portal') ?? 'customer'
+  const expectedRole = portal === 'vendor' || portal === 'admin' ? portal : 'customer'
+  const [code, setCode] = useState(Array.from({ length: 8 }, () => ''))
   const [secondsRemaining, setSecondsRemaining] = useState(30)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState('')
@@ -22,7 +24,7 @@ export default function VerifyOtp() {
       return
     }
 
-    if (code.join('').length !== 6) return
+    if (code.join('').length !== 8) return
 
     if (!isSupabaseConfigured || !supabase) {
       setError('Supabase is not configured. Add the required environment variables to continue.')
@@ -68,7 +70,31 @@ export default function VerifyOtp() {
       }
     }
 
-    navigate('/')
+    const { data: profile } = await supabase.from('profiles').select('role, name, phone').eq('id', userData.user.id).maybeSingle()
+    const { data: vendorAccess } = expectedRole === 'vendor'
+      ? await supabase.from('vendors').select('id').eq('profile_id', userData.user.id).eq('status', 'approved').maybeSingle()
+      : { data: null }
+    const { data: adminAccess } = expectedRole === 'admin' && profile?.role === 'admin'
+      ? { data: { id: userData.user.id } }
+      : { data: null }
+    const hasPortalAccess = expectedRole === 'customer'
+      ? Boolean(profile && profile.role !== 'admin')
+      : expectedRole === 'vendor'
+        ? Boolean(vendorAccess)
+        : Boolean(adminAccess)
+    if (!hasPortalAccess) {
+      await supabase.auth.signOut()
+      setError('This email belongs to a different Qaffy portal.')
+      setIsSubmitting(false)
+      return
+    }
+
+    const target = expectedRole === 'vendor'
+      ? '/vendor'
+      : expectedRole === 'admin'
+        ? '/admin'
+        : '/'
+    navigate(target)
   }
 
   useEffect(() => {
@@ -93,7 +119,15 @@ export default function VerifyOtp() {
     }
   }
 
-  const isComplete = code.join('').length === 6
+  const pasteCode = (event: React.ClipboardEvent<HTMLInputElement>) => {
+    event.preventDefault()
+    const pasted = event.clipboardData.getData('text').replace(/\D/g, '').slice(0, 8)
+    if (!pasted) return
+    setCode(Array.from({ length: 8 }, (_, index) => pasted[index] ?? ''))
+    document.getElementById(`otp-${Math.min(pasted.length, 8) - 1}`)?.focus()
+  }
+
+  const isComplete = code.join('').length === 8
   const canResend = secondsRemaining === 0
 
   const handleResend = async () => {
@@ -111,7 +145,7 @@ export default function VerifyOtp() {
     }
 
     setSecondsRemaining(30)
-    setCode(['', '', '', '', '', ''])
+    setCode(Array.from({ length: 8 }, () => ''))
   }
 
   return (
@@ -142,7 +176,7 @@ export default function VerifyOtp() {
           </p>
         </div>
 
-        <div className="w-full max-w-[520px] rounded-[20px] bg-white p-5 shadow-[0_30px_80px_rgba(0,0,0,0.28)] backdrop-blur-sm sm:p-7">
+        <div className="w-full max-w-130 rounded-[20px] bg-white p-4 shadow-[0_30px_80px_rgba(0,0,0,0.28)] backdrop-blur-sm sm:p-7">
           <button
             type="button"
             onClick={() => navigate(mode === 'create-account' ? '/create-account' : '/login')}
@@ -162,7 +196,7 @@ export default function VerifyOtp() {
 
             {error && <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
 
-            <div className="flex items-center justify-center gap-3 pt-3">
+            <div className="grid grid-cols-8 gap-2 pt-3 sm:gap-3">
               {code.map((digit, index) => (
                 <input
                   key={index}
@@ -172,7 +206,8 @@ export default function VerifyOtp() {
                   maxLength={1}
                   value={digit}
                   onChange={(event) => updateCode(index, event.target.value)}
-                  className="h-[80px] w-[72px] rounded-lg border border-field-border bg-white text-center text-[1.5rem] font-semibold text-black shadow-sm outline-none transition focus:border-field-focus focus:ring-2 focus:ring-field-focus-soft"
+                  onPaste={pasteCode}
+                  className="aspect-square min-w-0 w-full rounded-lg border border-brand-border bg-white p-0 text-center text-lg font-semibold leading-none text-black shadow-sm outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus sm:text-xl"
                 />
               ))}
             </div>
@@ -183,7 +218,7 @@ export default function VerifyOtp() {
                 type="button"
                 onClick={handleResend}
                 disabled={!canResend}
-                className={`font-semibold transition ${canResend ? 'cursor-pointer text-field-focus hover:text-field-focus-hover' : 'cursor-default text-slate-500'}`}
+                className={`font-semibold transition ${canResend ? 'cursor-pointer text-brand-primary hover:text-brand-primary-hover' : 'cursor-default text-slate-500'}`}
               >
                 {canResend ? 'Resend code' : `Resend in ${secondsRemaining} secs`}
               </button>
@@ -192,7 +227,7 @@ export default function VerifyOtp() {
             <button
               type="button"
               onClick={handleVerify}
-              className={`mt-2 flex w-full items-center justify-center rounded-full px-4 py-3 text-[1.05rem] font-semibold transition ${isComplete ? 'bg-field-focus text-white hover:bg-field-focus-hover' : 'cursor-not-allowed bg-field-disabled text-field-disabled-text'}`}
+              className={`mt-2 flex w-full items-center justify-center rounded-full px-4 py-3 text-[1.05rem] font-semibold transition ${isComplete ? 'bg-brand-primary text-white hover:bg-brand-primary-hover' : 'cursor-not-allowed bg-field-disabled text-field-disabled-text'}`}
               disabled={!isComplete || isSubmitting}
             >
               {isSubmitting ? 'Verifying...' : 'Proceed'}

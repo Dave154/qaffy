@@ -1,0 +1,9 @@
+const settlements = [
+  { period: 'Sep 1 - Sep 7, 2026', amount: '₦42,800', status: 'Awaiting admin review', date: 'Current period' },
+  { period: 'Aug 25 - Aug 31, 2026', amount: '₦36,500', status: 'Paid', date: 'Sep 2, 2026' },
+  { period: 'Aug 18 - Aug 24, 2026', amount: '₦29,200', status: 'Paid', date: 'Aug 26, 2026' },
+]
+
+export default function ClearingHistory() {
+  return <div className="space-y-6"><header><h2 className="text-2xl font-bold tracking-tight text-slate-900">Clearing history</h2><p className="mt-2 text-sm text-slate-500">Payouts are reviewed and released by Admin.</p></header><section className="grid gap-3 sm:grid-cols-2"><div className="rounded-[10px] border border-[#e9e9e9] bg-white p-4"><p className="text-xs text-slate-500">Awaiting review</p><p className="mt-3 text-2xl font-bold text-slate-900">₦42,800</p></div><div className="rounded-[10px] border border-[#e9e9e9] bg-white p-4"><p className="text-xs text-slate-500">Paid to date</p><p className="mt-3 text-2xl font-bold text-slate-900">₦65,700</p></div></section><section className="rounded-[10px] border border-[#e9e9e9] bg-white"><div className="border-b border-[#ededed] p-4 md:p-5"><h3 className="text-lg font-bold text-slate-900">Settlement history</h3></div><div className="space-y-2 p-4 md:p-5">{settlements.map((settlement) => <div key={settlement.period} className="flex flex-col gap-3 border-b border-[#f0f0f0] py-4 first:pt-0 last:border-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between"><div><p className="font-semibold text-slate-900">{settlement.period}</p><p className="mt-1 text-sm text-slate-500">{settlement.date}</p></div><div className="flex items-center gap-3"><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${settlement.status === 'Paid' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{settlement.status}</span><p className="font-bold text-slate-900">{settlement.amount}</p></div></div>)}</div></section></div>
+}

@@ -18,17 +18,17 @@
   --color-violet-900: #7d2936;
   --color-violet-950: #551e28;
 
-  --color-accent: #e21c37;
-  --color-accent-dark: #b9152b;
-  --color-brand-primary: #d9364e;
-  --color-brand-primary-hover: #b92b40;
-  --color-brand-strong: #e21c37;
-  --color-brand-strong-hover: #b9152b;
-  --color-brand-soft: #fff0f2;
-  --color-brand-soft-hover: #fff8f9;
-  --color-brand-surface: #fff8fa;
-  --color-brand-border: #ffc3cb;
-  --color-brand-focus: #ffe1e6;
+  --color-accent: #00b7d4;
+  --color-accent-dark: #007f99;
+  --color-brand-primary: #00b7d4;
+  --color-brand-primary-hover: #007f99;
+  --color-brand-strong: #00b7d4;
+  --color-brand-strong-hover: #007f99;
+  --color-brand-soft: #e8fbfd;
+  --color-brand-soft-hover: #f0fcfd;
+  --color-brand-surface: #f0fcfd;
+  --color-brand-border: #a8eaf0;
+  --color-brand-focus: #d9f8fb;
   --color-field-border: #f24d4d;
   --color-field-focus: #2563eb;
   --color-field-focus-hover: #1d4ed8;
@@ -68,7 +68,7 @@ body {
 .qaffy-bubbles {
   position: fixed;
   inset: 0;
-  z-index: 0;
+  z-index: 2;
   overflow: hidden;
   pointer-events: none;
 }
@@ -208,22 +208,6 @@ body {
     opacity: 0;
     fill: transparent;
     stroke-dashoffset: -150;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .route-loading-letter {
-    opacity: 1;
-    fill: color-mix(in srgb, var(--color-brand-primary) 12%, transparent);
-    stroke-dashoffset: 0;
-    animation: none;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .qaffy-bubble {
-    animation: none;
-    opacity: var(--bubble-opacity);
   }
 }
 

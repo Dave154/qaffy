@@ -1,4 +1,13 @@
-import { NavLink, Outlet } from 'react-router'
+import { data, NavLink, Outlet, useLoaderData, useNavigate } from 'react-router'
+import type { Route } from './+types/AdminLayout'
+import { requireRole } from '../../lib/auth.server'
+import { supabase } from '../../lib/supabase.client'
+
+// eslint-disable-next-line react-refresh/only-export-components
+export async function loader({ request }: Route.LoaderArgs) {
+  const auth = await requireRole(request, 'admin')
+  return data({ profile: auth?.profile ?? null }, { headers: auth?.headers, status: 200 })
+}
 
 const navItems = [
   { to: '/', label: 'Overview', end: true },
@@ -11,6 +20,12 @@ const navItems = [
 ]
 
 export default function AdminLayout() {
+  useLoaderData<typeof loader>()
+  const navigate = useNavigate()
+  const handleLogout = async () => {
+    if (supabase) await supabase.auth.signOut()
+    navigate('/admin/login', { replace: true })
+  }
   return (
     <div className="flex min-h-screen bg-transparent text-slate-900">
       <aside className="hidden w-64 shrink-0 border-r border-violet-100 bg-white/80 p-5 backdrop-blur-xl md:block">
@@ -35,6 +50,7 @@ export default function AdminLayout() {
             </NavLink>
           ))}
         </nav>
+        <button type="button" onClick={() => void handleLogout()} className="mt-8 rounded-2xl px-3 py-2.5 text-left text-sm font-medium text-slate-600 hover:bg-violet-50 hover:text-violet-700">Log out</button>
       </aside>
 
       <main className="flex-1 p-4 md:p-8">

@@ -23,6 +23,7 @@ export type InvoiceStatus = 'unpaid' | 'paid'
 export type PaymentStatus = 'pending' | 'success' | 'failed'
 export type SettlementStatus = 'pending' | 'paid'
 export type ReferralStatus = 'pending' | 'rewarded'
+export type LogisticsEventType = 'picked_up' | 'delivered'
 
 export interface Profile {
   id: string
@@ -30,6 +31,7 @@ export interface Profile {
   qaffy_id: string | null
   name: string | null
   phone: string | null
+  pickup_location_id: string | null
   email: string | null
   referral_code: string | null
   referred_by: string | null
@@ -128,6 +130,8 @@ export interface Order {
   notes: string | null
   is_subscription_order: boolean
   billed_extra_amount: number | null
+  picked: boolean
+  picked_up_date: string | null
   created_at: string
 }
 
@@ -193,6 +197,14 @@ export interface Referral {
   created_at: string
 }
 
+export interface OrderLogisticsEvent {
+  id: string
+  order_id: string
+  agent_profile_id: string | null
+  event_type: LogisticsEventType
+  created_at: string
+}
+
 type TableDef<Row> = {
   Row: Row & Record<string, unknown>
   Insert: Partial<Row> & Record<string, unknown>
@@ -221,6 +233,7 @@ export interface Database {
       vendor_settlements: TableDef<VendorSettlement>
       vendor_settlement_orders: TableDef<VendorSettlementOrder>
       referrals: TableDef<Referral>
+      order_logistics_events: TableDef<OrderLogisticsEvent>
     }
     Views: Record<string, never>
     Functions: {

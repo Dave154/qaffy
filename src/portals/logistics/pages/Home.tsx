@@ -1,56 +1,371 @@
-import { useState } from 'react'
+import { data, useFetcher, useOutletContext, useRevalidator } from 'react-router'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { Route } from './+types/Home'
+import { sql } from '../../../lib/db.server'
+import CopyableOrderId from '../../../components/CopyableOrderId'
 
-const stats = [
-  { label: 'Picked up', value: '0', accent: 'bg-violet-100 text-violet-700' },
-  { label: 'Delivered', value: '0', accent: 'bg-emerald-100 text-emerald-700' },
-]
+// Logistics currently runs in dev-friendly mode, so this action uses the trusted
+// server connection while still validating both the order and its pickup OTP.
+// eslint-disable-next-line react-refresh/only-export-components
+export async function action({ request }: Route.ActionArgs) {
+  const formData = await request.formData()
+  const orderId = String(formData.get('orderId') ?? '')
+  const otp = String(formData.get('otp') ?? '').replace(/\D/g, '').slice(-4)
+
+  if (!orderId || otp.length !== 4) {
+    return data({ ok: false, message: 'A valid pickup OTP is required.' }, { status: 400 })
+  }
+
+  const [order] = await sql`
+    update orders
+    set status = 'picked_up', picked = true, picked_up_date = now()
+    where id = ${orderId}
+      and status = 'pending_pickup'
+      and right(regexp_replace(coalesce(pickup_otp, ''), '[^0-9]', '', 'g'), 4) = ${otp}
+    returning id, picked_up_date
+  `
+
+  if (!order) return data({ ok: false, message: 'This pickup could not be confirmed.' }, { status: 409 })
+  await sql`
+    insert into order_logistics_events (order_id, event_type)
+    values (${order.id}, 'picked_up')
+  `
+  return data({ ok: true, orderId: order.id, pickedUpDate: order.picked_up_date })
+}
+
+const filters = ['Today', 'Last week', 'Last month'] as const
+
+const presetLabels: Record<(typeof filters)[number], string> = {
+  Today: 'Today',
+  'Last week': 'Last week',
+  'Last month': 'Last month',
+}
+
+type OrderRecord = {
+  id: string
+  status: 'picked_up' | 'delivered' | 'pending_pickup' | 'at_vendor' | 'invoiced' | 'paid' | 'out_for_delivery' | 'cancelled'
+  pickup_otp: string | null
+  customer_id: string
+  created_at: string
+  notes: string | null
+  picked: boolean
+  picked_up_date: string | null
+  customer_name?: string
+  customer_uid?: string | null
+}
+
+function isWithinRange(dateIso: string, range: (typeof filters)[number]) {
+  const date = new Date(dateIso)
+  const now = new Date()
+
+  const startOfToday = new Date(now)
+  startOfToday.setHours(0, 0, 0, 0)
+
+  const endOfToday = new Date(now)
+  endOfToday.setHours(23, 59, 59, 999)
+
+  if (range === 'Today') return date >= startOfToday && date <= endOfToday
+
+  if (range === 'Last week') {
+    const startOfWeek = new Date(startOfToday)
+    startOfWeek.setDate(startOfToday.getDate() - 6)
+    return date >= startOfWeek && date <= endOfToday
+  }
+
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)
+  return date >= startOfMonth && date <= endOfToday
+}
 
 export default function Home() {
-  const [otp, setOtp] = useState('')
+  const { orders, logisticsEvents } = useOutletContext<{ orders: OrderRecord[]; logisticsEvents: Array<{ order_id: string; event_type: 'picked_up' | 'delivered'; created_at: string }> }>()
+  const fetcher = useFetcher<typeof action>()
+  const revalidator = useRevalidator()
+  const [selectedRange, setSelectedRange] = useState<(typeof filters)[number]>('Today')
+  const [otp, setOtp] = useState(['', '', '', ''])
   const [message, setMessage] = useState('')
+  const [isSearching, setIsSearching] = useState(false)
+  const inputRefs = useRef<Array<HTMLInputElement | null>>([])
+
+  const isPickingUp = fetcher.state !== 'idle'
+  const completedOrderId = fetcher.data && fetcher.data.ok && 'orderId' in fetcher.data ? fetcher.data.orderId : null
+
+  useEffect(() => {
+    if (fetcher.data?.ok && 'orderId' in fetcher.data) {
+      revalidator.revalidate()
+    }
+  }, [fetcher.data, revalidator])
+
+  const normaliseOtp = (value: string | null | undefined) => {
+    const digits = (value ?? '').replace(/\D/g, '')
+    if (!digits) return ''
+    return digits.length > 4 ? digits.slice(-4) : digits
+  }
+
+  const enteredOtp = otp.join('').trim()
+  const matchedOrder = useMemo(() => {
+    if (!enteredOtp) return null
+
+    return (
+      orders.find((order) => {
+        const storedOtp = normaliseOtp(order.pickup_otp)
+        const otpMatch = storedOtp === enteredOtp || storedOtp.endsWith(enteredOtp)
+        return otpMatch
+      }) ?? null
+    )
+  }, [enteredOtp, orders])
+
+  const pickedUpOrders = useMemo(
+    () => orders.filter((order) => order.picked && isWithinRange(order.picked_up_date ?? order.created_at, selectedRange)),
+    [orders, selectedRange],
+  )
+
+  const pendingOrders = useMemo(
+    () => orders.filter((order) => !order.picked && isWithinRange(order.created_at, selectedRange)),
+    [orders, selectedRange],
+  )
+  const pickedUpEvents = logisticsEvents.filter((event) => event.event_type === 'picked_up')
+
+  const focusInput = (index: number) => {
+    const nextInput = inputRefs.current[index]
+    nextInput?.focus()
+    nextInput?.select()
+  }
+
+  const updateCode = (index: number, value: string) => {
+    const sanitized = value.replace(/\D/g, '')
+    const next = [...otp]
+
+    if (!sanitized) {
+      next[index] = ''
+      setOtp(next)
+      setIsSearching(false)
+      setMessage('')
+      return
+    }
+
+    next[index] = sanitized.slice(-1)
+    setOtp(next)
+    setMessage('')
+
+    if (index < otp.length - 1) {
+      focusInput(index + 1)
+    }
+
+    const nextOtp = next.join('').replace(/\D/g, '')
+    if (nextOtp.length === otp.length) {
+      setIsSearching(true)
+      window.setTimeout(() => {
+        setIsSearching(false)
+      }, 350)
+    }
+  }
+
+  const handleOtpKeyDown = (index: number, event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Backspace') {
+      if (otp[index]) {
+        event.preventDefault()
+        const next = [...otp]
+        next[index] = ''
+        setOtp(next)
+        return
+      }
+
+      if (index > 0) {
+        event.preventDefault()
+        const next = [...otp]
+        next[index - 1] = ''
+        setOtp(next)
+        focusInput(index - 1)
+      }
+      return
+    }
+
+    if (event.key === 'Delete') {
+      event.preventDefault()
+      const next = [...otp]
+      next[index] = ''
+      setOtp(next)
+      return
+    }
+
+    if (event.key === 'ArrowLeft' && index > 0) {
+      event.preventDefault()
+      focusInput(index - 1)
+    }
+
+    if (event.key === 'ArrowRight' && index < otp.length - 1) {
+      event.preventDefault()
+      focusInput(index + 1)
+    }
+  }
+
+  const handlePaste = (event: React.ClipboardEvent<HTMLInputElement>) => {
+    event.preventDefault()
+    const pasted = event.clipboardData.getData('text').replace(/\D/g, '').slice(0, otp.length)
+    if (!pasted) return
+
+    const next = [...otp]
+    pasted.split('').forEach((digit, offset) => {
+      if (offset < next.length) {
+        next[offset] = digit
+      }
+    })
+
+    setOtp(next)
+
+    const nextIndex = Math.min(pasted.length, otp.length - 1)
+    focusInput(nextIndex)
+  }
 
   const confirmPickup = () => {
-    setMessage(otp.trim() ? 'No pickup was found for that OTP.' : 'Enter a customer OTP to search.')
+    if (!enteredOtp) {
+      setMessage('Enter a customer OTP to search.')
+      return
+    }
+
+    if (matchedOrder) return
+
+    setMessage('No pickup was found for that OTP.')
+  }
+
+  const pickUpOrder = () => {
+    if (!matchedOrder || isPickingUp) return
+    const formData = new FormData()
+    formData.set('orderId', matchedOrder.id)
+    formData.set('otp', enteredOtp)
+    fetcher.submit(formData, { method: 'post' })
+  }
+
+  const summary = {
+    Today: {
+      pickedUp: pickedUpOrders.filter((order) => isWithinRange(order.created_at, 'Today')).length,
+      pending: pendingOrders.filter((order) => isWithinRange(order.created_at, 'Today')).length,
+    },
+    'Last week': {
+      pickedUp: pickedUpOrders.filter((order) => isWithinRange(order.created_at, 'Last week')).length,
+      pending: pendingOrders.filter((order) => isWithinRange(order.created_at, 'Last week')).length,
+    },
+    'Last month': {
+      pickedUp: pickedUpOrders.filter((order) => isWithinRange(order.created_at, 'Last month')).length,
+      pending: pendingOrders.filter((order) => isWithinRange(order.created_at, 'Last month')).length,
+    },
   }
 
   return (
     <div className="space-y-5">
-      <div className="grid gap-3 md:grid-cols-2">
-        {stats.map((item) => (
-          <div key={item.label} className="rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-100">
-            <div className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${item.accent}`}>
-              {item.label}
-            </div>
-            <p className="mt-4 text-3xl font-bold text-slate-900">{item.value}</p>
-          </div>
-        ))}
+      <div className="flex items-center justify-end">
+        <label className="flex items-center gap-2 rounded-full border border-[#e7e7e7] bg-white px-3 py-2 text-sm text-slate-700 shadow-sm">
+          <span className="font-medium">Picked up</span>
+          <select
+            value={selectedRange}
+            onChange={(event) => setSelectedRange(event.target.value as (typeof filters)[number])}
+            className="rounded-full border border-slate-200 bg-transparent px-2 py-1 text-sm font-medium text-slate-700 outline-none focus:border-brand-primary"
+            aria-label="Picked up date range"
+          >
+            {filters.map((filter) => (
+              <option key={filter} value={filter}>
+                {presetLabels[filter]}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
-      <div className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-100 md:p-5">
-        <div className="mb-3 flex items-center justify-between">
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="rounded-[24px] border border-[#e7e7e7] bg-white p-4 shadow-sm shadow-slate-100">
+          <div className="inline-flex rounded-full bg-brand-soft px-2.5 py-1 text-xs font-medium text-brand-primary">Picked up</div>
+          <p className="mt-4 text-3xl font-bold text-slate-900">{summary[selectedRange].pickedUp}</p>
+          <p className="mt-1 text-sm text-slate-500">Orders picked up in {selectedRange.toLowerCase()}</p>
+        </div>
+
+        <div className="rounded-[24px] border border-[#e7e7e7] bg-white p-4 shadow-sm shadow-slate-100">
+          <div className="inline-flex rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">Pending</div>
+          <p className="mt-4 text-3xl font-bold text-slate-900">{summary[selectedRange].pending}</p>
+          <p className="mt-1 text-sm text-slate-500">Orders still pending in {selectedRange.toLowerCase()}</p>
+        </div>
+      </div>
+
+      <section className="rounded-[28px] border border-[#e7e7e7] bg-white p-4 shadow-sm shadow-slate-100 md:p-5">
+        <h2 className="text-xl font-bold text-slate-900">Picked up orders</h2>
+        <div className="mt-4 space-y-2">
+          {pickedUpEvents.length === 0 ? <p className="text-sm text-slate-500">No pickup events recorded yet.</p> : pickedUpEvents.slice(0, 10).map((event) => {
+            const order = orders.find((item) => item.id === event.order_id)
+            return <div key={event.order_id + event.created_at} className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-3 text-sm">
+              <span className="font-semibold text-slate-800">{order?.customer_name ?? 'Customer'}</span>
+              <span className="text-xs text-slate-500">{new Date(event.created_at).toLocaleString()}</span>
+            </div>
+          })}
+        </div>
+      </section>
+
+      <div className="rounded-[28px] border border-[#e7e7e7] bg-white p-4 shadow-sm shadow-slate-100 md:p-5">
+        <div className="mb-4 flex items-center justify-between">
           <h2 className="text-xl font-bold text-slate-900">Search OTP</h2>
-          <span className="rounded-full bg-violet-50 px-2.5 py-1 text-xs font-medium text-violet-700">Pickup</span>
+          <span className="rounded-full bg-brand-soft px-2.5 py-1 text-xs font-medium text-brand-primary">Pickup</span>
         </div>
 
-        <label className="block">
-          <span className="mb-1.5 block text-sm font-medium text-slate-600">Customer OTP</span>
-          <input
-            type="text"
-            placeholder="Enter OTP"
-            className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-base text-slate-900 placeholder:text-slate-400"
-            onChange={(event) => setOtp(event.target.value)}
-            value={otp}
-          />
-        </label>
-
-        <div className="mt-4 rounded-[22px] bg-slate-50 p-4">
-          <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Customer</p>
-          <p className="mt-2 text-lg font-bold text-slate-900">No customer selected</p>
-          <p className="mt-1 text-sm text-slate-500">Search with a valid pickup OTP.</p>
+        <div className="rounded-[24px] border border-[#e7e7e7] bg-[#fafafa] p-4">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400">Customer OTP</p>
+          <div className="mt-4 flex justify-center gap-2 sm:gap-3">
+            {otp.map((digit, index) => (
+              <input
+                key={index}
+                ref={(element) => {
+                  inputRefs.current[index] = element
+                }}
+                id={`pickup-otp-${index}`}
+                type="text"
+                inputMode="numeric"
+                maxLength={1}
+                value={digit}
+                onChange={(event) => updateCode(index, event.target.value)}
+                onKeyDown={(event) => handleOtpKeyDown(index, event)}
+                onPaste={handlePaste}
+                className="h-14 w-12 rounded-xl border border-brand-border bg-white text-center text-lg font-semibold text-slate-900 shadow-sm outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus sm:h-16 sm:w-14"
+              />
+            ))}
+          </div>
         </div>
 
-        {message && <p role="status" className="mt-3 text-sm text-slate-600">{message}</p>}
-        <button type="button" onClick={confirmPickup} className="mt-4 w-full rounded-2xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white shadow-md shadow-violet-200">
+        <div className="mt-4 rounded-[22px] border border-[#e7e7e7] bg-slate-50 p-4">
+          <p className="text-[10px] uppercase tracking-[0.18em] text-slate-400">Result</p>
+          <div className="mt-3 min-h-[72px]">
+            {isSearching ? (
+              <div className="flex items-center gap-2 text-sm text-slate-600">
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" />
+                Searching OTP...
+              </div>
+            ) : matchedOrder ? (
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-3">
+                <div>
+                  <p className="text-sm font-semibold text-slate-800">{matchedOrder.customer_name ?? 'Customer'}</p>
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                    <span>UID:</span>
+                    {matchedOrder.customer_uid ? <CopyableOrderId id={matchedOrder.customer_uid} label="Customer UID" /> : <span>Not available</span>}
+                  </div>
+                </div>
+                {matchedOrder.picked ? (
+                  <span className="inline-flex items-center rounded-full bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
+                    Picked
+                  </span>
+                ) : (
+                  <button type="button" onClick={pickUpOrder} disabled={isPickingUp} className="rounded-full bg-brand-primary px-3 py-2 text-xs font-semibold text-white transition hover:bg-brand-primary-hover disabled:cursor-wait disabled:opacity-60">
+                    {isPickingUp ? 'Saving...' : 'Pick up'}
+                  </button>
+                )}
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">{enteredOtp ? 'No order matches this OTP.' : 'Search for a customer OTP to find the order.'}</p>
+            )}
+          </div>
+        </div>
+
+        {(message || completedOrderId || (fetcher.data && !fetcher.data.ok && 'message' in fetcher.data)) && (
+          <p role="status" className="mt-3 text-sm text-slate-600">
+            {completedOrderId ? 'Pickup confirmed successfully.' : fetcher.data && !fetcher.data.ok && 'message' in fetcher.data ? fetcher.data.message : message}
+          </p>
+        )}
+        <button type="button" onClick={confirmPickup} className="mt-4 w-full rounded-2xl bg-brand-primary px-4 py-3 text-sm font-semibold text-white transition hover:bg-brand-primary-hover">
           Confirm pickup
         </button>
       </div>

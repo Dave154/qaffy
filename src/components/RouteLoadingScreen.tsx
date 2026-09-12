@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { useNavigation } from 'react-router'
 
 type RouteLoadingScreenProps = {
@@ -8,11 +9,24 @@ type RouteLoadingScreenProps = {
 export default function RouteLoadingScreen({ isLoading = false, watchNavigation = true }: RouteLoadingScreenProps) {
   const navigation = useNavigation()
   const isNavigating = isLoading || (watchNavigation && navigation.state !== 'idle')
+  const [isVisible, setIsVisible] = useState(false)
 
-  if (!isNavigating) return null
+  useEffect(() => {
+    let hideTimer: number | undefined
+    if (isNavigating) {
+      setIsVisible(true)
+    } else if (isVisible) {
+      hideTimer = window.setTimeout(() => setIsVisible(false), 450)
+    }
+    return () => {
+      if (hideTimer) window.clearTimeout(hideTimer)
+    }
+  }, [isNavigating, isVisible])
+
+  if (!isVisible) return null
 
   return (
-    <div className="route-loading-screen fixed inset-0 z-[100] flex items-center justify-center bg-white/45 backdrop-blur-[2px]" role="status" aria-live="polite" aria-label="Loading Qaffy">
+    <div className="route-loading-screen fixed inset-0 z-[100] flex items-center justify-center bg-[#0d1016]/65 backdrop-blur-[2px]" role="status" aria-live="polite" aria-label="Loading Qaffy">
       <div className="flex flex-col items-center">
         <svg className="route-loading-logo" viewBox="0 0 260 100" role="img" aria-label="Qaffy">
           <text x="130" y="72" textAnchor="middle">

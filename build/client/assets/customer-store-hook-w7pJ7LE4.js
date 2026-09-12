@@ -1,0 +1,1 @@
+import{I as e,R as t}from"./chunk-BV7QT456-DIs2kSVJ.js";var n=t(e(),1),r=(0,n.createContext)(null);function i(){let e=(0,n.useContext)(r);if(!e)throw Error(`useCustomerStore must be used inside CustomerStoreProvider`);return e}export{r as n,i as t};

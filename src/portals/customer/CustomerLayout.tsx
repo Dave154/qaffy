@@ -32,9 +32,13 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   const { data: profile } = await serverSupabase
     .from('profiles')
-    .select('id, name, qaffy_id, email, phone')
+    .select('id, role, name, qaffy_id, email, phone, pickup_location_id')
     .eq('id', userData.user.id)
     .maybeSingle()
+
+  if (!profile || profile.role === 'admin') {
+    throw redirect(profile?.role === 'admin' ? '/admin' : '/login', { headers })
+  }
 
   const { data: orders } = await serverSupabase
     .from('orders')

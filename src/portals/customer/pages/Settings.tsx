@@ -1,8 +1,28 @@
-import { Link } from 'react-router'
+import { data, Link, useFetcher } from 'react-router'
+import type { Route } from './+types/Settings'
 import { useCustomerStore } from '../customer-store-hook'
 
+// Updates the customer's preferred pickup location.
+// eslint-disable-next-line react-refresh/only-export-components
+export async function action({ request }: Route.ActionArgs) {
+  const formData = await request.formData()
+  const locationId = String(formData.get('pickupLocationId') ?? '')
+  if (!locationId) return data({ ok: false, message: 'Choose a pickup location.' }, { status: 400 })
+
+  const { getSupabaseServerClient, isSupabaseServerConfigured } = await import('../../../lib/supabase.server')
+  if (!isSupabaseServerConfigured) return data({ ok: false, message: 'Supabase is not configured.' }, { status: 500 })
+  const { supabase, headers } = getSupabaseServerClient(request)
+  const { data: userData } = await supabase.auth.getUser()
+  if (!userData.user) return data({ ok: false, message: 'Please sign in again.' }, { status: 401, headers })
+
+  const { error } = await supabase.from('profiles').update({ pickup_location_id: locationId }).eq('id', userData.user.id)
+  if (error) return data({ ok: false, message: error.message }, { status: 500, headers })
+  return data({ ok: true, message: 'Pickup location saved.' }, { headers })
+}
+
 export default function Settings() {
-  const { customerName, customerEmail, customerPhone, customerId, subscription } = useCustomerStore()
+  const { customerName, customerEmail, customerPhone, customerId, pickupLocations, preferredPickupLocationId, subscription } = useCustomerStore()
+  const fetcher = useFetcher<typeof action>()
   const quickStats = [
     { label: 'Phone', value: customerPhone || 'Not added', helper: 'Primary number' },
     { label: 'Profile ID', value: customerId, helper: 'Your Qaffy ID' },
@@ -59,6 +79,19 @@ export default function Settings() {
                 className="w-full cursor-not-allowed rounded-2xl border border-slate-200 bg-slate-100 px-3 py-3 text-base text-slate-500 focus:border-slate-200 focus:ring-0"
               />
             </label>
+
+            <fetcher.Form method="post" className="rounded-2xl border border-brand-border bg-brand-soft p-4">
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-medium text-slate-600">Preferred pickup location</span>
+                <select name="pickupLocationId" defaultValue={preferredPickupLocationId ?? ''} required className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-base text-slate-900 focus:border-brand-primary focus:ring-2 focus:ring-brand-focus">
+                  <option value="" disabled>Select a location</option>
+                  {pickupLocations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}
+                </select>
+              </label>
+              <button type="submit" disabled={fetcher.state !== 'idle'} className="mt-3 rounded-2xl bg-brand-primary px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{fetcher.state === 'idle' ? 'Save location' : 'Saving...'}</button>
+              {fetcher.data && !fetcher.data.ok && <p role="alert" className="mt-2 text-sm text-red-700">{fetcher.data.message}</p>}
+              {fetcher.data?.ok && <p role="status" className="mt-2 text-sm text-emerald-700">Pickup location saved.</p>}
+            </fetcher.Form>
 
             <label className="block">
               <span className="mb-1.5 block text-sm font-medium text-slate-600">Phone number</span>

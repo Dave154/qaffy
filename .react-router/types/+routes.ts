@@ -56,10 +56,25 @@ type Pages = {
   "/logistics/login": {
     params: {};
   };
+  "/logistics/verify-otp": {
+    params: {};
+  };
+  "/logistics/auth/callback": {
+    params: {};
+  };
   "/vendor": {
     params: {};
   };
+  "/vendor/orders": {
+    params: {};
+  };
+  "/vendor/clearing-history": {
+    params: {};
+  };
   "/vendor/login": {
+    params: {};
+  };
+  "/vendor/auth/callback": {
     params: {};
   };
   "/admin": {
@@ -68,12 +83,15 @@ type Pages = {
   "/admin/login": {
     params: {};
   };
+  "/admin/auth/callback": {
+    params: {};
+  };
 };
 
 type RouteFiles = {
   "root.tsx": {
     id: "root";
-    page: "/" | "/transactions" | "/orders" | "/plans" | "/settings" | "/invoice" | "/otp" | "/login" | "/create-account" | "/verify-otp" | "/auth/callback" | "/complete-profile" | "/logistics" | "/logistics/delivery" | "/logistics/login" | "/vendor" | "/vendor/login" | "/admin" | "/admin/login";
+    page: "/" | "/transactions" | "/orders" | "/plans" | "/settings" | "/invoice" | "/otp" | "/login" | "/create-account" | "/verify-otp" | "/auth/callback" | "/complete-profile" | "/logistics" | "/logistics/delivery" | "/logistics/login" | "/logistics/verify-otp" | "/logistics/auth/callback" | "/vendor" | "/vendor/orders" | "/vendor/clearing-history" | "/vendor/login" | "/vendor/auth/callback" | "/admin" | "/admin/login" | "/admin/auth/callback";
   };
   "portals/customer/CustomerLayout.tsx": {
     id: "portals/customer/CustomerLayout";
@@ -122,6 +140,15 @@ type RouteFiles = {
   "portals/customer/pages/AuthCallback.tsx": {
     id: "portals/customer/pages/AuthCallback";
     page: "/auth/callback";
+  } | {
+    id: "logistics-auth-callback";
+    page: "/logistics/auth/callback";
+  } | {
+    id: "vendor-auth-callback";
+    page: "/vendor/auth/callback";
+  } | {
+    id: "admin-auth-callback";
+    page: "/admin/auth/callback";
   };
   "portals/customer/pages/CompleteProfile.tsx": {
     id: "portals/customer/pages/CompleteProfile";
@@ -143,13 +170,25 @@ type RouteFiles = {
     id: "portals/logistics/pages/Login";
     page: "/logistics/login";
   };
+  "portals/logistics/pages/VerifyOtp.tsx": {
+    id: "portals/logistics/pages/VerifyOtp";
+    page: "/logistics/verify-otp";
+  };
   "portals/vendor/VendorLayout.tsx": {
     id: "portals/vendor/VendorLayout";
-    page: "/vendor";
+    page: "/vendor" | "/vendor/orders" | "/vendor/clearing-history";
   };
   "portals/vendor/pages/Home.tsx": {
     id: "portals/vendor/pages/Home";
     page: "/vendor";
+  };
+  "portals/vendor/pages/Orders.tsx": {
+    id: "portals/vendor/pages/Orders";
+    page: "/vendor/orders";
+  };
+  "portals/vendor/pages/ClearingHistory.tsx": {
+    id: "portals/vendor/pages/ClearingHistory";
+    page: "/vendor/clearing-history";
   };
   "portals/vendor/pages/Login.tsx": {
     id: "portals/vendor/pages/Login";
@@ -188,10 +227,16 @@ type RouteModules = {
   "portals/logistics/pages/Home": typeof import("./src/portals/logistics/pages/Home.tsx");
   "logistics-delivery": typeof import("./src/portals/logistics/pages/Delivery.tsx");
   "portals/logistics/pages/Login": typeof import("./src/portals/logistics/pages/Login.tsx");
+  "portals/logistics/pages/VerifyOtp": typeof import("./src/portals/logistics/pages/VerifyOtp.tsx");
+  "logistics-auth-callback": typeof import("./src/portals/customer/pages/AuthCallback.tsx");
   "portals/vendor/VendorLayout": typeof import("./src/portals/vendor/VendorLayout.tsx");
   "portals/vendor/pages/Home": typeof import("./src/portals/vendor/pages/Home.tsx");
+  "portals/vendor/pages/Orders": typeof import("./src/portals/vendor/pages/Orders.tsx");
+  "portals/vendor/pages/ClearingHistory": typeof import("./src/portals/vendor/pages/ClearingHistory.tsx");
   "portals/vendor/pages/Login": typeof import("./src/portals/vendor/pages/Login.tsx");
+  "vendor-auth-callback": typeof import("./src/portals/customer/pages/AuthCallback.tsx");
   "portals/admin/AdminLayout": typeof import("./src/portals/admin/AdminLayout.tsx");
   "portals/admin/pages/Home": typeof import("./src/portals/admin/pages/Home.tsx");
   "portals/admin/pages/Login": typeof import("./src/portals/admin/pages/Login.tsx");
+  "admin-auth-callback": typeof import("./src/portals/customer/pages/AuthCallback.tsx");
 };

@@ -15,6 +15,24 @@ type Matches = [{
 }, {
   id: "portals/customer/pages/AuthCallback";
   module: typeof import("../AuthCallback.js");
+}] | [{
+  id: "root";
+  module: typeof import("../../../../root.js");
+}, {
+  id: "logistics-auth-callback";
+  module: typeof import("../AuthCallback.js");
+}] | [{
+  id: "root";
+  module: typeof import("../../../../root.js");
+}, {
+  id: "vendor-auth-callback";
+  module: typeof import("../AuthCallback.js");
+}] | [{
+  id: "root";
+  module: typeof import("../../../../root.js");
+}, {
+  id: "admin-auth-callback";
+  module: typeof import("../AuthCallback.js");
 }];
 
 type Annotations = GetAnnotations<Info & { module: Module, matches: Matches }>;

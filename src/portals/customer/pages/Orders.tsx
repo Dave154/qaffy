@@ -2,6 +2,7 @@ import { useState } from 'react'
 import NewOrder from './NewOrder'
 import OrderDetailModal from './OrderDetailModal'
 import CopyableOrderId from '../../../components/CopyableOrderId'
+import ProtectedOtp from '../../../components/ProtectedOtp'
 import { type CustomerOrder } from '../customer-store'
 import { useCustomerStore } from '../customer-store-hook'
 import { data } from 'react-router'
@@ -139,12 +140,8 @@ export default function Orders() {
                   {order.status === 'Awaiting pickup' ? (
                     <div className="flex flex-col items-start sm:items-end">
                       <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-primary">Pickup OTP</p>
-                      <div className="mt-2 flex gap-2">
-                        {Array.from({ length: 5 }).map((_, index) => (
-                          <div key={`${order.id}-${index}`} className="flex h-11 w-11 items-center justify-center rounded-md border border-[#ff4a4a] bg-white text-lg font-bold text-[#ff4a4a] shadow-[inset_0_0_0_1px_rgba(255,74,74,0.05)]">
-                            {order.pickupOtp[index] ?? ''}
-                          </div>
-                        ))}
+                      <div className="mt-2">
+                        <ProtectedOtp value={order.pickupOtp} />
                       </div>
                     </div>
                   ) : (

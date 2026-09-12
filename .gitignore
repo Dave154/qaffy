@@ -20,6 +20,9 @@ dist-ssr
 # Local product notes
 qaffy-product-spec.md
 
+# Local video recordings and playback files
+videos/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

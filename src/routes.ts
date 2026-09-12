@@ -22,13 +22,18 @@ export default [
       route('delivery', 'portals/logistics/pages/Delivery.tsx', { id: 'logistics-delivery' }),
     ]),
     route('login', 'portals/logistics/pages/Login.tsx'),
+    route('verify-otp', 'portals/logistics/pages/VerifyOtp.tsx'),
+    route('auth/callback', 'portals/customer/pages/AuthCallback.tsx', { id: 'logistics-auth-callback' }),
   ]),
 
   ...prefix('vendor', [
     layout('portals/vendor/VendorLayout.tsx', [
       index('portals/vendor/pages/Home.tsx'),
+      route('orders', 'portals/vendor/pages/Orders.tsx'),
+      route('clearing-history', 'portals/vendor/pages/ClearingHistory.tsx'),
     ]),
     route('login', 'portals/vendor/pages/Login.tsx'),
+    route('auth/callback', 'portals/customer/pages/AuthCallback.tsx', { id: 'vendor-auth-callback' }),
   ]),
 
   ...prefix('admin', [
@@ -36,5 +41,6 @@ export default [
       index('portals/admin/pages/Home.tsx'),
     ]),
     route('login', 'portals/admin/pages/Login.tsx'),
+    route('auth/callback', 'portals/customer/pages/AuthCallback.tsx', { id: 'admin-auth-callback' }),
   ]),
 ] satisfies RouteConfig

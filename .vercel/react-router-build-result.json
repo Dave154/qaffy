@@ -26,10 +26,16 @@
       "portals/logistics/pages/Home": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
       "logistics-delivery": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
       "portals/logistics/pages/Login": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
+      "portals/logistics/pages/VerifyOtp": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
+      "logistics-auth-callback": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
       "portals/vendor/pages/Home": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
+      "portals/vendor/pages/Orders": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
+      "portals/vendor/pages/ClearingHistory": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
       "portals/vendor/pages/Login": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
+      "vendor-auth-callback": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
       "portals/admin/pages/Home": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
-      "portals/admin/pages/Login": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0"
+      "portals/admin/pages/Login": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0",
+      "admin-auth-callback": "nodejs_eyJydW50aW1lIjoibm9kZWpzIn0"
     },
     "routes": {
       "root": {
@@ -158,6 +164,20 @@
         "path": "logistics/login",
         "config": {}
       },
+      "portals/logistics/pages/VerifyOtp": {
+        "id": "portals/logistics/pages/VerifyOtp",
+        "parentId": "root",
+        "file": "src/portals/logistics/pages/VerifyOtp.tsx",
+        "path": "logistics/verify-otp",
+        "config": {}
+      },
+      "logistics-auth-callback": {
+        "id": "logistics-auth-callback",
+        "parentId": "root",
+        "file": "src/portals/customer/pages/AuthCallback.tsx",
+        "path": "logistics/auth/callback",
+        "config": {}
+      },
       "portals/vendor/VendorLayout": {
         "id": "portals/vendor/VendorLayout",
         "parentId": "root",
@@ -172,11 +192,32 @@
         "index": true,
         "config": {}
       },
+      "portals/vendor/pages/Orders": {
+        "id": "portals/vendor/pages/Orders",
+        "parentId": "portals/vendor/VendorLayout",
+        "file": "src/portals/vendor/pages/Orders.tsx",
+        "path": "vendor/orders",
+        "config": {}
+      },
+      "portals/vendor/pages/ClearingHistory": {
+        "id": "portals/vendor/pages/ClearingHistory",
+        "parentId": "portals/vendor/VendorLayout",
+        "file": "src/portals/vendor/pages/ClearingHistory.tsx",
+        "path": "vendor/clearing-history",
+        "config": {}
+      },
       "portals/vendor/pages/Login": {
         "id": "portals/vendor/pages/Login",
         "parentId": "root",
         "file": "src/portals/vendor/pages/Login.tsx",
         "path": "vendor/login",
+        "config": {}
+      },
+      "vendor-auth-callback": {
+        "id": "vendor-auth-callback",
+        "parentId": "root",
+        "file": "src/portals/customer/pages/AuthCallback.tsx",
+        "path": "vendor/auth/callback",
         "config": {}
       },
       "portals/admin/AdminLayout": {
@@ -198,6 +239,13 @@
         "parentId": "root",
         "file": "src/portals/admin/pages/Login.tsx",
         "path": "admin/login",
+        "config": {}
+      },
+      "admin-auth-callback": {
+        "id": "admin-auth-callback",
+        "parentId": "root",
+        "file": "src/portals/customer/pages/AuthCallback.tsx",
+        "path": "admin/auth/callback",
         "config": {}
       }
     }
@@ -322,6 +370,18 @@
         "file": "portals/logistics/pages/Login.tsx",
         "path": "logistics/login"
       },
+      "portals/logistics/pages/VerifyOtp": {
+        "id": "portals/logistics/pages/VerifyOtp",
+        "parentId": "root",
+        "file": "portals/logistics/pages/VerifyOtp.tsx",
+        "path": "logistics/verify-otp"
+      },
+      "logistics-auth-callback": {
+        "id": "logistics-auth-callback",
+        "parentId": "root",
+        "file": "portals/customer/pages/AuthCallback.tsx",
+        "path": "logistics/auth/callback"
+      },
       "portals/vendor/VendorLayout": {
         "id": "portals/vendor/VendorLayout",
         "parentId": "root",
@@ -334,11 +394,29 @@
         "path": "vendor",
         "index": true
       },
+      "portals/vendor/pages/Orders": {
+        "id": "portals/vendor/pages/Orders",
+        "parentId": "portals/vendor/VendorLayout",
+        "file": "portals/vendor/pages/Orders.tsx",
+        "path": "vendor/orders"
+      },
+      "portals/vendor/pages/ClearingHistory": {
+        "id": "portals/vendor/pages/ClearingHistory",
+        "parentId": "portals/vendor/VendorLayout",
+        "file": "portals/vendor/pages/ClearingHistory.tsx",
+        "path": "vendor/clearing-history"
+      },
       "portals/vendor/pages/Login": {
         "id": "portals/vendor/pages/Login",
         "parentId": "root",
         "file": "portals/vendor/pages/Login.tsx",
         "path": "vendor/login"
+      },
+      "vendor-auth-callback": {
+        "id": "vendor-auth-callback",
+        "parentId": "root",
+        "file": "portals/customer/pages/AuthCallback.tsx",
+        "path": "vendor/auth/callback"
       },
       "portals/admin/AdminLayout": {
         "id": "portals/admin/AdminLayout",
@@ -357,6 +435,12 @@
         "parentId": "root",
         "file": "portals/admin/pages/Login.tsx",
         "path": "admin/login"
+      },
+      "admin-auth-callback": {
+        "id": "admin-auth-callback",
+        "parentId": "root",
+        "file": "portals/customer/pages/AuthCallback.tsx",
+        "path": "admin/auth/callback"
       }
     },
     "routeDiscovery": {
@@ -447,18 +531,40 @@
             "path": "logistics/login"
           },
           {
+            "file": "portals/logistics/pages/VerifyOtp.tsx",
+            "path": "logistics/verify-otp"
+          },
+          {
+            "file": "portals/customer/pages/AuthCallback.tsx",
+            "path": "logistics/auth/callback",
+            "id": "logistics-auth-callback"
+          },
+          {
             "file": "portals/vendor/VendorLayout.tsx",
             "children": [
               {
                 "file": "portals/vendor/pages/Home.tsx",
                 "index": true,
                 "path": "vendor"
+              },
+              {
+                "file": "portals/vendor/pages/Orders.tsx",
+                "path": "vendor/orders"
+              },
+              {
+                "file": "portals/vendor/pages/ClearingHistory.tsx",
+                "path": "vendor/clearing-history"
               }
             ]
           },
           {
             "file": "portals/vendor/pages/Login.tsx",
             "path": "vendor/login"
+          },
+          {
+            "file": "portals/customer/pages/AuthCallback.tsx",
+            "path": "vendor/auth/callback",
+            "id": "vendor-auth-callback"
           },
           {
             "file": "portals/admin/AdminLayout.tsx",
@@ -473,6 +579,11 @@
           {
             "file": "portals/admin/pages/Login.tsx",
             "path": "admin/login"
+          },
+          {
+            "file": "portals/customer/pages/AuthCallback.tsx",
+            "path": "admin/auth/callback",
+            "id": "admin-auth-callback"
           }
         ]
       }
