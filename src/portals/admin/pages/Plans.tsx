@@ -1,4 +1,4 @@
-import { CheckCircle2, Loader2, Plus, Save, Sparkles, ToggleLeft, ToggleRight } from 'lucide-react'
+import { CheckCircle2, Loader2, MoreVertical, Pencil, Plus, Save, Sparkles, ToggleLeft, ToggleRight } from 'lucide-react'
 import { data, useFetcher, useLoaderData } from 'react-router'
 import { useEffect, useState } from 'react'
 import type { Route } from './+types/Plans'
@@ -77,6 +77,15 @@ export async function action({ request }: Route.ActionArgs) {
     return data({ ok: true }, { headers, status: 200 })
   }
 
+  if (intent === 'bulk-toggle') {
+    const ids = formData.getAll('ids').map(String).filter(Boolean)
+    const active = formData.get('active') === 'true'
+    if (ids.length === 0) return data({ error: 'Select at least one plan.' }, { headers, status: 400 })
+    const { error } = await supabase.from('plans').update({ active }).in('id', ids)
+    if (error) return data({ error: error.message }, { headers, status: 400 })
+    return data({ ok: true }, { headers, status: 200 })
+  }
+
   if (intent === 'update-semester-settings') {
     const semesterStartDate = String(formData.get('semesterStartDate') ?? '').trim() || null
     const semesterEndDate = String(formData.get('semesterEndDate') ?? '').trim() || null
@@ -93,6 +102,20 @@ export async function action({ request }: Route.ActionArgs) {
         updated_at: new Date().toISOString(),
       }, { onConflict: 'key' })
 
+    if (error) return data({ error: error.message }, { headers, status: 400 })
+    return data({ ok: true }, { headers, status: 200 })
+  }
+
+  if (intent === 'update') {
+    const id = String(formData.get('id') ?? '')
+    const name = String(formData.get('name') ?? '').trim()
+    const rawType = String(formData.get('type') ?? 'monthly')
+    const price = Number(formData.get('price') ?? 0)
+    const weeklyLimit = Number(formData.get('weeklyLimit') ?? 0)
+    if (!id || !name || !['monthly', 'semester'].includes(rawType) || !Number.isFinite(price) || price <= 0 || !Number.isFinite(weeklyLimit) || weeklyLimit <= 0) {
+      return data({ error: 'Enter a plan name, valid type, positive price, and positive weekly limit.' }, { headers, status: 400 })
+    }
+    const { error } = await supabase.from('plans').update({ name, type: rawType as PlanType, price, weekly_limit: weeklyLimit }).eq('id', id)
     if (error) return data({ error: error.message }, { headers, status: 400 })
     return data({ ok: true }, { headers, status: 200 })
   }
@@ -126,6 +149,10 @@ export default function Plans() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [planType, setPlanType] = useState<'monthly' | 'semester'>('monthly')
   const [semesterConfig, setSemesterConfig] = useState<SemesterSettings>(semesterSettings)
+  const [editingPlan, setEditingPlan] = useState<PlanRow | null>(null)
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null)
+  const [menuPlacement, setMenuPlacement] = useState<'up' | 'down'>('up')
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
 
   useEffect(() => {
     setSemesterConfig(semesterSettings)
@@ -134,6 +161,20 @@ export default function Plans() {
   useEffect(() => {
     if (fetcher.state === 'idle') setIsSubmitting(false)
   }, [fetcher.state])
+
+  useEffect(() => {
+    if (fetcher.state !== 'idle' || !fetcher.data || !('ok' in fetcher.data)) return
+    setEditingPlan(null)
+    setOpenMenuId(null)
+    setSelectedIds([])
+  }, [fetcher.state, fetcher.data])
+
+  useEffect(() => {
+    if (openMenuId === null) return
+    const closeMenu = () => setOpenMenuId(null)
+    window.addEventListener('click', closeMenu)
+    return () => window.removeEventListener('click', closeMenu)
+  }, [openMenuId])
 
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     if (isSubmitting) {
@@ -149,6 +190,9 @@ export default function Plans() {
 
   return (
     <div className="space-y-6">
+      {fetcher.state === 'idle' && fetcher.data && 'error' in fetcher.data && (
+        <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{fetcher.data.error}</div>
+      )}
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex items-center gap-2">
           <div className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-soft text-brand-primary">
@@ -223,35 +267,39 @@ export default function Plans() {
             <h3 className="text-lg font-bold text-slate-900">Plan catalogue</h3>
           </div>
         </div>
+        {selectedIds.length > 0 && <fetcher.Form method="post" className="flex items-center justify-between gap-3 border-b border-slate-100 bg-slate-50 px-4 py-3"><div className="text-sm font-semibold text-slate-700">{selectedIds.length} selected</div><div className="flex gap-2"><input type="hidden" name="intent" value="bulk-toggle" />{selectedIds.map((id) => <input key={id} type="hidden" name="ids" value={id} />)}<button type="submit" name="active" value="false" disabled={fetcher.state !== 'idle'} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">{fetcher.state !== 'idle' ? <Loader2 size={13} className="animate-spin" /> : null}{fetcher.state !== 'idle' ? 'Updating...' : 'Deactivate selected'}</button><button type="submit" name="active" value="true" disabled={fetcher.state !== 'idle'} className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-white px-3 py-2 text-xs font-semibold text-emerald-700">{fetcher.state !== 'idle' ? <Loader2 size={13} className="animate-spin" /> : null}{fetcher.state !== 'idle' ? 'Updating...' : 'Activate selected'}</button></div></fetcher.Form>}
 
         <div className="overflow-x-auto">
           <table className="w-full min-w-[980px] table-fixed text-left">
             <colgroup>
-              <col className="w-[30%]" />
-              <col className="w-[18%]" />
-              <col className="w-[18%]" />
+              <col className="w-[40px]" />
+              <col className="w-[28%]" />
+              <col className="w-[15%]" />
+              <col className="w-[15%]" />
               <col className="w-[18%]" />
               <col className="w-[12%]" />
-              <col className="w-[16%]" />
+              <col className="w-[8%]" />
             </colgroup>
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50 text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                <th className="w-10 px-2 py-3"><input type="checkbox" aria-label="Select all plans" checked={plans.length > 0 && selectedIds.length === plans.length} onChange={(event) => setSelectedIds(event.target.checked ? plans.map((plan) => plan.id) : [])} /></th>
                 <th className="px-5 py-3 text-left font-semibold">Plan</th>
                 <th className="px-5 py-3 text-left font-semibold">Type</th>
                 <th className="px-5 py-3 text-left font-semibold">Price</th>
                 <th className="px-5 py-3 text-left font-semibold">Weekly limit</th>
                 <th className="px-5 py-3 text-left font-semibold">Status</th>
-                <th className="px-5 py-3 text-right font-semibold">Actions</th>
+                <th className="px-5 py-3 text-right font-semibold" aria-label="Plan actions"></th>
               </tr>
             </thead>
             <tbody>
               {plans.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-5 py-8 text-center text-sm text-slate-500">No plans configured yet.</td>
+                  <td colSpan={7} className="px-5 py-8 text-center text-sm text-slate-500">No plans configured yet.</td>
                 </tr>
               ) : (
                 plans.map((plan) => (
                   <tr key={plan.id} className="border-b border-slate-100 align-middle last:border-0">
+                    <td className="w-10 px-2 py-4 align-middle"><input type="checkbox" aria-label={`Select ${plan.name}`} checked={selectedIds.includes(plan.id)} onChange={(event) => setSelectedIds((current) => event.target.checked ? [...current, plan.id] : current.filter((id) => id !== plan.id))} /></td>
                     <td className="px-5 py-4 align-middle">
                       <div className="flex items-center gap-3">
                         <span className="flex h-9 w-9 items-center justify-center rounded-full bg-brand-soft text-brand-primary"><Sparkles size={16} /></span>
@@ -271,14 +319,39 @@ export default function Plans() {
                       </span>
                     </td>
                     <td className="px-5 py-4 align-middle">
-                      <fetcher.Form method="post" className="flex items-center justify-end gap-3">
-                        <input type="hidden" name="intent" value="toggle" />
-                        <input type="hidden" name="id" value={plan.id} />
-                        <button type="submit" disabled={fetcher.state !== 'idle'} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-brand-primary hover:text-brand-primary disabled:cursor-not-allowed disabled:opacity-60">
-                          {fetcher.state !== 'idle' ? <Loader2 size={14} className="animate-spin" /> : plan.active ? <ToggleLeft size={14} /> : <ToggleRight size={14} />}
-                          {plan.active ? 'Deactivate' : 'Activate'}
+                      <div className="relative flex justify-end">
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            const viewport = event.currentTarget.closest('.overflow-x-auto')
+                            const buttonTop = event.currentTarget.getBoundingClientRect().top
+                            const viewportTop = viewport?.getBoundingClientRect().top ?? 0
+                            setMenuPlacement(buttonTop - viewportTop < 150 ? 'down' : 'up')
+                            setOpenMenuId((current) => (current === plan.id ? null : plan.id))
+                          }}
+                          aria-label={`More actions for ${plan.name}`}
+                          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:border-brand-primary hover:text-brand-primary"
+                        >
+                          <MoreVertical size={16} />
                         </button>
-                      </fetcher.Form>
+                        {openMenuId === plan.id && (
+                          <div onClick={(event) => event.stopPropagation()} className={`absolute right-0 z-10 w-44 rounded-xl border border-slate-200 bg-white p-1 shadow-lg ${menuPlacement === 'down' ? 'top-11' : 'bottom-11'}`}>
+                            <button type="button" onClick={() => { setEditingPlan(plan); setOpenMenuId(null) }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-50">
+                              <Pencil size={14} />
+                              Edit
+                            </button>
+                            <fetcher.Form method="post">
+                              <input type="hidden" name="intent" value="toggle" />
+                              <input type="hidden" name="id" value={plan.id} />
+                              <button type="submit" disabled={fetcher.state !== 'idle'} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60">
+                                {fetcher.state !== 'idle' ? <Loader2 size={14} className="animate-spin" /> : plan.active ? <ToggleLeft size={14} /> : <ToggleRight size={14} />}
+                                {plan.active ? 'Deactivate' : 'Activate'}
+                              </button>
+                            </fetcher.Form>
+                          </div>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -287,6 +360,26 @@ export default function Plans() {
           </table>
         </div>
       </section>
+
+      {editingPlan && (
+        <div className="fixed inset-0 z-40 flex items-end justify-center bg-slate-950/40 p-0 sm:items-center sm:p-4">
+          <div className="w-full max-w-2xl rounded-t-3xl bg-white p-5 shadow-2xl sm:rounded-3xl sm:p-7">
+            <div className="flex items-start justify-between gap-4">
+              <h3 className="text-2xl font-bold text-slate-900">Edit plan</h3>
+              <button type="button" onClick={() => setEditingPlan(null)} aria-label="Close plan editor" className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 text-xl text-slate-400">×</button>
+            </div>
+            <fetcher.Form method="post" className="mt-6 grid gap-4 sm:grid-cols-2">
+              <input type="hidden" name="intent" value="update" />
+              <input type="hidden" name="id" value={editingPlan.id} />
+              <label className="sm:col-span-2"><span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Name</span><input name="name" defaultValue={editingPlan.name} required className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" /></label>
+              <label><span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Type</span><select name="type" defaultValue={editingPlan.type} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"><option value="monthly">Monthly</option><option value="semester">Semester</option></select></label>
+              <label><span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Price</span><input type="number" min="1" step="100" name="price" defaultValue={editingPlan.price} className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" /></label>
+              <label><span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Weekly limit</span><input type="number" min="1" step="1" name="weeklyLimit" defaultValue={editingPlan.weeklyLimit} className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" /></label>
+              <div className="flex justify-end gap-3 sm:col-span-2"><button type="button" onClick={() => setEditingPlan(null)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700">Cancel</button><button type="submit" disabled={fetcher.state !== 'idle'} className="inline-flex items-center gap-2 rounded-xl bg-brand-primary px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"><Save size={16} />Save changes</button></div>
+            </fetcher.Form>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -23,11 +23,15 @@ export async function action({ request }: Route.ActionArgs) {
 
   if (intent === 'claim') {
     if (!orderId) return data({ ok: false, message: 'Order ID is required.' }, { status: 400, headers })
+    const { data: vendor, error: vendorError } = await supabase.from('vendors').select('id').eq('profile_id', vendorAuth.profile.id).eq('status', 'approved').maybeSingle()
+    if (vendorError) return data({ ok: false, message: vendorError.message }, { status: 400, headers })
+    if (!vendor) return data({ ok: false, message: 'Approved vendor access is required to claim orders.' }, { status: 403, headers })
     const { data: claimedOrder, error: claimError } = await supabase
       .from('orders')
-      .update({ status: 'at_vendor' })
+      .update({ status: 'at_vendor', vendor_id: vendor.id })
       .eq('id', orderId)
       .eq('status', 'pending_pickup')
+      .is('vendor_id', null)
       .select('id')
       .maybeSingle()
     if (claimError) return data({ ok: false, message: claimError.message }, { status: 400, headers })

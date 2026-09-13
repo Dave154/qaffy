@@ -14,12 +14,10 @@ export async function loader({ request }: Route.LoaderArgs) {
 
 const navItems = [
   { to: '/admin', label: 'Overview', end: true, icon: LayoutDashboard },
-  { to: '/admin/categories', label: 'Categories', icon: Boxes },
-  { to: '/admin/pickup-locations', label: 'Pickup locations', icon: MapPin },
   { to: '/admin/mismatches', label: 'Mismatches', icon: AlertTriangle },
   { to: '/admin/partners', label: 'Partners', icon: ShieldCheck, children: [{ to: '/admin/partners/vendors', label: 'Vendors' }, { to: '/admin/partners/logistics', label: 'Logistics' }] },
   { to: '/admin/orders', label: 'Orders', icon: ClipboardList },
-  { to: '/admin/settings', label: 'Settings', icon: Settings },
+  { to: '/admin/settings', label: 'Settings', icon: Settings, children: [{ to: '/admin/categories', label: 'Categories', icon: Boxes }, { to: '/admin/pickup-locations', label: 'Pickup locations', icon: MapPin }] },
   { to: '/admin/users', label: 'Users', icon: UsersRound },
   { to: '/admin/plans', label: 'Plans', icon: CircleDollarSign },
 ]
@@ -29,7 +27,7 @@ export default function AdminLayout() {
   const location = useLocation()
   const navigate = useNavigate()
   const [isCollapsed, setIsCollapsed] = useState(false)
-  const [isPartnersOpen, setIsPartnersOpen] = useState(location.pathname.startsWith('/admin/partners'))
+  const [openNav, setOpenNav] = useState<string | null>(location.pathname.startsWith('/admin/partners') ? 'Partners' : location.pathname.startsWith('/admin/categories') || location.pathname.startsWith('/admin/pickup-locations') ? 'Settings' : null)
   const pageTitle = location.pathname === '/admin'
     ? 'Overview'
     : location.pathname.includes('/orders')
@@ -40,17 +38,17 @@ export default function AdminLayout() {
           ? 'Vendors'
           : location.pathname.includes('/categories')
             ? 'Categories'
-            : location.pathname.includes('/pickup-locations')
-              ? 'Pickup locations'
-              : location.pathname.includes('/mismatches')
-                ? 'Mismatches'
-                : location.pathname.includes('/users')
-                  ? 'Users'
-                  : location.pathname.includes('/plans')
-                    ? 'Plans'
-                    : location.pathname.includes('/settings')
-                      ? 'Settings'
-                      : 'Admin'
+              : location.pathname.includes('/pickup-locations')
+                ? 'Pickup locations'
+                : location.pathname.includes('/mismatches')
+                  ? 'Mismatches'
+                  : location.pathname.includes('/users')
+                    ? 'Users'
+                    : location.pathname.includes('/plans')
+                      ? 'Plans'
+                      : location.pathname.includes('/settings')
+                        ? 'Settings'
+                        : 'Admin'
   const handleLogout = async () => {
     if (supabase) await supabase.auth.signOut()
     navigate('/admin/login', { replace: true })
@@ -66,10 +64,10 @@ export default function AdminLayout() {
 
         <nav className={`mx-auto space-y-[13px] ${isCollapsed ? 'w-full' : 'w-[194px]'}`}>
           {navItems.map((item) => <div key={item.to} className="space-y-1">
-            {item.children ? <button type="button" onClick={() => setIsPartnersOpen((open) => !open)} aria-expanded={isPartnersOpen} className={`group relative flex h-10 w-full items-center rounded-[10px] text-sm font-medium transition ${isCollapsed ? 'justify-center px-0' : 'gap-3 px-4'} ${location.pathname.startsWith('/admin/partners') ? 'bg-brand-soft text-brand-primary' : 'text-[#121212] hover:bg-brand-soft hover:text-brand-primary'}`}>
+            {item.children ? <button type="button" onClick={() => setOpenNav((open) => open === item.label ? null : item.label)} aria-expanded={openNav === item.label} className={`group relative flex h-10 w-full items-center rounded-[10px] text-sm font-medium transition ${isCollapsed ? 'justify-center px-0' : 'gap-3 px-4'} ${((item.label === 'Partners' && location.pathname.startsWith('/admin/partners')) || (item.label === 'Settings' && (location.pathname.startsWith('/admin/settings') || location.pathname.startsWith('/admin/categories') || location.pathname.startsWith('/admin/pickup-locations'))) ? 'bg-brand-soft text-brand-primary' : 'text-[#121212] hover:bg-brand-soft hover:text-brand-primary')}`}>
               <item.icon size={17} strokeWidth={1.8} aria-hidden="true" />
               <span className={isCollapsed ? 'sr-only' : ''}>{item.label}</span>
-              {!isCollapsed && <ChevronDown size={15} aria-hidden="true" className={`ml-auto transition-transform duration-300 ${isPartnersOpen ? 'rotate-180' : ''}`} />}
+              {!isCollapsed && <ChevronDown size={15} aria-hidden="true" className={`ml-auto transition-transform duration-300 ${openNav === item.label ? 'rotate-180' : ''}`} />}
               {isCollapsed && <span role="tooltip" className="pointer-events-none absolute left-[calc(100%+12px)] z-20 hidden whitespace-nowrap rounded-md bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-white shadow-lg group-hover:block group-focus-visible:block">{item.label}</span>}
             </button> : <NavLink
               to={item.to}
@@ -80,7 +78,7 @@ export default function AdminLayout() {
               <span className={isCollapsed ? 'sr-only' : ''}>{item.label}</span>
               {isCollapsed && <span role="tooltip" className="pointer-events-none absolute left-[calc(100%+12px)] z-20 hidden whitespace-nowrap rounded-md bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-white shadow-lg group-hover:block group-focus-visible:block">{item.label}</span>}
             </NavLink>}
-            {item.children && !isCollapsed && <div className={`grid transition-[grid-template-rows,opacity] duration-300 ${isPartnersOpen ? 'grid-rows-[1fr] opacity-100' : 'pointer-events-none grid-rows-[0fr] opacity-0'}`}><div className="relative min-h-0 overflow-hidden pl-9"><svg aria-hidden="true" viewBox="0 0 24 76" preserveAspectRatio="none" className="absolute left-5 top-0 h-full w-5 overflow-visible text-brand-primary"><path d="M3 0V29H17" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="transition-[stroke-dashoffset] duration-300" style={{ strokeDasharray: 46, strokeDashoffset: isPartnersOpen ? 0 : 46 }} /><path d="M3 0V53H17" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="transition-[stroke-dashoffset] duration-300" style={{ strokeDasharray: 70, strokeDashoffset: isPartnersOpen ? 0 : 70 }} /><path d="m13 25 4 4-4 4M13 49l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={`transition-opacity duration-300 ${isPartnersOpen ? 'opacity-100' : 'opacity-0'}`} /></svg><div className="space-y-1 pl-6">{item.children.map((child) => <NavLink key={child.to} to={child.to} className={({ isActive }) => `block rounded-md px-3 py-2 text-xs font-medium transition ${isActive ? 'bg-brand-soft text-brand-primary' : 'text-slate-500 hover:bg-brand-soft hover:text-brand-primary'}`}>{child.label}</NavLink>)}</div></div></div>}
+            {item.children && !isCollapsed && <div className={`grid transition-[grid-template-rows,opacity] duration-300 ${openNav === item.label ? 'grid-rows-[1fr] opacity-100' : 'pointer-events-none grid-rows-[0fr] opacity-0'}`}><div className="relative min-h-0 overflow-hidden pl-9"><svg aria-hidden="true" viewBox="0 0 24 76" preserveAspectRatio="none" className="absolute left-5 top-0 h-full w-5 overflow-visible text-brand-primary"><path d="M3 0V29H17" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="transition-[stroke-dashoffset] duration-300" style={{ strokeDasharray: 46, strokeDashoffset: openNav === item.label ? 0 : 46 }} /><path d="M3 0V53H17" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="transition-[stroke-dashoffset] duration-300" style={{ strokeDasharray: 70, strokeDashoffset: openNav === item.label ? 0 : 70 }} /><path d="m13 25 4 4-4 4M13 49l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={`transition-opacity duration-300 ${openNav === item.label ? 'opacity-100' : 'opacity-0'}`} /></svg><div className="space-y-1 pl-6">{item.children.map((child) => <NavLink key={child.to} to={child.to} className={({ isActive }) => `block rounded-md px-3 py-2 text-xs font-medium transition ${isActive ? 'bg-brand-soft text-brand-primary' : 'text-slate-500 hover:bg-brand-soft hover:text-brand-primary'}`}>{child.label}</NavLink>)}</div></div></div>}
           </div>)}
         </nav>
           <button type="button" onClick={() => void handleLogout()} aria-label="Log out" className={`group relative mt-auto flex h-10 w-full items-center rounded-[10px] text-left text-sm font-medium text-[#121212] hover:bg-brand-soft hover:text-brand-primary ${isCollapsed ? 'justify-center px-0' : 'gap-3 px-4'}`}>

@@ -27,7 +27,8 @@ export async function loader({ request }: Route.LoaderArgs) {
   const { supabase, headers } = auth
   const { data: mismatchRows } = await supabase
     .from('mismatches')
-    .select('id, order_id, direction, detail, created_at')
+    .select('id, order_id, direction, detail, created_at, resolved_at')
+    .is('resolved_at', null)
     .order('created_at', { ascending: false })
 
   const orderIds = [...new Set((mismatchRows ?? []).map((row) => row.order_id))]
@@ -89,8 +90,21 @@ export async function action({ request }: Route.ActionArgs) {
   if (!mismatchId) return data({ error: 'Mismatch is required.' }, { status: 400 })
 
   const { supabase, headers } = auth
-  const { error } = await supabase.from('mismatches').delete().eq('id', mismatchId)
+  const { error } = await supabase
+    .from('mismatches')
+    .update({ resolved_at: new Date().toISOString(), resolved_by: auth.profile.id })
+    .eq('id', mismatchId)
+    .is('resolved_at', null)
   if (error) return data({ error: error.message }, { headers, status: 400 })
+
+  const { error: auditError } = await supabase.from('admin_audit_events').insert({
+    admin_profile_id: auth.profile.id,
+    action: 'mismatch_reviewed',
+    entity_type: 'mismatch',
+    entity_id: mismatchId,
+    metadata: {},
+  })
+  if (auditError) return data({ error: auditError.message }, { headers, status: 400 })
 
   return data({ ok: true }, { headers, status: 200 })
 }

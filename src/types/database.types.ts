@@ -64,6 +64,7 @@ export interface ProfileRole {
 export interface ClothCategory {
   id: string
   name: string
+  is_main: boolean
   created_at: string
 }
 
@@ -73,6 +74,9 @@ export interface ClothCategoryRate {
   wash_price: number
   iron_price: number
   wash_iron_price: number
+  vendor_wash_price: number
+  vendor_iron_price: number
+  vendor_wash_iron_price: number
   subscription_units: number
   created_at: string
 }
@@ -137,6 +141,7 @@ export interface WalletTransaction {
 export interface Order {
   id: string
   customer_id: string
+  vendor_id: string | null
   order_type: OrderType
   clothes_count_customer: number
   clothes_count_vendor: number | null
@@ -222,6 +227,16 @@ export interface OrderLogisticsEvent {
   created_at: string
 }
 
+export interface AdminAuditEvent {
+  id: string
+  admin_profile_id: string
+  action: string
+  entity_type: string
+  entity_id: string | null
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
 type TableDef<Row> = {
   Row: Row & Record<string, unknown>
   Insert: Partial<Row> & Record<string, unknown>
@@ -252,6 +267,7 @@ export interface Database {
       vendor_settlement_orders: TableDef<VendorSettlementOrder>
       referrals: TableDef<Referral>
       order_logistics_events: TableDef<OrderLogisticsEvent>
+      admin_audit_events: TableDef<AdminAuditEvent>
     }
     Views: Record<string, never>
     Functions: {

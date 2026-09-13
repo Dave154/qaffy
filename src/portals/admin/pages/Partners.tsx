@@ -43,10 +43,32 @@ export async function action({ request }: Route.ActionArgs) {
   const role = partnerType === 'vendor' ? 'vendor' : 'logistics'
   const table = partnerType === 'vendor' ? 'vendors' : 'logistics_agents'
   const { supabase, headers } = auth
+  if (formData.get('intent') === 'bulk-status') {
+    const ids = formData.getAll('ids').map(String).filter(Boolean)
+    if (ids.length === 0 || !statuses.includes(status)) return data({ error: 'Select partners and a valid status.' }, { headers, status: 400 })
+    const { data: selectedPartners, error: selectedError } = await supabase.from(table).select('profile_id').in('id', ids)
+    if (selectedError) return data({ error: selectedError.message }, { headers, status: 400 })
+    const { error: bulkError } = await supabase.from(table).update({ status }).in('id', ids)
+    if (bulkError) return data({ error: bulkError.message }, { headers, status: 400 })
+    const roleUpdates = await Promise.all((selectedPartners ?? []).map((partner) => supabase.from('profile_roles').upsert({ profile_id: partner.profile_id, role, status }, { onConflict: 'profile_id,role' })))
+    const roleError = roleUpdates.find((result) => result.error)?.error
+    if (roleError) return data({ error: roleError.message }, { headers, status: 400 })
+    return data({ ok: true }, { headers, status: 200 })
+  }
+  const { data: currentPartner, error: currentError } = await supabase.from(table).select('status').eq('id', partnerId).maybeSingle()
+  if (currentError) return data({ error: currentError.message }, { headers, status: 400 })
   const { error: partnerError } = await supabase.from(table).update({ status }).eq('id', partnerId)
   if (partnerError) return data({ error: partnerError.message }, { headers, status: 400 })
   const { error: roleError } = await supabase.from('profile_roles').upsert({ profile_id: profileId, role, status }, { onConflict: 'profile_id,role' })
   if (roleError) return data({ error: roleError.message }, { headers, status: 400 })
+  const { error: auditError } = await supabase.from('admin_audit_events').insert({
+    admin_profile_id: auth.profile.id,
+    action: 'partner_status_changed',
+    entity_type: String(partnerType),
+    entity_id: partnerId,
+    metadata: { profileId, fromStatus: currentPartner?.status ?? null, toStatus: status },
+  })
+  if (auditError) return data({ error: auditError.message }, { headers, status: 400 })
   return data({ ok: true }, { headers, status: 200 })
 }
 

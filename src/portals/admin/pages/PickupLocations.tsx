@@ -43,6 +43,15 @@ export async function action({ request }: Route.ActionArgs) {
     return data({ ok: true }, { headers, status: 200 })
   }
 
+  if (intent === 'bulk-toggle') {
+    const ids = formData.getAll('ids').map(String).filter(Boolean)
+    const active = formData.get('active') === 'true'
+    if (ids.length === 0) return data({ error: 'Select at least one pickup location.' }, { headers, status: 400 })
+    const { error } = await supabase.from('pickup_locations').update({ active }).in('id', ids)
+    if (error) return data({ error: error.message }, { headers, status: 400 })
+    return data({ ok: true }, { headers, status: 200 })
+  }
+
   if (intent === 'delete') {
     const id = String(formData.get('id') ?? '')
     if (!id) return data({ error: 'Location required.' }, { headers, status: 400 })
@@ -65,10 +74,18 @@ export default function PickupLocations() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [sortMode, setSortMode] = useState<'active-first' | 'inactive-first' | 'alphabetical'>('active-first')
   const [openMenuId, setOpenMenuId] = useState<string | null>(null)
+  const [menuPlacement, setMenuPlacement] = useState<'up' | 'down'>('up')
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
 
   useEffect(() => {
     if (fetcher.state === 'idle') setIsSubmitting(false)
   }, [fetcher.state])
+
+  useEffect(() => {
+    if (fetcher.state !== 'idle' || !fetcher.data || !('ok' in fetcher.data)) return
+    setOpenMenuId(null)
+    setSelectedIds([])
+  }, [fetcher.state, fetcher.data])
 
   useEffect(() => {
     if (openMenuId === null) return
@@ -100,6 +117,9 @@ export default function PickupLocations() {
 
   return (
     <div className="space-y-6">
+      {fetcher.state === 'idle' && fetcher.data && 'error' in fetcher.data && (
+        <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{fetcher.data.error}</div>
+      )}
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex items-center gap-2">
           <div className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-soft text-brand-primary">
@@ -141,10 +161,12 @@ export default function PickupLocations() {
             </select>
           </div>
         </div>
+        {selectedIds.length > 0 && <fetcher.Form method="post" className="flex items-center justify-between gap-3 border-b border-slate-100 bg-slate-50 px-4 py-3"><div className="text-sm font-semibold text-slate-700">{selectedIds.length} selected</div><div className="flex gap-2"><input type="hidden" name="intent" value="bulk-toggle" />{selectedIds.map((id) => <input key={id} type="hidden" name="ids" value={id} />)}<button type="submit" name="active" value="false" disabled={fetcher.state !== 'idle'} className="rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs font-semibold text-amber-700">Archive selected</button><button type="submit" name="active" value="true" disabled={fetcher.state !== 'idle'} className="rounded-lg border border-emerald-200 bg-white px-3 py-2 text-xs font-semibold text-emerald-700">Restore selected</button></div></fetcher.Form>}
         <div className="overflow-x-auto">
           <table className="w-full min-w-[720px] text-left">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50 text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                <th className="px-5 py-3"><input type="checkbox" aria-label="Select all pickup locations" checked={locations.length > 0 && selectedIds.length === locations.length} onChange={(event) => setSelectedIds(event.target.checked ? locations.map((location) => location.id) : [])} /></th>
                 <th className="px-5 py-3 font-semibold">Location</th>
                 <th className="px-5 py-3 font-semibold">Address</th>
                 <th className="px-5 py-3 font-semibold">Status</th>
@@ -158,6 +180,7 @@ export default function PickupLocations() {
               ) : (
                 orderedLocations.map((location) => (
                   <tr key={location.id} className="border-b border-slate-100 last:border-0">
+                    <td className="px-5 py-4"><input type="checkbox" aria-label={`Select ${location.name}`} checked={selectedIds.includes(location.id)} onChange={(event) => setSelectedIds((current) => event.target.checked ? [...current, location.id] : current.filter((id) => id !== location.id))} /></td>
                     <td className="px-5 py-4">
                       <div className="flex items-center gap-3">
                         <span className="flex h-9 w-9 items-center justify-center rounded-full bg-brand-soft text-brand-primary"><MapPin size={16} /></span>
@@ -180,6 +203,10 @@ export default function PickupLocations() {
                           type="button"
                           onClick={(event) => {
                             event.stopPropagation()
+                            const viewport = event.currentTarget.closest('.overflow-x-auto')
+                            const buttonTop = event.currentTarget.getBoundingClientRect().top
+                            const viewportTop = viewport?.getBoundingClientRect().top ?? 0
+                            setMenuPlacement(buttonTop - viewportTop < 150 ? 'down' : 'up')
                             setOpenMenuId((current) => (current === location.id ? null : location.id))
                           }}
                           className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:border-brand-primary hover:text-brand-primary"
@@ -189,11 +216,8 @@ export default function PickupLocations() {
                         </button>
 
                         {openMenuId === location.id && (
-                          <div className="absolute right-0 top-11 z-10 w-40 rounded-xl border border-slate-200 bg-white p-1 shadow-lg">
-                            <fetcher.Form method="post" onSubmit={() => {
-                              if (openMenuId !== location.id) return
-                              setOpenMenuId(null)
-                            }}>
+                          <div onClick={(event) => event.stopPropagation()} className={`absolute right-0 z-10 w-40 rounded-xl border border-slate-200 bg-white p-1 shadow-lg ${menuPlacement === 'down' ? 'top-11' : 'bottom-11'}`}>
+                            <fetcher.Form method="post">
                               <input type="hidden" name="intent" value="toggle" />
                               <input type="hidden" name="id" value={location.id} />
                               <button type="submit" disabled={fetcher.state !== 'idle'} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60">
@@ -202,10 +226,10 @@ export default function PickupLocations() {
                               </button>
                             </fetcher.Form>
                             <fetcher.Form method="post" onSubmit={(event) => {
-                              if (!window.confirm(`Delete pickup location “${location.name}”? This cannot be undone.`)) {
+                              if (!window.confirm(`Delete pickup location "${location.name}"? This cannot be undone.`)) {
                                 event.preventDefault()
+                                setOpenMenuId(null)
                               }
-                              setOpenMenuId(null)
                             }}>
                               <input type="hidden" name="intent" value="delete" />
                               <input type="hidden" name="id" value={location.id} />

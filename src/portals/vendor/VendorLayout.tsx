@@ -13,7 +13,10 @@ export async function loader({ request }: Route.LoaderArgs) {
   if (!auth) throw redirect('/vendor/login')
   const { supabase, headers } = auth
 
-  const { data: orders } = await supabase.from('orders').select('*').order('created_at', { ascending: false })
+  const { data: vendor } = await supabase.from('vendors').select('id').eq('profile_id', auth.profile.id).eq('status', 'approved').maybeSingle()
+  const { data: orders } = vendor
+    ? await supabase.from('orders').select('*').or(`vendor_id.is.null,vendor_id.eq.${vendor.id}`).order('created_at', { ascending: false })
+    : { data: [] }
   const orderIds = (orders ?? []).map((order) => order.id)
   const customerIds = [...new Set((orders ?? []).map((order) => order.customer_id))]
   const locationIds = [...new Set((orders ?? []).map((order) => order.pickup_location_id).filter(Boolean))] as string[]

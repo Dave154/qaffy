@@ -15,11 +15,16 @@ export async function action({ request }: { request: Request }) {
     return data({ ok: false, message: 'Invalid order action.' }, { status: 400, headers: auth.headers })
   }
 
+  const { data: vendor, error: vendorError } = await auth.supabase.from('vendors').select('id').eq('profile_id', auth.profile.id).eq('status', 'approved').maybeSingle()
+  if (vendorError) return data({ ok: false, message: vendorError.message }, { status: 400, headers: auth.headers })
+  if (!vendor) return data({ ok: false, message: 'Approved vendor access is required to claim orders.' }, { status: 403, headers: auth.headers })
+
   const { error } = await auth.supabase
     .from('orders')
-    .update({ status: 'at_vendor' })
+    .update({ status: 'at_vendor', vendor_id: vendor.id })
     .eq('id', orderId)
     .eq('status', 'pending_pickup')
+    .is('vendor_id', null)
 
   if (error) return data({ ok: false, message: error.message }, { status: 400, headers: auth.headers })
   return data({ ok: true }, { headers: auth.headers })
