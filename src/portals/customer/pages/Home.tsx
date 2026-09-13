@@ -43,8 +43,11 @@ export default function Home() {
   const pendingOrders = orders
     .filter((order) => order.paymentStatus === 'Pending' && !order.isSubscriptionOrder)
     .map((order) => ({ id: order.id, amount: order.total }))
-  const pickupOrder = orders.find((order) => order.status === 'Awaiting pickup' && order.pickupOtp)
-  const nextPickup = orders.find((order) => order.status !== 'Delivered')?.pickup ?? 'No pickup scheduled'
+  const getVisibleOtp = (order: typeof orders[number]) => {
+    if (order.status === 'Awaiting pickup') return order.pickupOtp
+    if (order.status === 'In progress') return order.deliveryOtp ?? ''
+    return ''
+  }
   const today = new Intl.DateTimeFormat(undefined, { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' }).format(new Date())
 
   const handleTopUp = async (amount: number) => {
@@ -108,37 +111,55 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="grid gap-3 md:grid-cols-3">
-        <div className="border rounded-2xl border-[#e7e7e7] bg-white p-4">
-          <p className="text-[10px] uppercase tracking-[0.22em] text-brand-primary">Pickup OTP</p>
-          {pickupOrder ? (
-            <>
-              <p className="mt-3 text-3xl font-bold tracking-[0.2em] text-brand-primary">{pickupOrder.pickupOtp}</p>
-              <div className="mt-3 flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-3 py-2">
-                <span className="text-xs font-medium text-slate-500">Order</span>
-                <CopyableOrderId id={pickupOrder.id} className="text-sm font-semibold text-slate-800" />
-              </div>
-            </>
-          ) : (
-            <>
-              <p className="mt-3 text-lg font-semibold text-slate-700">No pickup pending</p>
-              <p className="mt-1 text-sm text-slate-500">Create a new order to get started.</p>
-            </>
-          )}
-        </div>
+        <section className="rounded-2xl border border-[#e7e7e7] bg-white p-4 sm:p-5">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-bold text-slate-900">Recent orders</h3>
+              <p className="mt-1 text-sm text-slate-500">Track pickup, delivery, and payment status</p>
+            </div>
+            <Link to="/orders" className="text-sm font-medium text-brand-primary">View all</Link>
+          </div>
 
-        <div className="border rounded-2xl border-[#e7e7e7] bg-white p-4">
-          <p className="text-[10px] uppercase tracking-[0.22em] text-slate-400">Active orders</p>
-          <p className="mt-3 text-2xl font-semibold text-slate-900">{activeOrderCount}</p>
-          <p className="mt-1 text-sm text-slate-500">In progress</p>
-        </div>
+          <div className="space-y-3">
+            {orders.slice(0, 3).map((order) => (
+              <article key={order.id} className="relative border-b border-[#eeeeee] bg-white p-4 last:border-b-0">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="pr-28">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-lg font-semibold text-slate-900"><CopyableOrderId id={order.id} /></p>
+                      <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold ${order.statusTone}`}>
+                        <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" aria-hidden="true" />
+                        <span>{order.status}</span>
+                      </span>
+                    </div>
+                    <p className="mt-2 text-sm font-medium text-slate-700">{order.title}</p>
+                    <p className="mt-1 text-xs text-slate-500">{order.date}</p>
+                  </div>
 
-        <div className="border rounded-2xl border-[#e7e7e7] bg-white p-4">
-          <p className="text-[10px] uppercase tracking-[0.22em] text-slate-400">Pickup</p>
-          <p className="mt-3 text-lg font-bold text-slate-900">{nextPickup}</p>
-          <p className="mt-1 text-sm text-slate-500">From your active orders</p>
-        </div>
-      </section>
+                  <div className="absolute right-4 top-4 text-right">
+                    {getVisibleOtp(order) ? (
+                      <>
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-primary">{order.status === 'Awaiting pickup' ? 'Pickup OTP' : 'Delivery OTP'}</p>
+                        <p className="mt-2 text-xl font-bold tracking-[0.12em] text-brand-primary">{getVisibleOtp(order)}</p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-xl font-bold text-slate-900">₦{order.total.toLocaleString()}</p>
+                        <p className="mt-1 text-xs text-slate-500">{order.items} clothes</p>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-4 flex flex-col gap-3 border-t border-slate-200 pt-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-sm text-slate-600">{order.pickup}</p>
+                  <Link to="/orders" className="rounded-lg border border-brand-border bg-white px-3.5 py-2 text-center text-sm font-semibold text-brand-primary hover:bg-brand-soft">View order</Link>
+                </div>
+              </article>
+            ))}
+            {orders.length === 0 && <p className="rounded-2xl bg-slate-50 p-6 text-center text-sm text-slate-500">No recent orders yet.</p>}
+          </div>
+        </section>
 
       <section className="rounded-2xl border border-[#e7e7e7] bg-white p-4 sm:p-5">
         <div className="flex items-center justify-between gap-3">
@@ -161,45 +182,6 @@ export default function Home() {
 
             return <Link key={item.to} to={item.to} className="flex min-h-20 flex-col justify-between rounded-2xl border border-slate-200 bg-[#fafafa] p-3 text-left transition hover:border-brand-border hover:bg-brand-soft-hover"><Icon className="h-4 w-4 text-brand-primary" /><span className="text-xs font-semibold text-slate-700">{item.label}</span></Link>
           })}
-        </div>
-      </section>
-
-      <section className="border rounded-2xl border-[#e7e7e7] bg-white p-4 sm:p-5">
-        <div className="flex items-center justify-between">
-          <h3 className="text-lg font-bold text-slate-900">New order</h3>
-          <button type="button" onClick={() => setIsOrderModalOpen(true)} className="rounded-lg bg-brand-soft px-2.5 py-1 text-xs font-medium text-brand-primary">Start</button>
-        </div>
-
-        <div className="mt-4 flex flex-col gap-4 rounded-2xl border border-[#e7e7e7] bg-[#fafafa] p-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="font-semibold text-slate-900">Ready for a fresh start?</p>
-            <p className="mt-1 text-sm text-slate-500">Choose a service and tell us how many clothes you have.</p>
-          </div>
-          <button type="button" onClick={() => setIsOrderModalOpen(true)} className="shrink-0 rounded-lg bg-brand-primary px-4 py-3 text-sm font-semibold text-white">
-            Create order
-          </button>
-        </div>
-      </section>
-
-      <section className="border rounded-2xl border-[#e7e7e7] bg-white p-4">
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-lg font-bold text-slate-900">Recent orders</h3>
-          <Link to="/orders" className="text-sm font-medium text-brand-primary">View all</Link>
-        </div>
-
-        <div className="space-y-3">
-          {orders.slice(0, 3).map((order) => (
-            <div key={order.id} className="flex items-center justify-between border-b border-[#eeeeee] p-3 last:border-b-0">
-              <div>
-                <CopyableOrderId id={order.id} className="font-semibold text-slate-900" />
-                <p className="text-xs text-slate-500">{order.date}</p>
-              </div>
-              <div className="text-right">
-                <p className="font-semibold text-slate-900">₦{order.total.toLocaleString()}</p>
-                <p className="text-[11px] font-medium text-[#418d87]">{order.status}</p>
-              </div>
-            </div>
-          ))}
         </div>
       </section>
 

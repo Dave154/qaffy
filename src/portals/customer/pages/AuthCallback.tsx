@@ -46,19 +46,12 @@ export async function loader({ request }: Route.LoaderArgs) {
     .eq('id', userData.user.id)
     .maybeSingle()
 
-  const { data: vendorAccess } = expectedRole === 'vendor'
-    ? await supabase.from('vendors').select('id').eq('profile_id', userData.user.id).eq('status', 'approved').maybeSingle()
-    : { data: null }
-  const { data: logisticsAccess } = expectedRole === 'logistics'
-    ? await supabase.from('logistics_agents').select('id').eq('profile_id', userData.user.id).eq('status', 'approved').maybeSingle()
+  const { data: roleAssignment } = expectedRole !== 'customer'
+    ? await supabase.from('profile_roles').select('role').eq('profile_id', userData.user.id).eq('role', expectedRole).eq('status', 'approved').maybeSingle()
     : { data: null }
   const hasPortalAccess = expectedRole === 'customer'
-    ? Boolean(profile && profile.role !== 'admin')
-    : expectedRole === 'vendor'
-      ? Boolean(vendorAccess)
-      : expectedRole === 'logistics'
-        ? Boolean(logisticsAccess)
-        : profile?.role === 'admin'
+    ? true
+    : Boolean(roleAssignment) || expectedRole === 'admin' && profile?.role === 'admin'
 
   if (!hasPortalAccess) {
     const loginPath = expectedRole === 'customer' ? '/login' : `/${expectedRole}/login`

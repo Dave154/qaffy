@@ -69,9 +69,10 @@ export default function VerifyOtp() {
     }
 
     const { data: agent, error: agentError } = await supabase
-      .from('logistics_agents')
-      .select('id')
+      .from('profile_roles')
+      .select('role')
       .eq('profile_id', userData.user.id)
+      .eq('role', 'logistics')
       .eq('status', 'approved')
       .maybeSingle()
 

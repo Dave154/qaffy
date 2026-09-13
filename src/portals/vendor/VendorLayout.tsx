@@ -20,7 +20,7 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   const [{ data: profiles }, { data: locations }, { data: items }, { data: invoices }, { data: mismatches }, { data: logisticsEvents }] = await Promise.all([
     customerIds.length ? supabase.from('profiles').select('id, name, qaffy_id, email, phone').in('id', customerIds) : Promise.resolve({ data: [] }),
-    locationIds.length ? supabase.from('pickup_locations').select('id, name, address').in('id', locationIds) : Promise.resolve({ data: [] }),
+    locationIds.length ? supabase.from('pickup_locations').select('id, name').in('id', locationIds) : Promise.resolve({ data: [] }),
     orderIds.length ? supabase.from('order_items').select('id, order_id, category_id, quantity, service, unit_price').in('order_id', orderIds) : Promise.resolve({ data: [] }),
     orderIds.length ? supabase.from('invoices').select('id, order_id, amount, status, created_at, paid_at').in('order_id', orderIds) : Promise.resolve({ data: [] }),
     orderIds.length ? supabase.from('mismatches').select('id, order_id, direction, detail, created_at').in('order_id', orderIds).order('created_at', { ascending: false }) : Promise.resolve({ data: [] }),
@@ -28,6 +28,16 @@ export async function loader({ request }: Route.LoaderArgs) {
   ])
   const categoryIds = [...new Set((items ?? []).map((item) => item.category_id))]
   const { data: categories } = categoryIds.length ? await supabase.from('cloth_categories').select('id, name').in('id', categoryIds) : { data: [] }
+  const rateCard = new Map<string, { name: string; wash: number | null; iron: number | null; wash_iron: number | null }>()
+
+  for (const item of items ?? []) {
+    const name = (categories ?? []).find((category) => category.id === item.category_id)?.name ?? 'Laundry item'
+    const current = rateCard.get(name) ?? { name, wash: null, iron: null, wash_iron: null }
+    if (item.service === 'wash' || item.service === 'iron' || item.service === 'wash_iron') {
+      current[item.service] = Number(item.unit_price)
+    }
+    rateCard.set(name, current)
+  }
 
   return data({ orders: (orders ?? []).map((order) => ({
     ...order,
@@ -37,7 +47,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     invoice: (invoices ?? []).find((invoice) => invoice.order_id === order.id) ?? null,
     mismatches: (mismatches ?? []).filter((mismatch) => mismatch.order_id === order.id),
     logisticsEvents: (logisticsEvents ?? []).filter((event) => event.order_id === order.id),
-  })) }, { headers, status: 200 })
+  })), vendorName: auth.profile.name ?? 'Vendor', rateCard: [...rateCard.values()] }, { headers, status: 200 })
 }
 
 const navigation = [

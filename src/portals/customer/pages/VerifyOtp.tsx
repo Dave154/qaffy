@@ -71,17 +71,12 @@ export default function VerifyOtp() {
     }
 
     const { data: profile } = await supabase.from('profiles').select('role, name, phone').eq('id', userData.user.id).maybeSingle()
-    const { data: vendorAccess } = expectedRole === 'vendor'
-      ? await supabase.from('vendors').select('id').eq('profile_id', userData.user.id).eq('status', 'approved').maybeSingle()
-      : { data: null }
-    const { data: adminAccess } = expectedRole === 'admin' && profile?.role === 'admin'
-      ? { data: { id: userData.user.id } }
+    const { data: roleAssignment } = expectedRole !== 'customer'
+      ? await supabase.from('profile_roles').select('role').eq('profile_id', userData.user.id).eq('role', expectedRole).eq('status', 'approved').maybeSingle()
       : { data: null }
     const hasPortalAccess = expectedRole === 'customer'
-      ? Boolean(profile && profile.role !== 'admin')
-      : expectedRole === 'vendor'
-        ? Boolean(vendorAccess)
-        : Boolean(adminAccess)
+      ? Boolean(profile)
+      : Boolean(roleAssignment) || expectedRole === 'admin' && profile?.role === 'admin'
     if (!hasPortalAccess) {
       await supabase.auth.signOut()
       setError('This email belongs to a different Qaffy portal.')

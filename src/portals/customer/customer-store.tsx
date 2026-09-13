@@ -146,12 +146,23 @@ function mapDatabaseOrder(order: Order, persistedItems: PersistedOrderItem[] = [
     mixed: 'Mixed service',
   }
 
+  const statusToneMap: Record<Order['status'], string> = {
+    pending_pickup: 'bg-amber-50 text-amber-700',
+    picked_up: 'bg-sky-50 text-sky-700',
+    at_vendor: 'bg-blue-50 text-blue-700',
+    invoiced: 'bg-emerald-50 text-emerald-700',
+    paid: 'bg-emerald-50 text-emerald-700',
+    out_for_delivery: 'bg-teal-50 text-teal-700',
+    delivered: 'bg-slate-100 text-slate-700',
+    cancelled: 'bg-rose-50 text-rose-700',
+  }
+
   return {
     id: order.id,
     customerId: order.customer_id,
     title: serviceMap[order.order_type],
     status: statusMap[order.status],
-    statusTone: order.status === 'delivered' ? 'bg-slate-100 text-slate-700' : 'bg-amber-50 text-amber-700',
+    statusTone: statusToneMap[order.status],
     date: new Date(order.created_at).toLocaleDateString(),
     pickup: order.status === 'pending_pickup' ? 'Pickup pending' : 'Pickup confirmed',
     total: order.billed_extra_amount ?? 0,

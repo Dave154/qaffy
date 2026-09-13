@@ -1,0 +1,292 @@
+import { CheckCircle2, Loader2, Plus, Save, Sparkles, ToggleLeft, ToggleRight } from 'lucide-react'
+import { data, useFetcher, useLoaderData } from 'react-router'
+import { useEffect, useState } from 'react'
+import type { Route } from './+types/Plans'
+import { requireRole } from '../../../lib/auth.server'
+import type { PlanType } from '../../../types/database.types'
+
+type PlanRow = {
+  id: string
+  name: string
+  type: 'monthly' | 'semester'
+  price: number
+  weeklyLimit: number
+  active: boolean
+  createdAt: string
+}
+
+type SemesterSettings = { semesterStartDate: string | null; semesterEndDate: string | null }
+type PlansData = { plans: PlanRow[]; semesterSettings: SemesterSettings }
+
+function money(value: number) { return `₦${value.toLocaleString()}` }
+function formatDate(value: string | null) { return value ? new Date(value).toLocaleDateString() : 'Not set' }
+
+// eslint-disable-next-line react-refresh/only-export-components
+export async function loader({ request }: Route.LoaderArgs) {
+  const auth = await requireRole(request, 'admin')
+  if (!auth) return data<PlansData>({ plans: [], semesterSettings: { semesterStartDate: null, semesterEndDate: null } }, { status: 200 })
+
+  const [{ data: rows, error }, settingsResult] = await Promise.all([
+    auth.supabase
+      .from('plans')
+      .select('id, name, type, price, weekly_limit, active, created_at')
+      .order('created_at', { ascending: false }),
+    auth.supabase
+      .from('app_settings' as any)
+      .select('semester_start_date, semester_end_date')
+      .eq('key', 'semester')
+      .maybeSingle() as unknown as Promise<{ data: { semester_start_date: string | null; semester_end_date: string | null } | null; error: { message: string } | null }>,
+  ])
+
+  const settings = settingsResult.data
+
+  if (error) return data<PlansData>({ plans: [], semesterSettings: { semesterStartDate: null, semesterEndDate: null } }, { headers: auth.headers, status: 200 })
+
+  return data<PlansData>({
+    plans: (rows ?? []).map((row) => ({
+      id: row.id,
+      name: row.name,
+      type: row.type,
+      price: Number(row.price),
+      weeklyLimit: Number(row.weekly_limit),
+      active: Boolean(row.active),
+      createdAt: row.created_at,
+    })),
+    semesterSettings: {
+      semesterStartDate: settings?.semester_start_date ?? null,
+      semesterEndDate: settings?.semester_end_date ?? null,
+    },
+  }, { headers: auth.headers, status: 200 })
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export async function action({ request }: Route.ActionArgs) {
+  const auth = await requireRole(request, 'admin')
+  if (!auth) return data({ error: 'Admin access required.' }, { status: 403 })
+  const formData = await request.formData()
+  const intent = String(formData.get('intent') ?? 'create')
+  const { supabase, headers } = auth
+
+  if (intent === 'toggle') {
+    const id = String(formData.get('id') ?? '')
+    if (!id) return data({ error: 'Plan required.' }, { headers, status: 400 })
+    const { data: currentPlan, error: fetchError } = await supabase.from('plans').select('active').eq('id', id).maybeSingle()
+    if (fetchError) return data({ error: fetchError.message }, { headers, status: 400 })
+    const { error } = await supabase.from('plans').update({ active: !(currentPlan?.active ?? true) }).eq('id', id)
+    if (error) return data({ error: error.message }, { headers, status: 400 })
+    return data({ ok: true }, { headers, status: 200 })
+  }
+
+  if (intent === 'update-semester-settings') {
+    const semesterStartDate = String(formData.get('semesterStartDate') ?? '').trim() || null
+    const semesterEndDate = String(formData.get('semesterEndDate') ?? '').trim() || null
+
+    if (!semesterStartDate || !semesterEndDate) return data({ error: 'Semester settings require both a start and end date.' }, { headers, status: 400 })
+    if (new Date(semesterEndDate) <= new Date(semesterStartDate)) return data({ error: 'Semester end date must be later than the start date.' }, { headers, status: 400 })
+
+    const { error } = await supabase
+      .from('app_settings' as any)
+      .upsert({
+        key: 'semester',
+        semester_start_date: semesterStartDate,
+        semester_end_date: semesterEndDate,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'key' })
+
+    if (error) return data({ error: error.message }, { headers, status: 400 })
+    return data({ ok: true }, { headers, status: 200 })
+  }
+
+  const name = String(formData.get('name') ?? '').trim()
+  const rawType = String(formData.get('type') ?? 'monthly')
+  const validatedType: PlanType = rawType === 'semester' ? 'semester' : 'monthly'
+  const price = Number(formData.get('price') ?? 0)
+  const weeklyLimit = Number(formData.get('weeklyLimit') ?? 0)
+
+  if (!name) return data({ error: 'Plan name is required.' }, { headers, status: 400 })
+  if (!['monthly', 'semester'].includes(rawType)) return data({ error: 'Invalid plan type.' }, { headers, status: 400 })
+  if (price <= 0) return data({ error: 'Plan price must be greater than zero.' }, { headers, status: 400 })
+  if (weeklyLimit <= 0) return data({ error: 'Weekly limit must be greater than zero.' }, { headers, status: 400 })
+
+  const { error } = await supabase.from('plans').insert({
+    name,
+    type: validatedType,
+    price,
+    weekly_limit: weeklyLimit,
+    active: true,
+  })
+  if (error) return data({ error: error.message }, { headers, status: 400 })
+
+  return data({ ok: true }, { headers, status: 200 })
+}
+
+export default function Plans() {
+  const { plans, semesterSettings } = useLoaderData<typeof loader>()
+  const fetcher = useFetcher<typeof action>()
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [planType, setPlanType] = useState<'monthly' | 'semester'>('monthly')
+  const [semesterConfig, setSemesterConfig] = useState<SemesterSettings>(semesterSettings)
+
+  useEffect(() => {
+    setSemesterConfig(semesterSettings)
+  }, [semesterSettings])
+
+  useEffect(() => {
+    if (fetcher.state === 'idle') setIsSubmitting(false)
+  }, [fetcher.state])
+
+  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+    if (isSubmitting) {
+      event.preventDefault()
+      return
+    }
+    setIsSubmitting(true)
+  }
+
+  const handleSemesterChange = (field: 'semesterStartDate' | 'semesterEndDate', value: string) => {
+    setSemesterConfig((current) => ({ ...current, [field]: value || null }))
+  }
+
+  return (
+    <div className="space-y-6">
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex items-center gap-2">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-soft text-brand-primary">
+            <Plus size={17} />
+          </div>
+          <h3 className="text-lg font-bold text-slate-900">Add a plan</h3>
+        </div>
+
+        <fetcher.Form method="post" onSubmit={handleSubmit} className="mt-5 space-y-4">
+          <input type="hidden" name="intent" value="create" />
+
+          <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr_0.9fr_0.8fr_0.9fr]">
+            <label className="min-w-0">
+              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Name</span>
+              <input name="name" required placeholder="e.g. Silver" className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" />
+            </label>
+
+            <label className="min-w-0">
+              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Type</span>
+              <select name="type" value={planType} onChange={(event) => setPlanType(event.target.value as 'monthly' | 'semester')} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus">
+                <option value="monthly">Monthly</option>
+                <option value="semester">Semester</option>
+              </select>
+            </label>
+
+            <label className="min-w-0">
+              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Price</span>
+              <input type="number" min="1" step="100" name="price" defaultValue={25000} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" />
+            </label>
+
+            <label className="min-w-0">
+              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Weekly limit</span>
+              <input type="number" min="1" step="1" name="weeklyLimit" defaultValue={20} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" />
+            </label>
+
+            <div className="flex items-end">
+              <button type="submit" disabled={isSubmitting} className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-brand-primary px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-70">
+                {isSubmitting ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                {isSubmitting ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </fetcher.Form>
+      </section>
+
+      <section className="rounded-2xl border border-brand-soft bg-[#f8fcfc] p-5 shadow-sm">
+        <h3 className="text-lg font-bold text-slate-900">Semester settings</h3>
+
+        <fetcher.Form method="post" className="mt-4 grid gap-4 md:grid-cols-2">
+          <input type="hidden" name="intent" value="update-semester-settings" />
+          <label className="min-w-0">
+            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Start date</span>
+            <input type="date" name="semesterStartDate" value={semesterConfig.semesterStartDate ?? ''} onChange={(event) => handleSemesterChange('semesterStartDate', event.target.value)} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" />
+          </label>
+          <label className="min-w-0">
+            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">End date</span>
+            <input type="date" name="semesterEndDate" value={semesterConfig.semesterEndDate ?? ''} onChange={(event) => handleSemesterChange('semesterEndDate', event.target.value)} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" />
+          </label>
+          <div className="md:col-span-2 flex justify-end">
+            <button type="submit" disabled={isSubmitting} className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand-primary px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-70">
+              {isSubmitting ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+              {isSubmitting ? 'Saving settings...' : 'Save semester settings'}
+            </button>
+          </div>
+        </fetcher.Form>
+      </section>
+
+      <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 p-4">
+          <div className="flex items-center gap-2">
+            <Sparkles size={16} className="text-brand-primary" />
+            <h3 className="text-lg font-bold text-slate-900">Plan catalogue</h3>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[980px] table-fixed text-left">
+            <colgroup>
+              <col className="w-[30%]" />
+              <col className="w-[18%]" />
+              <col className="w-[18%]" />
+              <col className="w-[18%]" />
+              <col className="w-[12%]" />
+              <col className="w-[16%]" />
+            </colgroup>
+            <thead>
+              <tr className="border-b border-slate-200 bg-slate-50 text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                <th className="px-5 py-3 text-left font-semibold">Plan</th>
+                <th className="px-5 py-3 text-left font-semibold">Type</th>
+                <th className="px-5 py-3 text-left font-semibold">Price</th>
+                <th className="px-5 py-3 text-left font-semibold">Weekly limit</th>
+                <th className="px-5 py-3 text-left font-semibold">Status</th>
+                <th className="px-5 py-3 text-right font-semibold">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {plans.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-5 py-8 text-center text-sm text-slate-500">No plans configured yet.</td>
+                </tr>
+              ) : (
+                plans.map((plan) => (
+                  <tr key={plan.id} className="border-b border-slate-100 align-middle last:border-0">
+                    <td className="px-5 py-4 align-middle">
+                      <div className="flex items-center gap-3">
+                        <span className="flex h-9 w-9 items-center justify-center rounded-full bg-brand-soft text-brand-primary"><Sparkles size={16} /></span>
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-slate-900">{plan.name}</p>
+                          <p className="text-xs text-slate-500">Created {formatDate(plan.createdAt)}</p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-5 py-4 align-middle text-sm font-semibold capitalize text-slate-800">{plan.type}</td>
+                    <td className="px-5 py-4 align-middle text-sm font-semibold text-slate-800">{money(plan.price)}</td>
+                    <td className="px-5 py-4 align-middle text-sm font-semibold text-slate-800">{plan.weeklyLimit} clothes</td>
+                    <td className="px-5 py-4 align-middle">
+                      <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${plan.active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+                        {plan.active ? <CheckCircle2 size={12} /> : <ToggleLeft size={12} />}
+                        {plan.active ? 'Active' : 'Inactive'}
+                      </span>
+                    </td>
+                    <td className="px-5 py-4 align-middle">
+                      <fetcher.Form method="post" className="flex items-center justify-end gap-3">
+                        <input type="hidden" name="intent" value="toggle" />
+                        <input type="hidden" name="id" value={plan.id} />
+                        <button type="submit" disabled={fetcher.state !== 'idle'} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-brand-primary hover:text-brand-primary disabled:cursor-not-allowed disabled:opacity-60">
+                          {fetcher.state !== 'idle' ? <Loader2 size={14} className="animate-spin" /> : plan.active ? <ToggleLeft size={14} /> : <ToggleRight size={14} />}
+                          {plan.active ? 'Deactivate' : 'Activate'}
+                        </button>
+                      </fetcher.Form>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  )
+}

@@ -19,7 +19,6 @@ export default [
   ...prefix('logistics', [
     layout('portals/logistics/LogisticsLayout.tsx', [
       index('portals/logistics/pages/Home.tsx'),
-      route('delivery', 'portals/logistics/pages/Delivery.tsx', { id: 'logistics-delivery' }),
     ]),
     route('login', 'portals/logistics/pages/Login.tsx'),
     route('verify-otp', 'portals/logistics/pages/VerifyOtp.tsx'),
@@ -39,6 +38,16 @@ export default [
   ...prefix('admin', [
     layout('portals/admin/AdminLayout.tsx', [
       index('portals/admin/pages/Home.tsx'),
+      route('orders', 'portals/admin/pages/Orders.tsx'),
+      route('categories', 'portals/admin/pages/Categories.tsx'),
+      route('pickup-locations', 'portals/admin/pages/PickupLocations.tsx'),
+      route('mismatches', 'portals/admin/pages/Mismatches.tsx'),
+      route('plans', 'portals/admin/pages/Plans.tsx'),
+      route('vendors', 'portals/admin/pages/Partners.tsx'),
+      route('partners/vendors', 'portals/admin/pages/Vendors.tsx'),
+      route('partners/logistics', 'portals/admin/pages/Logistics.tsx'),
+      route('users', 'portals/admin/pages/Users.tsx'),
+      route('users/:id', 'portals/admin/pages/UserDetails.tsx'),
     ]),
     route('login', 'portals/admin/pages/Login.tsx'),
     route('auth/callback', 'portals/customer/pages/AuthCallback.tsx', { id: 'admin-auth-callback' }),

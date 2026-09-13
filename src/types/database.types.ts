@@ -53,6 +53,14 @@ export interface LogisticsAgent {
   created_at: string
 }
 
+export interface ProfileRole {
+  id: string
+  profile_id: string
+  role: Exclude<UserRole, 'customer'>
+  status: PartnerStatus
+  created_at: string
+}
+
 export interface ClothCategory {
   id: string
   name: string
@@ -77,12 +85,21 @@ export interface PickupLocation {
   created_at: string
 }
 
+export interface AppSettings {
+  id: string
+  key: string
+  semester_start_date: string | null
+  semester_end_date: string | null
+  updated_at: string
+}
+
 export interface Plan {
   id: string
   name: string
   type: PlanType
   weekly_limit: number
   price: number
+  semester_start_date: string | null
   semester_end_date: string | null
   active: boolean
   created_at: string
@@ -218,6 +235,7 @@ export interface Database {
       profiles: TableDef<Profile>
       vendors: TableDef<Vendor>
       logistics_agents: TableDef<LogisticsAgent>
+      profile_roles: TableDef<ProfileRole>
       cloth_categories: TableDef<ClothCategory>
       cloth_category_rates: TableDef<ClothCategoryRate>
       pickup_locations: TableDef<PickupLocation>

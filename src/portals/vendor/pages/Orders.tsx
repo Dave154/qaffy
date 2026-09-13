@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { data, Link, useFetcher, useOutletContext } from 'react-router'
+import { data, Link, useOutletContext } from 'react-router'
 import { Search, SlidersHorizontal } from 'lucide-react'
 import { requireRole } from '../../../lib/auth.server'
 
@@ -69,16 +69,8 @@ function formatDate(value: string | null) {
   return value ? new Date(value).toLocaleString() : 'Not collected'
 }
 
-function serviceLabel(order: VendorOrder) {
-  const services = [...new Set(order.items.map((item) => item.service))]
-  return services.length === 1
-    ? { wash: 'Wash only', iron: 'Iron only', wash_iron: 'Wash + Iron' }[services[0]]
-    : 'Mixed service'
-}
-
 export default function Orders() {
   const { orders } = useOutletContext<VendorLayoutData>()
-  const fetcher = useFetcher<typeof action>()
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState('All')
 
@@ -86,13 +78,12 @@ export default function Orders() {
     ...order,
     label: statusLabels[order.status],
     customer: order.customer?.name ?? 'Customer',
-    customerId: order.customer?.qaffy_id ?? order.customer_id,
+    customerId: order.customer?.qaffy_id ?? 'QF unavailable',
     location: order.location?.name ?? 'Location pending',
-    service: serviceLabel(order),
   })), [orders])
 
   const filteredOrders = rows.filter((order) => {
-    const searchText = `${order.id} ${order.customer} ${order.customerId} ${order.location} ${order.service}`.toLowerCase()
+    const searchText = `${order.id} ${order.customer} ${order.customerId} ${order.location} ${orderTypeLabels[order.order_type]}`.toLowerCase()
     return searchText.includes(query.toLowerCase()) && (filter === 'All' || order.label === filter)
   })
 
@@ -139,41 +130,33 @@ export default function Orders() {
         </div>
 
         <div className="overflow-x-auto p-4 md:p-5">
-          <table className="w-full min-w-[1120px] table-fixed text-left">
+          <table className="w-full min-w-[1240px] table-fixed text-left">
             <thead>
               <tr className="border-b border-[#ededed] bg-[#f8f8f8] text-[10px] uppercase tracking-[0.12em] text-slate-500">
-                <th className="w-32 px-4 py-3 font-semibold">Picked up</th>
-                <th className="w-32 px-4 py-3 font-semibold">Created at</th>
-                <th className="w-28 px-4 py-3 font-semibold">Service</th>
-                <th className="w-48 px-4 py-3 font-semibold">Customer</th>
-                <th className="w-32 px-4 py-3 font-semibold">Pickup location</th>
+                <th className="w-40 px-4 py-3 font-semibold">Picked up</th>
+                <th className="w-40 px-4 py-3 font-semibold">Created at</th>
+                <th className="w-36 px-4 py-3 font-semibold">Order type</th>
+                <th className="w-56 px-4 py-3 font-semibold">Customer</th>
+                <th className="w-40 px-4 py-3 font-semibold">Customer ID</th>
+                <th className="w-40 px-4 py-3 font-semibold">Pickup location</th>
                 <th className="w-24 px-4 py-3 font-semibold">Items</th>
-                <th className="w-36 px-4 py-3 font-semibold">Status</th>
-                <th className="w-28 px-4 py-3 text-right font-semibold">Action</th>
+                <th className="w-40 px-4 py-3 font-semibold">Status</th>
+                <th className="w-32 px-4 py-3 text-right font-semibold">Action</th>
               </tr>
             </thead>
             <tbody>
               {filteredOrders.map((order) => (
                 <tr key={order.id} className="border-b border-[#f0f0f0] last:border-0">
-                  <td className="whitespace-nowrap px-4 py-4 text-sm text-slate-500">{formatDate(order.picked_up_date)}</td>
-                  <td className="whitespace-nowrap px-4 py-4 text-sm text-slate-500">{formatDate(order.created_at)}</td>
-                  <td className="px-4 py-4 text-sm text-slate-600">{orderTypeLabels[order.order_type]}</td>
-                  <td className="px-4 py-4"><p className="font-semibold text-slate-900">{order.customer}</p><p className="mt-1 text-xs text-slate-400">{order.customerId} · {order.id}</p></td>
-                  <td className="px-4 py-4 text-sm text-slate-600">{order.location}</td>
-                  <td className="px-4 py-4 text-sm text-slate-600">{order.clothes_count_customer}</td>
-                  <td className="px-4 py-4"><span className={`whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${statusStyle[order.label]}`}>{order.label}</span></td>
-                  <td className="px-4 py-4 text-right">
-                    {order.label === 'Pending claim' ? (
-                      <fetcher.Form method="post">
-                        <input type="hidden" name="intent" value="claim" />
-                        <input type="hidden" name="orderId" value={order.id} />
-                        <button type="submit" disabled={fetcher.state !== 'idle'} className="rounded-[7px] bg-brand-primary px-3 py-2 text-xs font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50">
-                          {fetcher.state !== 'idle' ? 'Claiming...' : 'Claim'}
-                        </button>
-                      </fetcher.Form>
-                    ) : (
-                      <Link to={`/vendor?orderId=${encodeURIComponent(order.id)}`} className="rounded-[7px] border border-[#dedede] px-3 py-2 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary">Review</Link>
-                    )}
+                  <td className="max-w-40 truncate whitespace-nowrap px-4 py-4 text-sm text-slate-500" title={formatDate(order.picked_up_date)}>{formatDate(order.picked_up_date)}</td>
+                  <td className="max-w-40 truncate whitespace-nowrap px-4 py-4 text-sm text-slate-500" title={formatDate(order.created_at)}>{formatDate(order.created_at)}</td>
+                  <td className="max-w-36 truncate whitespace-nowrap px-4 py-4 text-sm text-slate-600" title={orderTypeLabels[order.order_type]}>{orderTypeLabels[order.order_type]}</td>
+                  <td className="max-w-56 truncate whitespace-nowrap px-4 py-4 text-sm font-semibold text-slate-900" title={order.customer}>{order.customer}</td>
+                  <td className="max-w-40 truncate whitespace-nowrap px-4 py-4 text-sm text-slate-600" title={order.customerId}>{order.customerId}</td>
+                  <td className="max-w-40 truncate whitespace-nowrap px-4 py-4 text-sm text-slate-600" title={order.location}>{order.location}</td>
+                  <td className="whitespace-nowrap px-4 py-4 text-sm text-slate-600">{order.clothes_count_customer}</td>
+                  <td className="px-4 py-4"><span className={`inline-flex whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${statusStyle[order.label]}`}>{order.label}</span></td>
+                  <td className="whitespace-nowrap px-4 py-4 text-right">
+                    <Link to={`/vendor?orderId=${encodeURIComponent(order.id)}&returnTo=orders`} className="rounded-[7px] border border-[#dedede] px-3 py-2 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary">View details</Link>
                   </td>
                 </tr>
               ))}

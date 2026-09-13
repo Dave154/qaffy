@@ -17,8 +17,8 @@ export default function Login() {
       if (!supabase) return
       const { data: userData } = await supabase.auth.getUser()
       if (!userData.user) return
-      const { data: agent } = await supabase.from('logistics_agents').select('id').eq('profile_id', userData.user.id).eq('status', 'approved').maybeSingle()
-      if (agent) navigate('/logistics', { replace: true })
+      const { data: role } = await supabase.from('profile_roles').select('role').eq('profile_id', userData.user.id).eq('role', 'logistics').eq('status', 'approved').maybeSingle()
+      if (role) navigate('/logistics', { replace: true })
     }
 
     void redirectExistingLogistics()

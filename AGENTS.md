@@ -353,3 +353,126 @@ Before updating UI components, verify:
 - **Created**: 2026-09-11
 - **Analysis Source**: Screen Recording 2026-09-05 222827.mp4 (19:39-22:00)
 - **Next Review**: After Phase 1 completion
+
+---
+
+## Part 11: Current Implementation Handoff
+
+**Read this section first when continuing work in a new chat.** It describes the current codebase state as of 2026-09-13. Preserve existing user changes and inspect the relevant files before editing.
+
+### Technology and Structure
+
+- React + TypeScript + Vite + React Router
+- Supabase authentication, database, and SQL migrations
+- The app is a single SPA with customer, logistics, vendor, and admin portals.
+- Important source areas are under `src/portals/<portal>/`, shared code is under `src/components/` and `src/lib/`, and database migrations are under `supabase/migrations/`.
+- Use `npm run typecheck` and `npm run build` for validation. `npm run lint` is also available.
+
+### Completed Work
+
+#### Additive roles
+
+- Users can have multiple portal roles at the same time. A person may be a customer, vendor, logistics user, and admin in any combination.
+- Role assignments are stored in `public.profile_roles`.
+- Legacy vendor/logistics tables remain supported for compatibility.
+- Role gating in `src/lib/auth.server.ts` and callback access checks use additive role detection rather than one exclusive profile role.
+- The migration is `supabase/migrations/20260912100000_partner_access_roles.sql`.
+
+#### Logistics workflow
+
+- Pickup and delivery are tabs on one logistics page, controlled by local state in `src/portals/logistics/LogisticsLayout.tsx`.
+- The separate `/logistics/delivery` route was removed from `src/routes.ts`.
+- Picked-up orders appear under search.
+- The confirm-pickup button was removed.
+- After a successful pickup, the OTP input is cleared.
+- The logistics pickup/delivery action validates the intent, requires logistics access when Supabase is configured, and uses separate pickup/delivery OTP error messages.
+- The duplicate pickup SQL statement was removed; do not reintroduce a second `update orders` in the pickup branch.
+
+#### Customer overview and orders
+
+- Recent orders are at the top of the customer home page, above Quick access, using the same visual treatment as the Orders page.
+- Overview summary cards and the New order card were removed.
+- Order cards show one status badge with status-specific colors.
+- OTP is shown instead of price when appropriate. Pickup OTP is hidden after pickup; delivery OTP is shown only when applicable.
+- The customer Orders page has no export action or Spend metric.
+- Orders use row layout, the filter tabs stay on one line, the scrollbar is hidden, and tabs have an active dot plus underline indicator.
+- Use “Delivered” rather than “Completed” in customer-facing order filters/labels.
+
+#### Vendor orders
+
+- The vendor Orders table has responsive spacing and truncation to prevent column collisions.
+- Customer identifiers should use the customer Qaffy ID, formatted as `QF-XXXX` where available, rather than exposing a raw UUID.
+
+#### Authentication callback
+
+- First-time customer authentication may create the missing `profiles` row during `AuthCallback`.
+- Vendor, logistics, and admin callbacks still require an approved matching role assignment, with the existing admin legacy-role fallback.
+
+### Important Existing Conventions
+
+- Pickup and delivery OTPs are exactly four numeric digits.
+- Do not expose pickup OTP after an order has been picked up.
+- Use `profile_roles` for new role checks; do not reintroduce exclusive-role logic.
+- Keep same-page logistics tab switching local so changing tabs does not trigger a route loader or page transition.
+- Preserve the current customer order badge and tab styling when making adjacent UI changes.
+
+### Current Validation State
+
+- `npm run typecheck` passed.
+- `npm run build` passed.
+- The recently edited logistics action and customer callback have no typecheck errors.
+- `npm run lint` still reports one unrelated existing `react-hooks/set-state-in-effect` error in `src/components/RouteLoadingScreen.tsx`.
+
+### Next Required Actions
+
+1. Apply `supabase/migrations/20260912100000_partner_access_roles.sql` to the deployed Supabase project. The local repository has the migration, but the live database must be linked and migrated before relying on multi-role access in production. The Supabase CLI is not currently installed locally.
+2. Run a live smoke test with real data: sign in with multiple roles, switch logistics Pickup/Delivery tabs, search picked-up orders, verify OTP visibility and clearing, inspect customer Home/Orders, and check the responsive vendor Orders table.
+3. Implement the next operational priority: delivery verification, including item-by-item QA and the final delivery status transition.
+4. After that, prioritize payment settlement/payouts and revenue reporting, followed by admin user management, messaging, wallet/credits, and historical archive views.
+
+### Suggested Continuation Workflow
+
+- Start by checking `git status --short` so existing user work is not overwritten.
+- Read the owning component and its neighboring route/store before editing.
+- Make the smallest focused change, then run the narrowest available validation immediately.
+- Finish with `npm run typecheck` and `npm run build` when source code changes are made.
+- Do not commit changes unless the user explicitly requests a commit.
+
+---
+
+## Part 12: Admin Implementation Plan and Confirmed Product Decisions
+
+**Read [ADMIN_PLAN.md](ADMIN_PLAN.md) before implementing the admin portal.** This is the current source of truth for admin screens, schema sequencing, and finance constraints.
+
+### Confirmed Business Rules
+
+- Vendor claims are exclusive. Once claimed, an order cannot be claimed by another vendor.
+- Vendor payout-rate rules, partial settlement payment, and settlement adjustment rules are not decided. Do not invent them.
+- Settlement reversal is most likely not allowed and must not be implemented without explicit approval.
+- Customer billing is finalized after vendor confirmation. Over-counts and under-counts change the customer amount due and the customer is billed accordingly.
+- Customer payments are Paystack transactions that top up the wallet, not Paystack virtual accounts.
+- Refunds are not currently a feature. Exceptional refunds are handled manually by an admin.
+- Subscription orders are included in vendor settlement calculations.
+- Extra clothes are billed to the customer; vendors use the normal review flow based on the final paid item count.
+- Paid and settled orders cannot be edited.
+
+### Admin Build Order
+
+1. Real Admin Overview and Admin Orders **(implemented 2026-09-13)**
+2. Vendor/logistics approvals and customer management
+3. Categories, rates, and pickup locations
+4. Mismatch review and resolution
+5. Vendor ownership and finance/settlement reporting
+6. Plans/subscriptions, referrals, audit log, and granular permissions
+
+### Schema Priorities
+
+Before production assignment or settlement work, add vendor ownership to orders. Then add admin audit events, mismatch resolution fields, settlement payment metadata, and any subscription lifecycle metadata required by the approved payment model. Keep wallet changes inside the trusted wallet service and append-only transaction ledger.
+
+### Admin Phase 1 Implementation State
+
+- `src/portals/admin/pages/Home.tsx` now loads live dashboard metrics, seven-day order/revenue analytics, order pipeline counts, plan subscriber mix, and recent activity.
+- `src/portals/admin/pages/Orders.tsx` is registered at `/admin/orders` and loads live orders with customer, location, item, and invoice data.
+- Admin Orders supports search, status filtering, truncated responsive table rows, and a read-only detail modal.
+- Admin sidebar paths were corrected to `/admin/*`.
+- No financial mutation actions or settlement assumptions were added. Continue with vendor/logistics approvals and customer management next.

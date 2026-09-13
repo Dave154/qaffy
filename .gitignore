@@ -10,6 +10,12 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+build
+.react-router
+.vercel
+coverage
+playwright-report
+test-results
 *.local
 
 # Environment variables

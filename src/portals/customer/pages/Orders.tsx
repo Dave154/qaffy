@@ -46,27 +46,16 @@ export default function Orders() {
 
   const filteredOrders = orders.filter((order) => {
     if (activeFilter === 'Active') return order.status !== 'Delivered'
-    if (activeFilter === 'Completed') return order.status === 'Delivered'
+    if (activeFilter === 'Delivered') return order.status === 'Delivered'
     if (activeFilter === 'Pending payment') return order.paymentStatus === 'Pending'
     return true
   })
-
-  const exportOrders = () => {
-    const rows = [['Order', 'Status', 'Total', 'Date'], ...filteredOrders.map((order) => [order.id, order.status, String(order.total), order.date])]
-    const csv = rows.map((row) => row.map((value) => `"${value.replaceAll('"', '""')}"`).join(',')).join('\n')
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
-    const link = document.createElement('a')
-    link.href = url
-    link.download = 'qaffy-orders.csv'
-    link.click()
-    URL.revokeObjectURL(url)
-  }
 
   const stats = [
     { label: 'Total orders', value: String(orders.length), helper: 'In your history' },
     { label: 'Active', value: String(orders.filter((order) => order.status !== 'Delivered').length).padStart(2, '0'), helper: 'In progress' },
     { label: 'Delivered', value: String(orders.filter((order) => order.status === 'Delivered').length), helper: 'Completed' },
-    { label: 'Spend', value: `₦${orders.reduce((total, order) => total + order.total, 0).toLocaleString()}`, helper: 'Across all orders' },
+    // { label: 'Spend', value: `₦${orders.reduce((total, order) => total + order.total, 0).toLocaleString()}`, helper: 'Across all orders' },
   ]
 
   return (
@@ -90,53 +79,45 @@ export default function Orders() {
         ))}
       </section>
 
-      <section className="rounded-2xl border border-[#e7e7e7] bg-white p-3 sm:p-4">
-        <div className="flex flex-wrap gap-2">
-          {['All orders', 'Active', 'Completed', 'Pending payment'].map((filter) => (
-            <button
-              key={filter}
-              type="button"
-              onClick={() => setActiveFilter(filter)}
-              className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-                activeFilter === filter
-                  ? 'bg-brand-soft text-brand-primary ring-1 ring-brand-border'
-                  : 'bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-900'
-              }`}
-            >
-              {filter}
-            </button>
-          ))}
-        </div>
-      </section>
-
       <section className="rounded-2xl border border-[#e7e7e7] bg-white p-4 sm:p-5">
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <div>
-            <h3 className="text-lg font-bold text-slate-900">Recent orders</h3>
-            <p className="mt-1 text-sm text-slate-500">Track pickup, delivery, and payment status</p>
+        <div className="mb-4 flex flex-col gap-3 border-b border-slate-100 pb-4">
+          <div className="scrollbar-hidden flex flex-nowrap gap-2 overflow-x-auto pb-1">
+            {['All orders', 'Active', 'Delivered', 'Pending payment'].map((filter) => (
+              <button
+                key={filter}
+                type="button"
+                onClick={() => setActiveFilter(filter)}
+                aria-pressed={activeFilter === filter}
+                className={`inline-flex shrink-0 items-center gap-2 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium transition ${
+                  activeFilter === filter
+                    ? 'border-brand-primary text-brand-primary'
+                    : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-900'
+                }`}
+              >
+                {activeFilter === filter && <span className="h-1.5 w-1.5 rounded-full bg-brand-primary" aria-hidden="true" />}
+                {filter}
+              </button>
+            ))}
           </div>
-          <button type="button" onClick={exportOrders} className="text-sm font-medium text-brand-primary">Export</button>
         </div>
 
         <div className="space-y-3">
           {filteredOrders.map((order) => (
             <article key={order.id} className="border-b border-[#eeeeee] bg-white p-4 last:border-b-0">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                <div>
-                  <div className="flex items-center gap-2">
+              <div className="flex flex-row flex-wrap items-start gap-4">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
                     <p className="text-lg font-semibold text-slate-900"><CopyableOrderId id={order.id} /></p>
-                    <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${order.statusTone}`}>
+                    <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold ${order.statusTone}`}>
+                      <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" aria-hidden="true" />
                       {order.status}
-                    </span>
-                    <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${order.paymentStatus === 'Paid' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
-                      Payment: {order.paymentStatus}
                     </span>
                   </div>
                   <p className="mt-2 text-sm font-medium text-slate-700">{order.title}</p>
                   <p className="mt-1 text-xs text-slate-500">{order.date}</p>
                 </div>
 
-                <div className="text-left sm:text-right">
+                <div className="ml-auto shrink-0 text-right">
                   {order.status === 'Awaiting pickup' ? (
                     <div className="flex flex-col items-start sm:items-end">
                       <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-primary">Pickup OTP</p>
@@ -153,7 +134,7 @@ export default function Orders() {
                 </div>
               </div>
 
-              <div className="mt-4 flex flex-col gap-3 border-t border-slate-200 pt-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="mt-4 flex flex-row flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-3">
                 <p className="text-sm text-slate-600">{order.pickup}</p>
                 <button
                   type="button"

@@ -1,4 +1,5 @@
-import { NavLink, Outlet, data, useLoaderData, useNavigate } from 'react-router'
+import { Outlet, data, useLoaderData, useNavigate } from 'react-router'
+import { useState } from 'react'
 import type { Route } from './+types/LogisticsLayout'
 import QaffyLogo from '../../components/QaffyLogo'
 import { requireRole } from '../../lib/auth.server'
@@ -49,6 +50,7 @@ export async function loader({ request }: Route.LoaderArgs) {
 export default function LogisticsLayout() {
   const loaderData = useLoaderData<typeof loader>()
   const navigate = useNavigate()
+  const [activeTab, setActiveTab] = useState<'pickup' | 'delivery'>('pickup')
   const handleLogout = async () => {
     if (supabase) await supabase.auth.signOut()
     navigate('/logistics/login', { replace: true })
@@ -65,23 +67,20 @@ export default function LogisticsLayout() {
 
           <div className="rounded-full border border-brand-border bg-brand-soft p-1 shadow-sm">
             <div className="flex gap-1">
-              <NavLink
-                to="/logistics"
-                end
-                className={({ isActive }) =>
-                  `rounded-full px-3 py-1.5 text-sm font-medium transition ${isActive ? 'bg-brand-primary text-white shadow-sm' : 'text-slate-600 hover:text-brand-primary'}`
-                }
+              <button
+                type="button"
+                onClick={() => setActiveTab('pickup')}
+                className={`rounded-full px-3 py-1.5 text-sm font-medium transition ${activeTab === 'pickup' ? 'bg-brand-primary text-white shadow-sm' : 'text-slate-600 hover:text-brand-primary'}`}
               >
                 Pickup
-              </NavLink>
-              <NavLink
-                to="/logistics/delivery"
-                className={({ isActive }) =>
-                  `rounded-full px-3 py-1.5 text-sm font-medium transition ${isActive ? 'bg-brand-primary text-white shadow-sm' : 'text-slate-600 hover:text-brand-primary'}`
-                }
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('delivery')}
+                className={`rounded-full px-3 py-1.5 text-sm font-medium transition ${activeTab === 'delivery' ? 'bg-brand-primary text-white shadow-sm' : 'text-slate-600 hover:text-brand-primary'}`}
               >
                 Delivery
-              </NavLink>
+              </button>
             </div>
           </div>
           <button type="button" onClick={() => void handleLogout()} className="text-sm font-semibold text-slate-600 hover:text-brand-primary">Log out</button>
@@ -89,7 +88,7 @@ export default function LogisticsLayout() {
       </header>
 
       <main className="mx-auto max-w-5xl p-4 md:p-6">
-        <Outlet context={loaderData} />
+        <Outlet context={{ ...loaderData, activeTab, setActiveTab }} />
       </main>
     </div>
   )

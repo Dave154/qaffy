@@ -26,19 +26,15 @@ export async function requireRole(request: Request, role: UserRole | UserRole[])
     .maybeSingle()
 
   const allowedRoles = Array.isArray(role) ? role : [role]
-  const [vendorAccess, logisticsAccess] = await Promise.all([
-    allowedRoles.includes('vendor')
-      ? supabase.from('vendors').select('id').eq('profile_id', userData.user.id).eq('status', 'approved').maybeSingle()
-      : Promise.resolve({ data: null }),
-    allowedRoles.includes('logistics')
-      ? supabase.from('logistics_agents').select('id').eq('profile_id', userData.user.id).eq('status', 'approved').maybeSingle()
-      : Promise.resolve({ data: null }),
-  ])
+  const { data: roleAssignments } = await supabase
+    .from('profile_roles')
+    .select('role')
+    .eq('profile_id', userData.user.id)
+    .eq('status', 'approved')
+  const assignedRoles = new Set((roleAssignments ?? []).map((assignment) => assignment.role))
   const hasAllowedRole = allowedRoles.some((allowedRole) => (
     allowedRole === 'customer' && Boolean(profile)
-    || allowedRole === 'admin' && profile?.role === 'admin'
-    || allowedRole === 'vendor' && Boolean(vendorAccess.data)
-    || allowedRole === 'logistics' && Boolean(logisticsAccess.data)
+    || allowedRole !== 'customer' && (assignedRoles.has(allowedRole) || allowedRole === 'admin' && profile?.role === 'admin')
   ))
 
   if (!profile || !hasAllowedRole) {

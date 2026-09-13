@@ -137,9 +137,15 @@ export async function action({ request }: Route.ActionArgs) {
     return data({ ok: false, message: 'You already have an active subscription.' }, { status: 409, headers })
   }
 
+  const { data: semesterSettings } = await serverSupabase
+    .from('app_settings' as any)
+    .select('semester_end_date')
+    .eq('key', 'semester')
+    .maybeSingle() as { data: { semester_end_date: string | null } | null }
+
   const startDate = new Date()
   const endDate = selectedPlan.billingPeriod === 'semester'
-    ? plan.semester_end_date ?? new Date(startDate.getFullYear(), startDate.getMonth() + 6, startDate.getDate()).toISOString().slice(0, 10)
+    ? semesterSettings?.semester_end_date ?? plan.semester_end_date ?? new Date(startDate.getFullYear(), startDate.getMonth() + 6, startDate.getDate()).toISOString().slice(0, 10)
     : new Date(startDate.getFullYear(), startDate.getMonth() + 1, startDate.getDate()).toISOString().slice(0, 10)
 
   const { error: insertError } = await serverSupabase

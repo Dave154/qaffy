@@ -141,6 +141,25 @@ export async function debitOneOffInvoice(customerId: string, invoiceId: string) 
   })
 }
 
+/** Applies an admin-approved wallet adjustment without allowing direct client balance writes. */
+export async function adjustWallet(customerId: string, balanceType: WalletBalanceType, amount: number) {
+  if (!Number.isFinite(amount) || amount === 0) throw new Error('Adjustment amount must be non-zero')
+  return sql.begin(async (tx) => {
+    await tx`insert into wallets (customer_id) values (${customerId}) on conflict (customer_id) do nothing`
+    const balanceColumn = balanceType === 'one_off' ? 'one_off_balance' : 'subscription_balance'
+    const [wallet] = await tx`select * from wallets where customer_id = ${customerId} for update`
+    const currentBalance = Number(wallet?.[balanceColumn] ?? 0)
+    const newBalance = currentBalance + amount
+    if (balanceType === 'subscription' && newBalance < 0) throw new Error('Subscription balance cannot be below zero')
+    await tx`update wallets set ${tx({ [balanceColumn]: newBalance, updated_at: new Date() })} where customer_id = ${customerId}`
+    await tx`
+      insert into wallet_transactions (customer_id, balance_type, txn_type, amount, balance_after)
+      values (${customerId}, ${balanceType}, 'adjustment', ${amount}, ${newBalance})
+    `
+    return { balanceType, amount, newBalance }
+  })
+}
+
 /** Charges subscription excess from the customer's subscription balance. */
 export async function chargeSubscriptionInvoice(customerId: string, invoiceId: string) {
   return sql.begin(async (tx) => {

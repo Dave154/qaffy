@@ -36,8 +36,8 @@ export async function loader({ request }: Route.LoaderArgs) {
     .eq('id', userData.user.id)
     .maybeSingle()
 
-  if (!profile || profile.role === 'admin') {
-    throw redirect(profile?.role === 'admin' ? '/admin' : '/login', { headers })
+  if (!profile) {
+    throw redirect('/login', { headers })
   }
 
   const { data: orders } = await serverSupabase

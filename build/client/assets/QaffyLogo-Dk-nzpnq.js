@@ -1,1 +1,0 @@
-import{t as e}from"./jsx-runtime-DUCdH56i.js";var t=e();function n({className:e=``,light:n=!1}){return(0,t.jsx)(`div`,{className:e,"aria-label":`Qaffy logo`,children:(0,t.jsx)(`h1`,{className:`text-4xl leading-[33px] ${n?`text-white`:`text-brand-primary`}`,style:{fontFamily:`Pacifico, cursive`},children:`Qaffy`})})}export{n as t};
