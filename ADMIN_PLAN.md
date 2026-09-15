@@ -22,18 +22,24 @@ Read this before implementing the admin portal. Confirmed product decisions are 
 ## Current Admin State
 
 - Admin authentication and `requireRole(request, 'admin')` exist.
-- `src/portals/admin/AdminLayout.tsx` has navigation only.
+- `src/portals/admin/AdminLayout.tsx` has a working sidebar and navigation for the implemented admin screens.
 - `src/portals/admin/pages/Home.tsx` loads live overview analytics and chart data.
-- Only the admin index route is currently registered in `src/routes.ts`; navigation links for other screens are placeholders.
-- Existing data tables include profiles, profile_roles, vendors, logistics_agents, orders, order_items, mismatches, invoices, payments, wallets, wallet_transactions, plans, subscriptions, cloth_categories, cloth_category_rates, pickup_locations, vendor_settlements, vendor_settlement_orders, referrals, and order_logistics_events.
+- The admin routes in `src/routes.ts` include overview, orders, finance, categories, pickup locations, mismatches, plans, partners, and user screens.
+- The codebase includes working data tables and screens for profiles, profile_roles, vendors, logistics_agents, orders, order_items, mismatches, invoices, payments, wallet tooling, plans, subscriptions, cloth_categories, cloth_category_rates, pickup_locations, vendor_settlements, vendor_settlement_orders, referrals, and order_logistics_events.
+- Admin functionality already implemented in code includes overview, partner management, categories/rates, mismatch review, finance summaries, and plan configuration.
 
 ### Phase 1 Progress
 
 - Admin Overview now loads live order, customer, vendor, logistics, invoice, subscription, and plan data.
 - Admin Overview now includes live seven-day order/revenue charts, pipeline bars, subscriber mix, KPI cards, and recent activity.
 - Admin Orders is registered at `/admin/orders` with live rows, search, status filtering, truncation, payment/status badges, and a read-only order detail modal.
+- Admin Partners now supports vendor and logistics onboarding, approval, suspension, rejection, and deletion flows.
+- Admin Categories and Rates now supports category creation, updates, activation, archival-safe deletion behavior, and customer/vendor pricing controls.
+- Admin Mismatch Review is in place and supports unresolved mismatch filtering and resolution.
+- Admin Finance loads live payout summaries and settlement creation data from live orders and rates.
+- Admin Plans supports plan edits and semester configuration settings.
 - Admin sidebar links now use `/admin/*` paths instead of leaving the admin portal.
-- Paid/settled immutability and vendor ownership/settlement workflows remain future work; no admin mutation actions were added in this slice.
+- Delivery verification, final settlement workflow maturity, and wallet/messaging/archive layers remain future work.
 
 ## Navigation and Screens
 
@@ -169,36 +175,37 @@ Never add a direct mutable wallet-balance admin path. Use the trusted wallet ser
 
 ### Phase 1: Real Admin Overview and Orders
 
-- Register admin routes and loaders/actions.
-- Replace hardcoded overview metrics with Supabase data.
-- Build shared table, search, date filter, status filter, empty, loading, and detail-modal patterns.
-- Build read-only/controlled order details.
-- Link overview metrics to filtered Orders.
-- Enforce paid-and-settled immutability in server actions.
+Complete.
+- Admin routes and loaders/actions are registered and active.
+- Overview metrics are loaded from Supabase data.
+- Shared table, search, filters, empty/loading states, and detail-modal patterns are implemented.
+- Order detail views are active.
+- Overview metrics are linked to filtered admin screens.
+- Paid-and-settled immutability rules remain an ongoing enforcement point for future workflows.
 
 ### Phase 2: Operational Administration
 
-- Vendor and logistics approvals.
-- Customer/user management.
-- Categories and rates.
-- Pickup locations.
-- Mismatch review and resolution.
+Mostly complete for core operational screens.
+- Vendor and logistics approvals are implemented in the partner management flow.
+- Customer/user management screens are present.
+- Categories and rates are implemented.
+- Pickup locations are implemented.
+- Mismatch review and resolution are implemented.
 
 ### Phase 3: Finance
 
-- Revenue reporting.
-- Invoice/payment views.
-- Vendor ownership and settlement generation.
-- Settlement review and payment metadata.
-- Manual wallet adjustment workflow.
+Partially implemented.
+- Revenue and payout summary views are active.
+- Invoice/payment and settlement summary data are being surfaced.
+- Vendor ownership and settlement generation are partially modeled, but product-level payout logic and broader financial workflows remain future work.
+- Manual wallet adjustment workflow still needs full validation against the approved wallet service rules.
 
 ### Phase 4: Governance and Subscriptions
 
-- Plan management and subscription lifecycle.
-- Semester expiry handling.
-- Referral administration.
-- Audit log UI.
-- Granular permissions.
+Partially implemented.
+- Plan management and semester settings are in place.
+- Referral and audit governance screens remain future work.
+- Granular permissions are not yet implemented.
 
 ## Unresolved Product Questions
 

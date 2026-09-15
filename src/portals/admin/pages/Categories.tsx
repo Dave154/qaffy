@@ -378,29 +378,81 @@ export default function Categories() {
       </section>
 
       {editingCategory && (
-        <div className="fixed inset-0 z-40 flex items-end justify-center bg-slate-950/40 p-0 sm:items-center sm:p-4">
-          <div className="w-full max-w-2xl rounded-t-3xl bg-white p-5 shadow-2xl sm:rounded-3xl sm:p-7">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h3 className="mt-2 text-2xl font-bold text-slate-900">Edit category</h3>
-              </div>
-              <button type="button" onClick={() => setEditingCategory(null)} aria-label="Close category editor" className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 text-xl text-slate-400">×</button>
+        <>
+          <div className="fixed inset-0 z-40 bg-slate-950/35" onClick={() => setEditingCategory(null)} />
+          <button type="button" onClick={() => setEditingCategory(null)} aria-label="Close category editor" className="absolute top-4 flex h-9 w-9 items-center justify-center rounded-full bg-white text-slate-500 shadow-md transition hover:text-slate-900" style={{ right: 'min(572px, calc(100vw - 36px))', zIndex: 55 }}><X size={17} /></button>
+          <section className="fixed inset-y-0 right-0 z-50 w-[calc(100vw-48px)] max-w-[560px] overflow-y-auto border-l border-slate-200 bg-white shadow-2xl">
+            <div className="border-b border-slate-100 px-6 py-5 sm:px-7">
+              <h3 className="text-xl font-bold text-slate-900">Edit category</h3>
+              <p className="mt-1 text-sm text-slate-500">Update the category name and pricing for customer charges and vendor payouts.</p>
             </div>
-            <fetcher.Form method="post" className="mt-6 grid gap-4 sm:grid-cols-2">
+            <fetcher.Form method="post" className="flex min-h-[calc(100vh-81px)] flex-col px-6 py-6 sm:px-8">
               <input type="hidden" name="intent" value="update" />
               <input type="hidden" name="id" value={editingCategory.id} />
-              <label className="sm:col-span-2"><span className="mb-2.5 block text-xs font-semibold capitalize text-slate-500">Category</span><input name="name" defaultValue={editingCategory.name} required className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" /></label>
-              <label><span className="mb-2.5 block text-xs font-semibold capitalize text-slate-500">Wash</span><input type="number" min="0" step="50" name="washPrice" defaultValue={editingCategory.washPrice} className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" /></label>
-              <label><span className="mb-2.5 block text-xs font-semibold capitalize text-slate-500">Iron</span><input type="number" min="0" step="50" name="ironPrice" defaultValue={editingCategory.ironPrice} className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" /></label>
-              <label><span className="mb-2.5 block text-xs font-semibold capitalize text-slate-500">Wash + Iron</span><input type="number" min="0" step="50" name="washIronPrice" defaultValue={editingCategory.washIronPrice} className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" /></label>
-              <label><span className="mb-2 block text-xs font-semibold capitalize text-emerald-700">Wash</span><input type="number" min="0" step="50" name="vendorWashPrice" defaultValue={editingCategory.vendorWashPrice} className="h-11 w-full rounded-xl border border-emerald-100 px-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" /></label>
-              <label><span className="mb-2 block text-xs font-semibold capitalize text-emerald-700">Iron</span><input type="number" min="0" step="50" name="vendorIronPrice" defaultValue={editingCategory.vendorIronPrice} className="h-11 w-full rounded-xl border border-emerald-100 px-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" /></label>
-              <label><span className="mb-2 block text-xs font-semibold capitalize text-emerald-700">Wash + Iron</span><input type="number" min="0" step="50" name="vendorWashIronPrice" defaultValue={editingCategory.vendorWashIronPrice} className="h-11 w-full rounded-xl border border-emerald-100 px-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" /></label>
-              <label><span className="mb-2.5 block text-xs font-semibold capitalize text-slate-500">Weight</span><input type="number" min="1" step="1" name="subscriptionUnits" defaultValue={editingCategory.subscriptionUnits} className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" /></label>
-              <div className="flex justify-end gap-3 sm:col-span-2"><button type="button" onClick={() => setEditingCategory(null)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700">Cancel</button><button type="submit" disabled={fetcher.state !== 'idle'} className="inline-flex items-center gap-2 rounded-xl bg-brand-primary px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"><Save size={16} />Save changes</button></div>
+              <div className="space-y-6">
+                <label className="block min-w-0">
+                  <span className="mb-2.5 block text-xs font-semibold capitalize text-slate-500">Category</span>
+                  <input name="name" defaultValue={editingCategory.name} required className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" />
+                </label>
+
+                <div className="border-b border-slate-100 pb-3">
+                  <h4 className="text-sm font-bold text-slate-900">Customer charges</h4>
+                  <p className="mt-1 text-xs text-slate-500">What customers pay for each service.</p>
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="block min-w-0">
+                    <span className="mb-2.5 block text-xs font-semibold capitalize text-slate-500">Wash</span>
+                    <input type="number" min="0" step="50" name="washPrice" defaultValue={editingCategory.washPrice} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" />
+                  </label>
+                  <label className="block min-w-0">
+                    <span className="mb-2.5 block text-xs font-semibold capitalize text-slate-500">Iron</span>
+                    <input type="number" min="0" step="50" name="ironPrice" defaultValue={editingCategory.ironPrice} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" />
+                  </label>
+                  <label className="block min-w-0 sm:col-span-2">
+                    <span className="mb-2.5 block text-xs font-semibold capitalize text-slate-500">Wash + Iron</span>
+                    <input type="number" min="0" step="50" name="washIronPrice" defaultValue={editingCategory.washIronPrice} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" />
+                  </label>
+                </div>
+
+                <div className="border-b border-slate-100 pb-3 pt-2">
+                  <h4 className="text-sm font-bold text-slate-900">Vendor payouts</h4>
+                  <p className="mt-1 text-xs text-slate-500">What vendors receive for each service.</p>
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="block min-w-0">
+                    <span className="mb-2 block text-xs font-semibold capitalize text-emerald-700">Wash</span>
+                    <input type="number" min="0" step="50" name="vendorWashPrice" defaultValue={editingCategory.vendorWashPrice} className="h-11 w-full rounded-xl border border-emerald-100 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" />
+                  </label>
+                  <label className="block min-w-0">
+                    <span className="mb-2 block text-xs font-semibold capitalize text-emerald-700">Iron</span>
+                    <input type="number" min="0" step="50" name="vendorIronPrice" defaultValue={editingCategory.vendorIronPrice} className="h-11 w-full rounded-xl border border-emerald-100 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" />
+                  </label>
+                  <label className="block min-w-0 sm:col-span-2">
+                    <span className="mb-2 block text-xs font-semibold capitalize text-emerald-700">Wash + Iron</span>
+                    <input type="number" min="0" step="50" name="vendorWashIronPrice" defaultValue={editingCategory.vendorWashIronPrice} className="h-11 w-full rounded-xl border border-emerald-100 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" />
+                  </label>
+                </div>
+
+                <label className="block min-w-0">
+                  <span className="mb-2.5 block text-xs font-semibold capitalize text-slate-500">Subscription weight</span>
+                  <input type="number" min="1" step="1" name="subscriptionUnits" defaultValue={editingCategory.subscriptionUnits} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" />
+                </label>
+              </div>
+
+              <div className="sticky bottom-0 mt-auto border-t border-slate-100 bg-white pt-6">
+                <div className="flex justify-end gap-3">
+                  <button type="button" onClick={() => setEditingCategory(null)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">Cancel</button>
+                  <button type="submit" disabled={fetcher.state !== 'idle'} className="inline-flex items-center gap-2 rounded-xl bg-brand-primary px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-70">
+                    {fetcher.state !== 'idle' ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                    {fetcher.state !== 'idle' ? 'Saving...' : 'Save changes'}
+                  </button>
+                </div>
+              </div>
             </fetcher.Form>
-          </div>
-        </div>
+          </section>
+        </>
       )}
 
       {deletingCategory && (

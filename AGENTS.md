@@ -402,6 +402,18 @@ Before updating UI components, verify:
 
 - The vendor Orders table has responsive spacing and truncation to prevent column collisions.
 - Customer identifiers should use the customer Qaffy ID, formatted as `QF-XXXX` where available, rather than exposing a raw UUID.
+- The vendor overview now loads live category rates from the database and the “Orders needing attention” queue defaults to real orders.
+
+#### Admin portal implementation
+
+- `src/portals/admin/pages/Home.tsx` loads live dashboard metrics, revenue, vendor/logistics counts, recent activity, and subscription analytics.
+- `src/portals/admin/pages/Orders.tsx` is routed at `/admin/orders` and supports search, filtering, and read-only detail views.
+- `src/portals/admin/pages/Partners.tsx` supports vendor and logistics partner creation, approval, rejection, suspension, and deletion flows.
+- `src/portals/admin/pages/Categories.tsx` manages category creation, updates, main-category designation, activation, and rate-card pricing for customer and vendor values.
+- `src/portals/admin/pages/Mismatches.tsx` provides mismatch review and resolution workflow with search and filtering.
+- `src/portals/admin/pages/Finance.tsx` loads live vendor settlement and payout summaries, finance totals, and settlement creation actions.
+- `src/portals/admin/pages/Plans.tsx` manages plan records and the semester configuration settings.
+- `src/routes.ts` registers the admin screens and their `/admin/*` routes.
 
 #### Authentication callback
 
@@ -455,6 +467,15 @@ Before updating UI components, verify:
 - Subscription orders are included in vendor settlement calculations.
 - Extra clothes are billed to the customer; vendors use the normal review flow based on the final paid item count.
 - Paid and settled orders cannot be edited.
+- The platform uses a post-paid flow: the customer may top up to the general wallet before final billing, and wallet funds are only consumed when the vendor confirms the final quantity.
+- Under-counts are auto-billed from the vendor-confirmed final count; no admin approval is required.
+- Over-counts are also billed from the vendor-confirmed final count, and the same invoice must clearly show the extra charge and reason in customer-readable detail.
+- The customer should only see mismatch information after the vendor confirms it.
+- If the wallet balance is insufficient after vendor confirmation, the order remains unpaid and shows as pending payment until the wallet is topped up.
+- Admin is not the billing decision-maker for mismatch math; they review mismatches for tracking, reference, and operational visibility only.
+- A subscription order is classified as a subscription order as a whole; subscription coverage is not allocated as separate payment decisions per item.
+- Subscription allowance covers the order first, and any excess is charged from the general wallet. If the general wallet cannot cover the excess, the entire order remains unpaid and delivery is blocked until the customer tops up.
+- Vendors enter bank name and account number in their dashboard; Paystack must verify and resolve the account before it can be used for payouts, and the vendor must confirm the resolved account name.
 
 ### Admin Build Order
 
@@ -474,5 +495,10 @@ Before production assignment or settlement work, add vendor ownership to orders.
 - `src/portals/admin/pages/Home.tsx` now loads live dashboard metrics, seven-day order/revenue analytics, order pipeline counts, plan subscriber mix, and recent activity.
 - `src/portals/admin/pages/Orders.tsx` is registered at `/admin/orders` and loads live orders with customer, location, item, and invoice data.
 - Admin Orders supports search, status filtering, truncated responsive table rows, and a read-only detail modal.
+- `src/portals/admin/pages/Partners.tsx` now supports vendor and logistics onboarding, approval/rejection/suspension, and removal flows.
+- `src/portals/admin/pages/Categories.tsx` supports category and rate-card management, including vendor and customer pricing fields.
+- `src/portals/admin/pages/Mismatches.tsx` supports mismatch review and resolution by order.
+- `src/portals/admin/pages/Finance.tsx` loads live payout/settlement summaries and supports settlement recording actions.
+- `src/portals/admin/pages/Plans.tsx` supports plan creation/editing and semester settings.
 - Admin sidebar paths were corrected to `/admin/*`.
-- No financial mutation actions or settlement assumptions were added. Continue with vendor/logistics approvals and customer management next.
+- Delivery verification and the final customer-facing payout workflow remain the next major operational gaps.

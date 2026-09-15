@@ -22,6 +22,7 @@ export default [
     ]),
     route('login', 'portals/logistics/pages/Login.tsx'),
     route('verify-otp', 'portals/logistics/pages/VerifyOtp.tsx'),
+    route('complete-profile', 'portals/logistics/pages/CompleteProfile.tsx'),
     route('auth/callback', 'portals/customer/pages/AuthCallback.tsx', { id: 'logistics-auth-callback' }),
   ]),
 
@@ -29,9 +30,11 @@ export default [
     layout('portals/vendor/VendorLayout.tsx', [
       index('portals/vendor/pages/Home.tsx'),
       route('orders', 'portals/vendor/pages/Orders.tsx'),
+      route('finance', 'portals/vendor/pages/Finance.tsx'),
       route('clearing-history', 'portals/vendor/pages/ClearingHistory.tsx'),
     ]),
     route('login', 'portals/vendor/pages/Login.tsx'),
+    route('complete-profile', 'portals/vendor/pages/CompleteProfile.tsx'),
     route('auth/callback', 'portals/customer/pages/AuthCallback.tsx', { id: 'vendor-auth-callback' }),
   ]),
 
@@ -39,11 +42,12 @@ export default [
     layout('portals/admin/AdminLayout.tsx', [
       index('portals/admin/pages/Home.tsx'),
       route('orders', 'portals/admin/pages/Orders.tsx'),
+      route('finance', 'portals/admin/pages/Finance.tsx'),
       route('categories', 'portals/admin/pages/Categories.tsx'),
       route('pickup-locations', 'portals/admin/pages/PickupLocations.tsx'),
       route('mismatches', 'portals/admin/pages/Mismatches.tsx'),
       route('plans', 'portals/admin/pages/Plans.tsx'),
-      route('vendors', 'portals/admin/pages/Partners.tsx'),
+      route('partners', 'portals/admin/pages/Partners.tsx'),
       route('partners/vendors', 'portals/admin/pages/Vendors.tsx'),
       route('partners/logistics', 'portals/admin/pages/Logistics.tsx'),
       route('users', 'portals/admin/pages/Users.tsx'),

@@ -53,6 +53,7 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
     try {
       await addOrder({ items, notes, pickupLocation })
       onClose()
+      window.location.reload()
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Order could not be saved. Please try again.')
     } finally {

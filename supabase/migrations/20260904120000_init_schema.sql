@@ -305,6 +305,8 @@ alter table public.referrals enable row level security;
 -- profiles: everyone can read/update their own row (role changes blocked by trigger); admin sees all
 create policy profiles_select on public.profiles
   for select using (auth.uid() = id or public.is_admin());
+create policy profiles_admin_write on public.profiles
+  for all using (public.is_admin()) with check (public.is_admin());
 create policy profiles_update on public.profiles
   for update using (auth.uid() = id or public.is_admin());
 

@@ -1,5 +1,5 @@
-import { Outlet, data, useLoaderData, useNavigate } from 'react-router'
-import { useState } from 'react'
+import { Outlet, data, useLoaderData, useNavigate, useRevalidator } from 'react-router'
+import { useEffect, useState } from 'react'
 import type { Route } from './+types/LogisticsLayout'
 import QaffyLogo from '../../components/QaffyLogo'
 import { requireRole } from '../../lib/auth.server'
@@ -50,7 +50,23 @@ export async function loader({ request }: Route.LoaderArgs) {
 export default function LogisticsLayout() {
   const loaderData = useLoaderData<typeof loader>()
   const navigate = useNavigate()
+  const revalidator = useRevalidator()
   const [activeTab, setActiveTab] = useState<'pickup' | 'delivery'>('pickup')
+
+  useEffect(() => {
+    const client = supabase
+    if (!client) return
+
+    const channel = client
+      .channel('logistics-order-feed')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => revalidator.revalidate())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_logistics_events' }, () => revalidator.revalidate())
+      .subscribe()
+
+    return () => {
+      void client.removeChannel(channel)
+    }
+  }, [revalidator])
   const handleLogout = async () => {
     if (supabase) await supabase.auth.signOut()
     navigate('/logistics/login', { replace: true })

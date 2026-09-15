@@ -162,6 +162,7 @@ export interface OrderItem {
   order_id: string
   category_id: string
   quantity: number
+  confirmed_quantity: number | null
   service: 'wash' | 'iron' | 'wash_iron'
   unit_price: number
 }

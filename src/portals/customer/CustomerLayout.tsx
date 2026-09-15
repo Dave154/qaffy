@@ -50,6 +50,9 @@ export async function loader({ request }: Route.LoaderArgs) {
   const { data: unpaidInvoices } = invoiceOrderIds.length > 0
     ? await serverSupabase.from('invoices').select('order_id').in('order_id', invoiceOrderIds).eq('status', 'unpaid')
     : { data: [] }
+  const { data: orderInvoices } = invoiceOrderIds.length > 0
+    ? await serverSupabase.from('invoices').select('order_id, amount').in('order_id', invoiceOrderIds)
+    : { data: [] }
 
   const { data: pickupLocations } = await serverSupabase
     .from('pickup_locations')
@@ -101,6 +104,21 @@ export async function loader({ request }: Route.LoaderArgs) {
     .limit(1)
     .maybeSingle()
 
+  const invoiceOrder = invoice ? (orders ?? []).find((order) => order.id === invoice.order_id) : null
+  const { data: invoiceMismatch } = invoice
+    ? await serverSupabase.from('mismatches').select('direction, detail').eq('order_id', invoice.order_id).order('created_at', { ascending: false }).limit(1).maybeSingle()
+    : { data: null }
+  const invoiceWithDetails = invoice
+    ? {
+        ...invoice,
+        original_count: invoiceOrder?.clothes_count_customer ?? null,
+        final_count: invoiceOrder?.clothes_count_vendor ?? null,
+        extra_amount: invoiceOrder?.billed_extra_amount ?? 0,
+        mismatch_direction: invoiceMismatch?.direction ?? null,
+        mismatch_detail: invoiceMismatch?.detail ?? null,
+      }
+    : null
+
   const { data: subscription } = await serverSupabase
     .from('subscriptions')
     .select('*')
@@ -119,12 +137,13 @@ export async function loader({ request }: Route.LoaderArgs) {
     profile,
     orders: orders ?? [],
     unpaidInvoiceOrderIds: (unpaidInvoices ?? []).map((invoice) => invoice.order_id),
+    invoiceAmountsByOrderId: Object.fromEntries((orderInvoices ?? []).map((invoice) => [invoice.order_id, Number(invoice.amount)])),
     pickupLocations: pickupLocations ?? [],
     orderItems: persistedOrderItems,
     subscriptionUsedUnits,
     wallet,
     walletTransactions: walletTransactions ?? [],
-    invoice,
+    invoice: invoiceWithDetails,
     subscription,
     subscriptionPlan,
   }, { headers })
@@ -173,6 +192,7 @@ export default function CustomerLayout() {
       profile={loaderData?.profile ?? undefined}
       persistedOrders={loaderData ? (loaderData.orders as Order[]) : undefined}
       persistedUnpaidInvoiceOrderIds={loaderData?.unpaidInvoiceOrderIds as string[] | undefined}
+      invoiceAmountsByOrderId={loaderData?.invoiceAmountsByOrderId as Record<string, number> | undefined}
       persistedPickupLocations={loaderData ? (loaderData.pickupLocations as PickupLocationOption[]) : undefined}
       persistedOrderItems={loaderData ? (loaderData.orderItems as PersistedOrderItem[]) : undefined}
       persistedSubscriptionUsedUnits={loaderData?.subscriptionUsedUnits as number | undefined}
@@ -219,8 +239,8 @@ export default function CustomerLayout() {
             <ClipboardList className="h-4 w-4" />
             <span>Activity log</span>
           </NavLink>
-          <button type="button" onClick={() => setLogoutConfirmationOpen(true)} className="flex h-10 w-full items-center gap-3 rounded-[10px] px-4 text-sm font-medium text-[#121212] hover:bg-[#fafafa]">
-            <LogOut className="h-4 w-4" />
+          <button type="button" onClick={() => setLogoutConfirmationOpen(true)} className="flex h-10 w-full items-center gap-3 rounded-[10px] px-4 text-sm font-medium text-red-600 hover:bg-red-50 hover:text-red-700">
+            <LogOut className="h-4 w-4 text-red-600" />
             <span>Log out</span>
           </button>
         </div>

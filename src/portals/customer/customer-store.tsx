@@ -4,7 +4,7 @@ import { toast } from '../../lib/toast'
 import { CustomerStoreContext } from './customer-store-context'
 import type { Invoice, Order, Plan, Subscription, Wallet, WalletTransaction } from '../../types/database.types'
 
-export type OrderStatus = 'Awaiting pickup' | 'Picked up' | 'In progress' | 'Ready for delivery' | 'Delivered'
+export type OrderStatus = 'Awaiting pickup' | 'Picked up' | 'In progress' | 'Pending payment' | 'Ready for delivery' | 'Delivered'
 export type OrderLine = {
   category: string
   service: string
@@ -44,6 +44,10 @@ export type CustomerInvoice = {
   total: number
   dueDate: string
   items: Array<{ label: string; quantity: string; amount: number }>
+  originalCount: number | null
+  finalCount: number | null
+  extraAmount: number
+  mismatch: { direction: 'over' | 'under'; detail: string } | null
 }
 
 export type CustomerOrder = {
@@ -115,7 +119,7 @@ function mapDatabaseTransaction(transaction: WalletTransaction): CustomerTransac
   }
 }
 
-function mapDatabaseInvoice(invoice: Invoice): CustomerInvoice {
+function mapDatabaseInvoice(invoice: Invoice & { original_count?: number | null; final_count?: number | null; extra_amount?: number | null; mismatch_direction?: 'over' | 'under' | null; mismatch_detail?: string | null }): CustomerInvoice {
   return {
     id: invoice.id,
     reference: `QF-${invoice.id.slice(0, 6).toUpperCase()}`,
@@ -123,17 +127,21 @@ function mapDatabaseInvoice(invoice: Invoice): CustomerInvoice {
     total: Number(invoice.amount),
     dueDate: invoice.paid_at ? new Date(invoice.paid_at).toLocaleDateString() : 'Due today',
     items: [
-      { label: 'Laundry service', quantity: '1 order', amount: Number(invoice.amount) },
+      { label: invoice.final_count !== null && invoice.final_count !== undefined ? 'Final laundry count' : 'Laundry service', quantity: invoice.final_count !== null && invoice.final_count !== undefined ? `${invoice.final_count} items` : '1 order', amount: Number(invoice.amount) },
     ],
+    originalCount: invoice.original_count ?? null,
+    finalCount: invoice.final_count ?? null,
+    extraAmount: Number(invoice.extra_amount ?? 0),
+    mismatch: invoice.mismatch_direction ? { direction: invoice.mismatch_direction, detail: invoice.mismatch_detail ?? 'Vendor confirmed a different item count.' } : null,
   }
 }
 
-function mapDatabaseOrder(order: Order, persistedItems: PersistedOrderItem[] = [], unpaidInvoiceOrderIds?: Set<string>): CustomerOrder {
+function mapDatabaseOrder(order: Order, persistedItems: PersistedOrderItem[] = [], unpaidInvoiceOrderIds?: Set<string>, invoiceAmountsByOrderId?: Record<string, number>): CustomerOrder {
   const statusMap: Record<Order['status'], CustomerOrder['status']> = {
     pending_pickup: 'Awaiting pickup',
     picked_up: 'Picked up',
     at_vendor: 'In progress',
-    invoiced: 'Ready for delivery',
+    invoiced: 'Pending payment',
     paid: 'Ready for delivery',
     out_for_delivery: 'Ready for delivery',
     delivered: 'Delivered',
@@ -150,7 +158,7 @@ function mapDatabaseOrder(order: Order, persistedItems: PersistedOrderItem[] = [
     pending_pickup: 'bg-amber-50 text-amber-700',
     picked_up: 'bg-sky-50 text-sky-700',
     at_vendor: 'bg-blue-50 text-blue-700',
-    invoiced: 'bg-emerald-50 text-emerald-700',
+    invoiced: 'bg-amber-50 text-amber-700',
     paid: 'bg-emerald-50 text-emerald-700',
     out_for_delivery: 'bg-teal-50 text-teal-700',
     delivered: 'bg-slate-100 text-slate-700',
@@ -165,7 +173,7 @@ function mapDatabaseOrder(order: Order, persistedItems: PersistedOrderItem[] = [
     statusTone: statusToneMap[order.status],
     date: new Date(order.created_at).toLocaleDateString(),
     pickup: order.status === 'pending_pickup' ? 'Pickup pending' : 'Pickup confirmed',
-    total: order.billed_extra_amount ?? 0,
+    total: invoiceAmountsByOrderId?.[order.id] ?? order.billed_extra_amount ?? 0,
     items: order.clothes_count_customer,
     action: 'View details',
     pickupOtp: order.pickup_otp ?? '',
@@ -196,7 +204,8 @@ type CustomerStoreProviderProps = {
   persistedWallet?: Wallet | null
   persistedWalletTransactions?: WalletTransaction[]
   persistedUnpaidInvoiceOrderIds?: string[]
-  persistedInvoice?: Invoice | null
+  invoiceAmountsByOrderId?: Record<string, number>
+  persistedInvoice?: (Invoice & { original_count?: number | null; final_count?: number | null; extra_amount?: number | null; mismatch_direction?: 'over' | 'under' | null; mismatch_detail?: string | null }) | null
   persistedSubscription?: { subscription: Subscription; plan: Plan } | null
   persistedPickupLocations?: PickupLocationOption[]
   persistedOrderItems?: PersistedOrderItem[]
@@ -210,6 +219,7 @@ export function CustomerStoreProvider({
   persistedWallet,
   persistedWalletTransactions,
   persistedUnpaidInvoiceOrderIds,
+  invoiceAmountsByOrderId,
   persistedInvoice,
   persistedSubscription,
   persistedPickupLocations,
@@ -217,12 +227,12 @@ export function CustomerStoreProvider({
   persistedSubscriptionUsedUnits = 0,
 }: CustomerStoreProviderProps) {
   const unpaidInvoiceOrderIds = new Set(persistedUnpaidInvoiceOrderIds)
-  const [orders, setOrders] = useState(() => persistedOrders ? persistedOrders.map((order) => mapDatabaseOrder(order, persistedOrderItems, unpaidInvoiceOrderIds)) : initialOrders)
+  const [orders, setOrders] = useState(() => persistedOrders ? persistedOrders.map((order) => mapDatabaseOrder(order, persistedOrderItems, unpaidInvoiceOrderIds, invoiceAmountsByOrderId)) : initialOrders)
   const [savedPickupLocationId, setSavedPickupLocationId] = useState(profile?.pickup_location_id ?? null)
   const [oneOffBalance, setOneOffBalance] = useState(persistedWallet?.one_off_balance ?? 0)
   const [subscriptionBalance, setSubscriptionBalance] = useState(persistedWallet?.subscription_balance ?? 0)
   const [transactions] = useState(() => persistedWalletTransactions ? persistedWalletTransactions.map(mapDatabaseTransaction) : initialTransactions)
-  const [invoice, setInvoice] = useState(() => persistedInvoice ? mapDatabaseInvoice(persistedInvoice) : null)
+  const [invoice] = useState(() => persistedInvoice ? mapDatabaseInvoice(persistedInvoice) : null)
   const [subscriptionUsedUnits, setSubscriptionUsedUnits] = useState(persistedSubscriptionUsedUnits)
 
   const store = useMemo<CustomerStore>(() => {
@@ -267,15 +277,15 @@ export function CustomerStoreProvider({
         const total = items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0)
         const clothes = items.reduce((sum, item) => sum + item.quantity, 0)
         const service = [...new Set(items.map((item) => item.service))].join(' + ')
-        let chargeAmountForWallet = total
+        let savedOrderId: string | null = null
         const order: CustomerOrder = {
           id: `QF-${idNumber}`,
           customerId: profile?.qaffy_id ?? 'Not available',
           title: service,
           status: 'Awaiting pickup',
-          statusTone: 'bg-sky-50 text-sky-700',
+          statusTone: 'bg-amber-50 text-amber-700',
           date: 'Just now',
-          pickup: 'Pickup will be confirmed after OTP verification',
+          pickup: 'Pickup pending',
           total,
           items: clothes,
           action: 'View details',
@@ -346,23 +356,6 @@ export function CustomerStoreProvider({
           }
 
           const hasSubscription = Boolean(persistedSubscription)
-          const subscriptionRemainingUnits = persistedSubscription
-            ? persistedSubscription.plan.weekly_limit - subscriptionUsedUnits
-            : null
-          const rateByCategoryId = new Map((categoryRates ?? []).map((rate) => [rate.category_id, rate]))
-          let remainingUnits = hasSubscription ? Math.max(0, subscriptionRemainingUnits ?? 0) : 0
-          const excessCharge = items.reduce((charge, item) => {
-            const categoryId = categoryIdByName.get(item.category)
-            const rate = categoryId ? rateByCategoryId.get(categoryId) : undefined
-            const itemUnits = item.quantity * Number(rate?.subscription_units ?? 0)
-            const excessUnits = hasSubscription ? Math.max(0, itemUnits - remainingUnits) : itemUnits
-            remainingUnits = Math.max(0, remainingUnits - itemUnits)
-            if (!rate || itemUnits <= 0 || excessUnits <= 0) return charge
-            const servicePrice = item.service === 'Wash + Iron' ? Number(rate.wash_iron_price) : item.service === 'Iron' ? Number(rate.iron_price) : Number(rate.wash_price)
-            return charge + (excessUnits / Number(rate.subscription_units)) * servicePrice
-          }, 0)
-          const chargeAmount = Math.round(excessCharge * 100) / 100
-          chargeAmountForWallet = hasSubscription ? chargeAmount : total
 
           const { data: insertedOrder, error: orderInsertError } = await supabase
             .from('orders')
@@ -374,7 +367,7 @@ export function CustomerStoreProvider({
               notes: notes || null,
               pickup_location_id: selectedLocation?.id ?? null,
               is_subscription_order: hasSubscription,
-              billed_extra_amount: hasSubscription ? chargeAmount : total,
+              billed_extra_amount: null,
             })
             .select('*')
             .single()
@@ -383,6 +376,7 @@ export function CustomerStoreProvider({
             toast.error(`Order could not be saved: ${orderInsertError?.message ?? 'No order was returned.'}`)
             throw orderInsertError ?? new Error('Order insert did not return an order')
           }
+          savedOrderId = insertedOrder.id
 
           if (insertedOrder) {
             const orderItems = items.flatMap((item) => {
@@ -412,52 +406,10 @@ export function CustomerStoreProvider({
               }
             }
 
-            if (!hasSubscription || chargeAmount > 0) {
-              const { data: createdInvoice, error: invoiceInsertError } = await supabase
-                .from('invoices')
-                .insert({
-                  order_id: insertedOrder.id,
-                  amount: hasSubscription ? chargeAmount : total,
-                  status: 'unpaid',
-                })
-                .select('*')
-                .single()
-
-              if (invoiceInsertError || !createdInvoice) {
-                const error = invoiceInsertError ?? new Error('Invoice could not be created')
-                toast.error(`Invoice could not be created: ${error.message}`)
-                throw error
-              }
-
-              if (hasSubscription && chargeAmount > 0) {
-                const response = await fetch('/orders', { method: 'POST', body: new URLSearchParams({ invoiceId: createdInvoice.id }) })
-                if (!response.ok) {
-                  const result = await response.json().catch(() => null)
-                  toast.error(result?.message ?? 'The extra charge could not be paid from your wallet.')
-                  throw new Error('Subscription excess payment failed')
-                }
-              } else if (!hasSubscription) {
-                const response = await fetch('/orders', { method: 'POST', body: new URLSearchParams({ invoiceId: createdInvoice.id, balanceType: 'one_off' }) })
-                if (!response.ok) {
-                  const result = await response.json().catch(() => null)
-                  toast.error(result?.message ?? 'The order balance could not be recorded.')
-                  throw new Error('One-time order balance failed')
-                }
-              }
-
-              setInvoice(mapDatabaseInvoice(hasSubscription
-                ? { ...createdInvoice, status: 'paid', paid_at: new Date().toISOString() }
-                : createdInvoice))
-            }
           }
         }
 
-        setOrders((currentOrders) => [order, ...currentOrders])
-        if (persistedSubscription) {
-          setSubscriptionBalance((currentBalance) => currentBalance - chargeAmountForWallet)
-        } else {
-          setOneOffBalance((currentBalance) => currentBalance - chargeAmountForWallet)
-        }
+        setOrders((currentOrders) => [{ ...order, id: savedOrderId ?? order.id }, ...currentOrders])
         if (persistedSubscription) {
           setSubscriptionUsedUnits((currentUnits) => currentUnits + savedWeightedUnits)
         }

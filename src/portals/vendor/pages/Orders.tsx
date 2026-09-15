@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { data, Link, useOutletContext } from 'react-router'
-import { Search, SlidersHorizontal } from 'lucide-react'
+import { Search } from 'lucide-react'
 import { requireRole } from '../../../lib/auth.server'
 
 export async function action({ request }: { request: Request }) {
@@ -77,7 +77,7 @@ function formatDate(value: string | null) {
 export default function Orders() {
   const { orders } = useOutletContext<VendorLayoutData>()
   const [query, setQuery] = useState('')
-  const [filter, setFilter] = useState('All')
+  const [activeTab, setActiveTab] = useState<'unclaimed' | 'claimed' | 'delivered'>('unclaimed')
 
   const rows = useMemo(() => orders.map((order) => ({
     ...order,
@@ -89,7 +89,12 @@ export default function Orders() {
 
   const filteredOrders = rows.filter((order) => {
     const searchText = `${order.id} ${order.customer} ${order.customerId} ${order.location} ${orderTypeLabels[order.order_type]}`.toLowerCase()
-    return searchText.includes(query.toLowerCase()) && (filter === 'All' || order.label === filter)
+    const inTab = activeTab === 'unclaimed'
+      ? order.status === 'pending_pickup'
+      : activeTab === 'claimed'
+        ? ['picked_up', 'at_vendor', 'invoiced', 'paid', 'out_for_delivery'].includes(order.status)
+        : order.status === 'delivered'
+    return searchText.includes(query.toLowerCase()) && inTab
   })
 
   const count = (label: string) => rows.filter((order) => order.label === label).length
@@ -121,16 +126,16 @@ export default function Orders() {
             <Search size={16} className="absolute left-3 top-3 text-slate-400" />
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search orders or customers" className="h-10 w-full rounded-[8px] border border-[#dedede] pl-9 pr-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" />
           </div>
-          <div className="flex items-center gap-2">
-            <SlidersHorizontal size={16} className="text-slate-400" />
-            <select value={filter} onChange={(event) => setFilter(event.target.value)} className="h-10 rounded-[8px] border border-[#dedede] bg-white px-3 text-sm outline-none focus:border-brand-primary">
-              <option>All</option>
-              <option>Pending claim</option>
-              <option>In progress</option>
-              <option>Awaiting review</option>
-              <option>Completed</option>
-              <option>Cancelled</option>
-            </select>
+          <div className="scrollbar-hidden flex flex-nowrap gap-2 overflow-x-auto pb-1">
+            {[
+              ['unclaimed', 'Unclaimed', rows.filter((order) => order.status === 'pending_pickup').length],
+              ['claimed', 'Claimed / in progress', rows.filter((order) => ['picked_up', 'at_vendor', 'invoiced', 'paid', 'out_for_delivery'].includes(order.status)).length],
+              ['delivered', 'Delivered', rows.filter((order) => order.status === 'delivered').length],
+            ].map(([value, label, count]) => (
+              <button key={value} type="button" onClick={() => setActiveTab(value as typeof activeTab)} className={`inline-flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold ${activeTab === value ? 'bg-brand-primary text-white' : 'border border-slate-200 bg-white text-slate-600 hover:border-brand-primary hover:text-brand-primary'}`}>
+                {label}<span className={activeTab === value ? 'text-white/80' : 'text-slate-400'}>{count}</span>
+              </button>
+            ))}
           </div>
         </div>
 

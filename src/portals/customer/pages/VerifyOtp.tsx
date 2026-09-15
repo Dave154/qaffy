@@ -89,6 +89,14 @@ export default function VerifyOtp() {
       : expectedRole === 'admin'
         ? '/admin'
         : '/'
+
+    if (expectedRole !== 'customer' && (!profile?.name || !profile?.phone)) {
+      const completionPath = expectedRole === 'vendor' ? '/vendor/complete-profile' : '/logistics/complete-profile'
+      navigate(`${completionPath}?next=${encodeURIComponent(target)}`)
+      setIsSubmitting(false)
+      return
+    }
+
     navigate(target)
   }
 

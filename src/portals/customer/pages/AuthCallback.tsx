@@ -86,6 +86,10 @@ export async function loader({ request }: Route.LoaderArgs) {
   }
 
   if (expectedRole !== 'customer') {
+    if (!profile?.name || !profile?.phone) {
+      const completeProfilePath = expectedRole === 'vendor' ? '/vendor/complete-profile' : '/logistics/complete-profile'
+      throw redirect(`${completeProfilePath}?next=${encodeURIComponent(nextPath)}`, { headers })
+    }
     throw redirect(nextPath, { headers })
   }
 

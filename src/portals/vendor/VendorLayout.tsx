@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { NavLink, Outlet, data, redirect, useLoaderData, useLocation, useNavigate } from 'react-router'
+import { NavLink, Outlet, data, redirect, useLoaderData, useLocation, useNavigate, useRevalidator } from 'react-router'
+import { useEffect } from 'react'
 import type { Route } from './+types/VendorLayout'
 import { ClipboardList, History, LayoutDashboard, LogOut, Menu, X } from 'lucide-react'
 import QaffyLogo from '../../components/QaffyLogo'
@@ -29,17 +30,21 @@ export async function loader({ request }: Route.LoaderArgs) {
     orderIds.length ? supabase.from('mismatches').select('id, order_id, direction, detail, created_at').in('order_id', orderIds).order('created_at', { ascending: false }) : Promise.resolve({ data: [] }),
     orderIds.length ? supabase.from('order_logistics_events').select('id, order_id, event_type, created_at').in('order_id', orderIds).order('created_at', { ascending: false }) : Promise.resolve({ data: [] }),
   ])
-  const categoryIds = [...new Set((items ?? []).map((item) => item.category_id))]
-  const { data: categories } = categoryIds.length ? await supabase.from('cloth_categories').select('id, name').in('id', categoryIds) : { data: [] }
+  const [{ data: categories }, { data: categoryRates }] = await Promise.all([
+    supabase.from('cloth_categories').select('id, name').order('name', { ascending: true }),
+    supabase.from('cloth_category_rates').select('category_id, vendor_wash_price, vendor_iron_price, vendor_wash_iron_price'),
+  ])
+
   const rateCard = new Map<string, { name: string; wash: number | null; iron: number | null; wash_iron: number | null }>()
 
-  for (const item of items ?? []) {
-    const name = (categories ?? []).find((category) => category.id === item.category_id)?.name ?? 'Laundry item'
-    const current = rateCard.get(name) ?? { name, wash: null, iron: null, wash_iron: null }
-    if (item.service === 'wash' || item.service === 'iron' || item.service === 'wash_iron') {
-      current[item.service] = Number(item.unit_price)
-    }
-    rateCard.set(name, current)
+  for (const category of categories ?? []) {
+    const current = rateCard.get(category.name) ?? { name: category.name, wash: null, iron: null, wash_iron: null }
+    const rate = (categoryRates ?? []).find((row) => row.category_id === category.id)
+
+    current.wash = rate && rate.vendor_wash_price != null ? Number(rate.vendor_wash_price) : null
+    current.iron = rate && rate.vendor_iron_price != null ? Number(rate.vendor_iron_price) : null
+    current.wash_iron = rate && rate.vendor_wash_iron_price != null ? Number(rate.vendor_wash_iron_price) : null
+    rateCard.set(category.name, current)
   }
 
   return data({ orders: (orders ?? []).map((order) => ({
@@ -56,6 +61,7 @@ export async function loader({ request }: Route.LoaderArgs) {
 const navigation = [
   { to: '/vendor', label: 'Overview', icon: LayoutDashboard, end: true },
   { to: '/vendor/orders', label: 'Orders', icon: ClipboardList },
+  { to: '/vendor/finance', label: 'Finance', icon: History },
   { to: '/vendor/clearing-history', label: 'Clearing history', icon: History },
 ]
 
@@ -64,6 +70,22 @@ export default function VendorLayout() {
   const [menuOpen, setMenuOpen] = useState(false)
   const location = useLocation()
   const navigate = useNavigate()
+  const revalidator = useRevalidator()
+
+  useEffect(() => {
+    const client = supabase
+    if (!client) return
+
+    const channel = client
+      .channel('vendor-order-feed')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => revalidator.revalidate())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_logistics_events' }, () => revalidator.revalidate())
+      .subscribe()
+
+    return () => {
+      void client.removeChannel(channel)
+    }
+  }, [revalidator])
   const handleLogout = async () => {
     if (supabase) await supabase.auth.signOut()
     navigate('/vendor/login', { replace: true })
@@ -100,7 +122,7 @@ export default function VendorLayout() {
             ))}
           </nav>
           <div className="mt-auto space-y-1">
-            <button type="button" onClick={() => void handleLogout()} className="flex h-10 w-full items-center gap-3 rounded-[8px] px-4 text-sm font-medium text-[#121212] hover:bg-[#f8f8f8]">
+            <button type="button" onClick={() => void handleLogout()} className="flex h-10 w-full items-center gap-3 rounded-[8px] px-4 text-sm font-medium text-red-600 hover:bg-red-50">
               <LogOut size={16} />
               <span>Log out</span>
             </button>

@@ -4,8 +4,8 @@ import type { Route } from './+types/Invoice'
 import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
 import { toast } from '../../../lib/toast'
 import { useCustomerStore } from '../customer-store-hook'
+import { InsufficientBalanceError, payFromWallet } from '../../../lib/wallet.server'
 
-// Normal invoice debt is recorded when the order is created and settled by top-ups.
 // eslint-disable-next-line react-refresh/only-export-components
 export async function action({ request }: Route.ActionArgs) {
   if (!isSupabaseServerConfigured) return data({ ok: false, message: 'Supabase is not configured.' }, { status: 500 })
@@ -18,7 +18,14 @@ export async function action({ request }: Route.ActionArgs) {
   const invoiceId = String(formData.get('invoiceId') ?? '')
   if (!invoiceId) return data({ ok: false, message: 'Invoice is missing.' }, { status: 400, headers })
 
-  return data({ ok: false, message: 'Top up your wallet from the overview to settle this invoice.' }, { status: 409, headers })
+  try {
+    const result = await payFromWallet(userData.user.id, invoiceId, 'one_off')
+    return data({ ok: true, deliveryOtp: result.deliveryOtp }, { headers })
+  } catch (error) {
+    if (error instanceof InsufficientBalanceError) return data({ ok: false, message: 'Your wallet balance is too low for this invoice.' }, { status: 402, headers })
+    const message = error instanceof Error ? error.message : 'The invoice could not be paid.'
+    return data({ ok: false, message }, { status: 500, headers })
+  }
 }
 
 export default function Invoice() {
@@ -99,6 +106,21 @@ export default function Invoice() {
               </div>
             ))}
           </div>
+
+          {invoice.originalCount !== null && invoice.finalCount !== null && (
+            <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="flex items-center justify-between text-sm text-slate-600">
+                <span>Customer declared</span>
+                <strong className="text-slate-900">{invoice.originalCount} items</strong>
+              </div>
+              <div className="mt-2 flex items-center justify-between text-sm text-slate-600">
+                <span>Vendor confirmed</span>
+                <strong className="text-slate-900">{invoice.finalCount} items</strong>
+              </div>
+              {invoice.mismatch && <p className="mt-3 border-t border-slate-200 pt-3 text-sm text-amber-700"><strong>{invoice.mismatch.direction === 'over' ? 'Extra billing due to over-count' : 'Under-count adjustment'}</strong><br />{invoice.mismatch.detail}</p>}
+              {invoice.extraAmount > 0 && <div className="mt-3 flex items-center justify-between border-t border-slate-200 pt-3 text-sm text-amber-700"><span>Extra confirmed items charge</span><strong>₦{invoice.extraAmount.toLocaleString()}</strong></div>}
+            </div>
+          )}
         </div>
 
         <div className="rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-100 sm:p-5">
@@ -124,10 +146,10 @@ export default function Invoice() {
             <input type="hidden" name="invoiceId" value={invoice.id} />
             <button
               type="submit"
-              disabled
+              disabled={invoice.status === 'Paid' || fetcher.state !== 'idle'}
               className="mt-6 w-full rounded-2xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white shadow-md shadow-violet-200 transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {invoice.status === 'Paid' ? 'Paid' : 'Top up from overview to pay'}
+              {invoice.status === 'Paid' ? 'Paid' : fetcher.state !== 'idle' ? 'Paying invoice...' : 'Pay invoice from wallet'}
             </button>
           </fetcher.Form>
 

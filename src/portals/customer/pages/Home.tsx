@@ -96,7 +96,6 @@ export default function Home() {
           {subscriptionBalance < 0 && <p className="mt-2 text-sm font-medium text-brand-primary">Subscription debt: ₦{Math.abs(subscriptionBalance).toLocaleString()}</p>}
 
           <div className="mt-6 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-slate-500">
-            <span>Available balance <strong className={`ml-1 ${balance < 0 ? 'text-brand-primary' : 'text-slate-800'}`}>₦{balance < 0 ? '-' : ''}{Math.abs(balance).toLocaleString()}</strong></span>
             <span>Active orders <strong className="ml-1 text-slate-800">{activeOrderCount}</strong></span>
           </div>
 

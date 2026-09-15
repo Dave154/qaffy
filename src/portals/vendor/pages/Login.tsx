@@ -18,7 +18,10 @@ export default function Login() {
       const { data: userData } = await supabase.auth.getUser()
       if (!userData.user) return
       const { data: role } = await supabase.from('profile_roles').select('role').eq('profile_id', userData.user.id).eq('role', 'vendor').eq('status', 'approved').maybeSingle()
-      if (role) navigate('/vendor', { replace: true })
+      if (!role) return
+      const { data: profile } = await supabase.from('profiles').select('name, phone').eq('id', userData.user.id).maybeSingle()
+      const nextPath = profile?.name && profile?.phone ? '/vendor' : '/vendor/complete-profile?next=%2Fvendor'
+      navigate(nextPath, { replace: true })
     }
 
     void redirectExistingVendor()

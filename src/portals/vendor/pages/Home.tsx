@@ -4,6 +4,7 @@ import { data, Link, useFetcher, useLocation, useNavigate, useOutletContext, use
 import type { Route } from './+types/Home'
 import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
 import { requireRole } from '../../../lib/auth.server'
+import { finalizeVendorOrder } from '../../../lib/wallet.server'
 import { toast } from '../../../lib/toast'
 
 // eslint-disable-next-line react-refresh/only-export-components
@@ -44,26 +45,25 @@ export async function action({ request }: Route.ActionArgs) {
   const receivedCount = Number(formData.get('receivedCount') ?? 0)
   const customerCount = Number(formData.get('customerCount') ?? 0)
   const mismatchDetail = String(formData.get('mismatchDetail') ?? '').trim()
+  let addedItems: Array<{ categoryName: string; service: 'wash' | 'iron' | 'wash_iron'; quantity: number }>
+  let receivedItems: Array<{ itemId: string; quantity: number }>
+  try {
+    receivedItems = JSON.parse(String(formData.get('receivedItems') ?? '[]'))
+    addedItems = JSON.parse(String(formData.get('addedItems') ?? '[]'))
+  } catch {
+    return data({ ok: false, message: 'Received item details are invalid.' }, { status: 400, headers })
+  }
 
   if (!orderId || !Number.isInteger(receivedCount) || receivedCount < 0) return data({ ok: false, message: 'Received item count is invalid.' }, { status: 400, headers })
   if (receivedCount !== customerCount && !mismatchDetail) return data({ ok: false, message: 'Add mismatch details before submitting.' }, { status: 400, headers })
 
-  const { error: orderError } = await supabase
-    .from('orders')
-    .update({ clothes_count_vendor: receivedCount, status: 'invoiced' })
-    .eq('id', orderId)
-  if (orderError) return data({ ok: false, message: orderError.message }, { status: 400, headers })
-
-  if (receivedCount !== customerCount) {
-    const { error: mismatchError } = await supabase.from('mismatches').insert({
-      order_id: orderId,
-      direction: receivedCount > customerCount ? 'over' : 'under',
-      detail: mismatchDetail,
-    })
-    if (mismatchError) return data({ ok: false, message: mismatchError.message }, { status: 400, headers })
+  try {
+    const result = await finalizeVendorOrder(orderId, vendorAuth.profile.id, receivedItems, addedItems, mismatchDetail)
+    return data({ ok: true, amount: result.amount }, { headers })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Order review could not be submitted.'
+    return data({ ok: false, message }, { status: 400, headers })
   }
-
-  return data({ ok: true }, { headers })
 }
 
 type VendorOrder = {
@@ -163,14 +163,6 @@ function mapLoaderOrder(order: VendorLoaderOrder): VendorOrder {
   }
 }
 
-const initialOrders = [
-  { id: 'QF-1048', customer: 'David Okpe', customerId: 'ID-1048', customerEmail: 'david@example.com', customerPhone: '+234 801 234 5678', collectedAt: 'Today, 09:40', createdAt: 'Today, 08:20', orderType: 'wash_iron', location: 'Yaba', locationAddress: 'Yaba pickup point', status: 'Pending', orderStatus: 'pending_pickup', clothesCountCustomer: 8, clothesCountVendor: null, pickupOtp: '4821', deliveryOtp: '7394', pickupLocationId: 'loc-yaba', notes: 'Separate whites from coloured items.', isSubscriptionOrder: false, billedExtraAmount: null, picked: false, pickedUpDate: null, amountDue: 4480, invoice: { id: 'INV-1048', amount: 4480, status: 'unpaid', createdAt: 'Today, 08:20', paidAt: null }, payment: null, settlement: null, items: [{ id: 'item-1048-1', categoryId: 'shirts', name: 'Shirts', quantity: 3, service: 'wash_iron', unitPrice: 350 }, { id: 'item-1048-2', categoryId: 'trousers', name: 'Trousers', quantity: 2, service: 'wash_iron', unitPrice: 350 }, { id: 'item-1048-3', categoryId: 'polos', name: 'Polos', quantity: 3, service: 'wash_iron', unitPrice: 350 }], mismatches: [], logisticsEvents: [] },
-  { id: 'QF-1047', customer: 'Amaka Nwosu', customerId: 'ID-1047', customerEmail: 'amaka@example.com', customerPhone: '+234 802 345 6789', collectedAt: 'Today, 08:15', createdAt: 'Today, 07:30', orderType: 'wash', location: 'Lekki', locationAddress: 'Lekki pickup point', status: 'In progress', orderStatus: 'at_vendor', clothesCountCustomer: 12, clothesCountVendor: null, pickupOtp: '5310', deliveryOtp: '8462', pickupLocationId: 'loc-lekki', notes: '', isSubscriptionOrder: true, billedExtraAmount: null, picked: true, pickedUpDate: 'Today, 08:15', amountDue: 5760, invoice: { id: 'INV-1047', amount: 5760, status: 'paid', createdAt: 'Today, 07:30', paidAt: 'Today, 08:00' }, payment: { provider: 'paystack', reference: 'PAY-1047', amount: 5760, status: 'success', createdAt: 'Today, 08:00' }, settlement: { id: 'SET-SEP-01', periodStart: 'Sep 1, 2026', periodEnd: 'Sep 30, 2026', amountDue: 5760, status: 'pending' }, items: [{ id: 'item-1047-1', categoryId: 'shirts', name: 'Shirts', quantity: 5, service: 'wash', unitPrice: 200 }, { id: 'item-1047-2', categoryId: 'trousers', name: 'Trousers', quantity: 4, service: 'wash', unitPrice: 200 }, { id: 'item-1047-3', categoryId: 'dresses', name: 'Dresses', quantity: 3, service: 'wash', unitPrice: 200 }], mismatches: [], logisticsEvents: [{ eventType: 'picked_up', createdAt: 'Today, 08:15', agent: 'Logistics agent' }] },
-  { id: 'QF-1042', customer: 'Tomi Adeyemi', customerId: 'ID-1042', customerEmail: 'tomi@example.com', customerPhone: '+234 803 456 7890', collectedAt: 'Yesterday, 16:20', createdAt: 'Yesterday, 14:10', orderType: 'wash_iron', location: 'Ikeja', locationAddress: 'Ikeja pickup point', status: 'Awaiting review', orderStatus: 'invoiced', clothesCountCustomer: 6, clothesCountVendor: 6, pickupOtp: '6724', deliveryOtp: '1950', pickupLocationId: 'loc-ikeja', notes: 'Handle the polos carefully.', isSubscriptionOrder: false, billedExtraAmount: 0, picked: true, pickedUpDate: 'Yesterday, 16:20', amountDue: 3360, invoice: { id: 'INV-1042', amount: 3360, status: 'paid', createdAt: 'Yesterday, 14:10', paidAt: 'Yesterday, 15:00' }, payment: { provider: 'paystack', reference: 'PAY-1042', amount: 3360, status: 'success', createdAt: 'Yesterday, 15:00' }, settlement: { id: 'SET-AUG-02', periodStart: 'Sep 1, 2026', periodEnd: 'Sep 30, 2026', amountDue: 3360, status: 'pending' }, items: [{ id: 'item-1042-1', categoryId: 'shirts', name: 'Shirts', quantity: 2, service: 'wash_iron', unitPrice: 350 }, { id: 'item-1042-2', categoryId: 'trousers', name: 'Trousers', quantity: 2, service: 'wash_iron', unitPrice: 350 }, { id: 'item-1042-3', categoryId: 'polos', name: 'Polos', quantity: 2, service: 'wash_iron', unitPrice: 350 }], mismatches: [], logisticsEvents: [{ eventType: 'picked_up', createdAt: 'Yesterday, 16:20', agent: 'Logistics agent' }] },
-  { id: 'QF-1038', customer: 'Bola Ajayi', customerId: 'ID-1038', customerEmail: 'bola@example.com', customerPhone: '+234 804 567 8901', collectedAt: 'Aug 28, 14:10', createdAt: 'Aug 28, 12:40', orderType: 'mixed', location: 'Surulere', locationAddress: 'Surulere pickup point', status: 'Completed', orderStatus: 'delivered', clothesCountCustomer: 10, clothesCountVendor: 10, pickupOtp: '2148', deliveryOtp: '9037', pickupLocationId: 'loc-surulere', notes: 'No starch.', isSubscriptionOrder: false, billedExtraAmount: 0, picked: true, pickedUpDate: 'Aug 28, 14:10', amountDue: 5040, invoice: { id: 'INV-1038', amount: 5040, status: 'paid', createdAt: 'Aug 28, 12:40', paidAt: 'Aug 28, 13:00' }, payment: { provider: 'paystack', reference: 'PAY-1038', amount: 5040, status: 'success', createdAt: 'Aug 28, 13:00' }, settlement: { id: 'SET-AUG-01', periodStart: 'Aug 1, 2026', periodEnd: 'Aug 31, 2026', amountDue: 5040, status: 'paid' }, items: [{ id: 'item-1038-1', categoryId: 'shirts', name: 'Shirts', quantity: 4, service: 'iron', unitPrice: 200 }, { id: 'item-1038-2', categoryId: 'trousers', name: 'Trousers', quantity: 4, service: 'wash', unitPrice: 200 }, { id: 'item-1038-3', categoryId: 'dresses', name: 'Dresses', quantity: 2, service: 'wash_iron', unitPrice: 320 }], mismatches: [], logisticsEvents: [{ eventType: 'picked_up', createdAt: 'Aug 28, 14:10', agent: 'Logistics agent' }, { eventType: 'delivered', createdAt: 'Aug 30, 12:00', agent: 'Logistics agent' }] },
-]
-
-void initialOrders
 
 const statusStyles: Record<VendorOrder['status'], string> = {
   Pending: 'bg-amber-50 text-amber-700',
@@ -196,29 +188,35 @@ function Detail({ label, value }: { label: string; value: string | number | null
   return <div><p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}</p><p className="mt-1.5 break-words text-sm font-semibold text-slate-900">{value ?? 'Not recorded'}</p></div>
 }
 
-function OrderReviewDialog({ order, received, receivedTotal, mismatchItems, notes, isPreClaim, onReceivedChange, onNotesChange, onClose, onSave, onClaim, saving }: {
+function OrderReviewDialog({ order, received, receivedTotal, mismatchItems, notes, addedItems, categoryNames, isPreClaim, onReceivedChange, onNotesChange, onAddedItemsChange, onClose, onSave, onClaim, saving }: {
   order: VendorOrder
   received: Record<string, number>
   receivedTotal: number
   mismatchItems: VendorOrder['items']
   notes: string
+  addedItems: Array<{ categoryName: string; service: 'wash' | 'iron' | 'wash_iron'; quantity: number }>
+  categoryNames: string[]
   isPreClaim: boolean
-  onReceivedChange: (itemName: string, value: number) => void
+  onReceivedChange: (itemId: string, value: number) => void
   onNotesChange: (value: string) => void
+  onAddedItemsChange: (items: Array<{ categoryName: string; service: 'wash' | 'iron' | 'wash_iron'; quantity: number }>) => void
   onClose: () => void
   onSave: () => void
   onClaim: () => void
   saving: boolean
 }) {
-  const itemTotal = order.items.reduce((total, item) => total + item.quantity * item.unitPrice, 0)
+  const itemTotal = receivedTotal
   const formattedDate = (value: string | null) => value ? new Date(value).toLocaleString() : 'Not recorded'
 
-  return <div className="fixed inset-0 z-40 flex items-end justify-center overflow-y-auto bg-slate-950/40 p-0 sm:items-center sm:p-4">
+  return <div className="vendor-review-dialog fixed inset-0 z-40 flex items-end justify-center overflow-y-auto bg-slate-950/40 p-0 sm:items-center sm:p-4">
+    <style>{`.vendor-review-dialog table th:nth-last-child(-n+2), .vendor-review-dialog table td:nth-last-child(-n+2), .vendor-review-dialog > div > section:nth-of-type(4) { display: none; }`}</style>
     <div className="max-h-[calc(100vh-1rem)] w-full max-w-3xl overflow-y-auto rounded-t-3xl border border-slate-200 bg-white p-5 shadow-2xl sm:max-h-[calc(100vh-2rem)] sm:rounded-3xl sm:p-8">
       <header className="flex items-start justify-between gap-4">
         <div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-primary">{isPreClaim ? 'Order details' : 'Order review'}</p><h3 className="mt-2 text-2xl font-bold text-slate-900">{order.customer}</h3><p className="mt-1.5 text-sm text-slate-500">{order.id} · {orderStatusLabels[order.orderStatus]} · {orderTypeLabels[order.orderType]}</p></div>
         <button type="button" onClick={onClose} aria-label="Close order review" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border-2 border-slate-200 bg-white text-xl text-slate-400 shadow-sm transition hover:border-slate-300 hover:text-slate-600 hover:shadow-md">×</button>
       </header>
+
+      {!isPreClaim && <section className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm sm:p-5"><div className="flex items-center justify-between gap-3"><div><h4 className="font-bold text-slate-900">Found another category?</h4><p className="mt-1 text-sm text-slate-500">Add any cloth type that was not in the customer’s list.</p></div><button type="button" onClick={() => onAddedItemsChange([...addedItems, { categoryName: categoryNames[0] ?? '', service: 'wash', quantity: 1 }])} className="rounded-lg border border-brand-border bg-white px-3 py-2 text-sm font-semibold text-brand-primary">Add category</button></div>{addedItems.length > 0 && <div className="mt-4 space-y-3">{addedItems.map((item, index) => <div key={`${item.categoryName}-${index}`} className="grid gap-2 sm:grid-cols-[1fr_1fr_100px_auto]"><select value={item.categoryName} onChange={(event) => onAddedItemsChange(addedItems.map((current, itemIndex) => itemIndex === index ? { ...current, categoryName: event.target.value } : current))} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"><option value="">Choose category</option>{categoryNames.map((name) => <option key={name}>{name}</option>)}</select><select value={item.service} onChange={(event) => onAddedItemsChange(addedItems.map((current, itemIndex) => itemIndex === index ? { ...current, service: event.target.value as typeof item.service } : current))} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"><option value="wash">Wash</option><option value="iron">Iron</option><option value="wash_iron">Wash + Iron</option></select><input type="number" min="1" value={item.quantity} onChange={(event) => onAddedItemsChange(addedItems.map((current, itemIndex) => itemIndex === index ? { ...current, quantity: Math.max(1, Number(event.target.value) || 1) } : current))} className="rounded-lg border border-slate-200 px-3 py-2 text-sm" aria-label="Added category quantity" /><button type="button" onClick={() => onAddedItemsChange(addedItems.filter((_, itemIndex) => itemIndex !== index))} className="rounded-lg px-3 py-2 text-sm font-semibold text-red-600 hover:bg-red-50">Remove</button></div>)}</div>}</section>}
 
       <section className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5"><div className="flex items-center gap-2"><UserRound className="h-4 w-4 text-brand-primary" /><h4 className="font-bold text-slate-900">Order summary</h4></div><div className="mt-4 grid gap-4 sm:grid-cols-4"><Detail label="Customer ID" value={order.customerId} /><Detail label="Order type" value={orderTypeLabels[order.orderType]} /><Detail label="Created" value={order.createdAt} /><Detail label="Status" value={orderStatusLabels[order.orderStatus]} /></div><div className="mt-5 border-t border-slate-200 pt-4"><div className="flex items-center gap-2"><MapPin className="h-4 w-4 text-brand-primary" /><h4 className="font-bold text-slate-900">Pickup details</h4></div><div className="mt-4 grid gap-4 sm:grid-cols-3"><Detail label="Location" value={order.location} />{!isPreClaim && <Detail label="Pickup OTP" value={order.picked ? 'Verified' : order.pickupOtp} />}</div></div></section>
 
@@ -228,7 +226,7 @@ function OrderReviewDialog({ order, received, receivedTotal, mismatchItems, note
 
       <section className="mt-6 rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5"><h4 className="font-bold text-slate-900">Notes and verification</h4><Detail label="Customer notes" value={order.notes || 'No notes added'} />{!isPreClaim && mismatchItems.length > 0 && <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 shadow-sm"><p className="font-semibold text-amber-800">Mismatch detected</p><p className="mt-1.5 text-sm text-amber-700">Add itemized details for Admin review.</p><textarea value={notes} onChange={(event) => onNotesChange(event.target.value)} placeholder="e.g. 1 red shirt missing" className="mt-3 min-h-24 w-full rounded-xl border border-amber-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" /></div>}{order.mismatches.length > 0 && <div className="mt-4 space-y-2">{order.mismatches.map((mismatch) => <div key={mismatch.id} className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm"><strong className="text-amber-800">{mismatch.direction === 'over' ? 'Overage' : 'Shortage'}</strong><span className="ml-2 text-amber-700">{mismatch.detail}</span><p className="mt-1 text-xs text-amber-600">{formattedDate(mismatch.createdAt)}</p></div>)}</div>}</section>
 
-      <button type="button" onClick={isPreClaim ? onClaim : onSave} disabled={saving || (!isPreClaim && mismatchItems.length > 0 && !notes.trim())} className="mt-6 w-full rounded-2xl bg-brand-primary px-4 py-3 font-semibold text-white shadow-sm transition hover:bg-brand-primary-hover hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50">{saving ? (isPreClaim ? 'Claiming...' : 'Submitting...') : isPreClaim ? 'Claim order' : 'Submit for admin review'}</button>
+      <button type="button" onClick={isPreClaim ? onClaim : onSave} disabled={saving || (!isPreClaim && mismatchItems.length > 0 && !notes.trim())} className="mt-6 w-full rounded-2xl bg-brand-primary px-4 py-3 font-semibold text-white shadow-sm transition hover:bg-brand-primary-hover hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50">{saving ? (isPreClaim ? 'Claiming...' : 'Confirming count...') : isPreClaim ? 'Claim order' : 'Confirm final count'}</button>
     </div>
   </div>
 }
@@ -243,6 +241,7 @@ export default function Home() {
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null)
   const [detailsDismissed, setDetailsDismissed] = useState(false)
   const [received, setReceived] = useState<Record<string, Record<string, number>>>({})
+  const [addedItems, setAddedItems] = useState<Array<{ categoryName: string; service: 'wash' | 'iron' | 'wash_iron'; quantity: number }>>([])
   const [notes, setNotes] = useState('')
   const [dateRange, setDateRange] = useState('Today')
   const requestedOrderId = new URLSearchParams(location.search).get('orderId')
@@ -287,7 +286,6 @@ export default function Home() {
     { label: 'Pending', value: orders.filter((order) => order.status === 'Pending').length, helper: 'Available to claim', icon: Clock3, tone: 'bg-amber-50 text-amber-700' },
     { label: 'In progress', value: orders.filter((order) => order.status === 'In progress').length, helper: 'Being processed', icon: PackageCheck, tone: 'bg-brand-soft text-brand-primary' },
     { label: 'Completed', value: orders.filter((order) => order.status === 'Completed').length, helper: 'Completed orders', icon: Check, tone: 'bg-emerald-50 text-emerald-700' },
-    { label: 'Amount due', value: `₦${visibleOrders.reduce((total, order) => total + order.amountDue, 0).toLocaleString()}`, helper: `For ${dateRange.toLowerCase()}`, icon: Banknote, tone: 'bg-sky-50 text-sky-700' },
   ]
 
   const claimOrder = (orderId: string) => {
@@ -297,16 +295,18 @@ export default function Home() {
   const openOrderDetails = (order: VendorOrder) => {
     setDetailsDismissed(false)
     setSelectedOrderId(order.id)
-    setReceived({ [order.id]: Object.fromEntries(order.items.map((item) => [item.name, item.quantity])) })
+    setAddedItems([])
+    setReceived({ [order.id]: Object.fromEntries(order.items.map((item) => [item.id, item.quantity])) })
   }
 
   const receivedTotal = selectedOrder ? Object.values(received[selectedOrder.id] ?? {}).reduce((total, count) => total + count, 0) : 0
-  const mismatchItems = selectedOrder?.items.filter((item) => (received[selectedOrder.id]?.[item.name] ?? 0) !== item.quantity) ?? []
+  const mismatchItems = selectedOrder?.items.filter((item) => (received[selectedOrder.id]?.[item.id] ?? 0) !== item.quantity) ?? []
 
   const closeOrderDetails = () => {
     setDetailsDismissed(true)
     setSelectedOrderId(null)
     setNotes('')
+    setAddedItems([])
     if (returnPath === '/vendor/orders') {
       navigate(returnPath, { replace: true })
       return
@@ -321,6 +321,8 @@ export default function Home() {
       orderId: selectedOrder.id,
       receivedCount: String(receivedTotal),
       customerCount: String(selectedOrder.clothesCountCustomer),
+      receivedItems: JSON.stringify(Object.entries(received[selectedOrder.id] ?? {}).map(([itemId, quantity]) => ({ itemId, quantity }))),
+      addedItems: JSON.stringify(addedItems),
       mismatchDetail: notes,
     }, { method: 'post' })
   }
@@ -348,14 +350,12 @@ export default function Home() {
       </section>
 
       <section className="grid grid-cols-1 gap-3 min-[375px]:grid-cols-2 xl:grid-cols-4">
-        {metrics.map(({ label, value, helper, icon: Icon, tone }) => (
+        {metrics.map(({ label, icon: Icon, tone }) => (
           <div key={label} className="rounded-[10px] border border-[#e9e9e9] bg-white p-4">
             <div className="flex items-center justify-between">
               <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${tone}`}>{label}</span>
               <Icon size={17} className="text-slate-400" />
             </div>
-            <p className="mt-5 text-3xl font-bold text-slate-900">{value}</p>
-            <p className="mt-1 text-sm text-slate-500">{helper}</p>
           </div>
         ))}
       </section>
@@ -402,39 +402,15 @@ export default function Home() {
               ))}
             </tbody>
           </table>
-          {visibleOrders.length === 0 && <p className="py-8 text-center text-sm text-slate-500">No orders in this date range.</p>}
+          {visibleOrders.length === 0 && (
+            <p className="py-8 text-center text-sm text-slate-500">
+              {dateRange === 'Today' ? 'No orders today.' : 'No orders in this date range.'}
+            </p>
+          )}
         </div>
       </section>
 
-      <section className="grid gap-4 lg:grid-cols-2">
-        <div className="rounded-[10px] bg-brand-primary p-5 text-white">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-50">Awaiting admin review</p>
-          <p className="mt-4 text-3xl font-bold">₦{orders.filter((order) => ['invoiced', 'paid', 'out_for_delivery'].includes(order.orderStatus)).reduce((total, order) => total + order.amountDue, 0).toLocaleString()}</p>
-          <p className="mt-2 text-sm text-cyan-50">Estimated value of submitted work</p>
-          <Link to="/vendor/clearing-history" className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-white">View clearing history <ArrowRight size={16} /></Link>
-        </div>
-        <div className="rounded-[10px] border border-[#e9e9e9] bg-white p-5">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Live item rates</p>
-            <span className="text-xs text-slate-400">From orders</span>
-          </div>
-          <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
-            {rateCard.map((item) => (
-              <div key={item.name} className="rounded-[8px] bg-[#f8f8f8] p-2.5">
-                <p className="truncate text-xs font-semibold text-slate-800">{item.name}</p>
-                <div className="mt-2 space-y-1 text-[10px] text-slate-500">
-                  <p className="flex justify-between gap-2"><span>Wash</span><strong className="text-brand-primary">{item.wash === null ? '—' : `₦${item.wash.toLocaleString()}`}</strong></p>
-                  <p className="flex justify-between gap-2"><span>Wash &amp; iron</span><strong className="text-brand-primary">{item.wash_iron === null ? '—' : `₦${item.wash_iron.toLocaleString()}`}</strong></p>
-                  <p className="flex justify-between gap-2"><span>Iron</span><strong className="text-brand-primary">{item.iron === null ? '—' : `₦${item.iron.toLocaleString()}`}</strong></p>
-                </div>
-              </div>
-            ))}
-          </div>
-          {rateCard.length === 0 && <p className="mt-4 text-sm text-slate-500">No item rates are available yet.</p>}
-        </div>
-      </section>
-
-      {selectedOrder && <OrderReviewDialog order={selectedOrder} received={received[selectedOrder.id] ?? {}} receivedTotal={receivedTotal} mismatchItems={mismatchItems} notes={notes} isPreClaim={selectedOrder.orderStatus === 'pending_pickup'} onReceivedChange={(itemName, value) => setReceived((current) => ({ ...current, [selectedOrder.id]: { ...current[selectedOrder.id], [itemName]: value } }))} onNotesChange={setNotes} onClose={closeOrderDetails} onSave={saveOrder} onClaim={() => claimOrder(selectedOrder.id)} saving={fetcher.state !== 'idle'} />}
+      {selectedOrder && <OrderReviewDialog order={selectedOrder} received={received[selectedOrder.id] ?? {}} receivedTotal={receivedTotal} mismatchItems={mismatchItems} notes={notes} addedItems={addedItems} categoryNames={rateCard.map((rate) => rate.name)} isPreClaim={selectedOrder.orderStatus === 'pending_pickup'} onReceivedChange={(itemId, value) => setReceived((current) => ({ ...current, [selectedOrder.id]: { ...current[selectedOrder.id], [itemId]: value } }))} onNotesChange={setNotes} onAddedItemsChange={setAddedItems} onClose={closeOrderDetails} onSave={saveOrder} onClaim={() => claimOrder(selectedOrder.id)} saving={fetcher.state !== 'idle'} />}
     </div>
   )
 }
