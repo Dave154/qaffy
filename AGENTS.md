@@ -385,8 +385,15 @@ Before updating UI components, verify:
 - Picked-up orders appear under search.
 - The confirm-pickup button was removed.
 - After a successful pickup, the OTP input is cleared.
+- Logistics pickup and delivery results now show the globally unique public order reference (`QO-######`) for handoff and event history; UUIDs remain internal action identifiers.
 - The logistics pickup/delivery action validates the intent, requires logistics access when Supabase is configured, and uses separate pickup/delivery OTP error messages.
+- Delivery dispatch is restricted to paid orders; unpaid invoices cannot enter `out_for_delivery`.
+- Final delivery atomically changes the status to `delivered` and clears `delivery_otp`, so a delivery OTP cannot be reused after handoff.
 - The duplicate pickup SQL statement was removed; do not reintroduce a second `update orders` in the pickup branch.
+- Pickup OTP search requires all four digits and performs an exact match; partial OTP input never reveals an order.
+- Pickup confirmation atomically sets `picked = true`, records `picked_up_date`, changes the status to `picked_up`, and nullifies `pickup_otp`.
+- Logistics displays the globally unique public order reference (`QO-######`) in pickup/delivery results and event history; UUIDs remain internal action identifiers.
+- The Pickup/Delivery switch is outside the header navigation, beside the date filter, and remains a horizontal compact control on small screens. The logistics header uses padded spacing, a smaller title, and a red logout icon action.
 
 #### Customer overview and orders
 
@@ -401,6 +408,15 @@ Before updating UI components, verify:
 #### Vendor orders
 
 - The vendor Orders table has responsive spacing and truncation to prevent column collisions.
+- Vendor review quantity inputs are keyed by the underlying `order_items.id`, matching the trusted finalization payload and preventing category names from being submitted as item IDs.
+- Unclaimed vendor orders show a direct Claim action before details; count-entry review is available after the order is claimed.
+- Vendor count review does not expose customer order metadata or pickup OTPs; the review starts with item quantities and count confirmation.
+- Vendor count review does not expose invoice, payment, subscription, or order-total metadata; billing remains a trusted server-side outcome after count confirmation.
+- Vendor count review shows only physical customer and received item quantities; subscription-unit accounting remains hidden and server-side.
+- Physical customer/vendor counts are stored separately from weighted subscription units; mismatch review compares physical counts, while subscription allowance and billing use dedicated unit fields.
+- Subscription usage meters count only units covered by the plan; excess units charged from the general wallet do not increase the weekly allowance meter.
+- Vendor-confirmed final count is the billing and payout source of truth. Added categories are included in the displayed count, invoice calculation, mismatch handling, and `confirmed_quantity` payout data; extra billing excludes them from the original-order baseline.
+- Vendor Realtime subscriptions use the stable revalidation callback, and vendor fetcher responses are handled once to avoid duplicate revalidation, toasts, or subscription churn.
 - Customer identifiers should use the customer Qaffy ID, formatted as `QF-XXXX` where available, rather than exposing a raw UUID.
 - The vendor overview now loads live category rates from the database and the “Orders needing attention” queue defaults to real orders.
 
@@ -428,6 +444,166 @@ Before updating UI components, verify:
 - Keep same-page logistics tab switching local so changing tabs does not trigger a route loader or page transition.
 - Preserve the current customer order badge and tab styling when making adjacent UI changes.
 
+---
+
+## Part 13: Customer Portal Completion Pass
+
+**Started:** 2026-09-15
+
+The customer portal is the current completion target. Do not move to another portal until its customer-facing flows use live data, enforce the approved payment model, and have complete loading, error, empty, and responsive states.
+
+### Audit findings
+
+- Customer top-up currently calls `creditWallet` directly from the page action and does not initialize or verify a Paystack transaction. It must become a real Paystack top-up flow; wallet credit must happen only after server-side verification or webhook confirmation.
+- Plan cards in `src/portals/customer/pages/Plans.tsx` are hardcoded even though admin plans exist in Supabase. Plan purchase currently inserts a subscription without payment and is explicitly marked as test activation.
+- `src/portals/customer/pages/NewOrder.tsx` uses hardcoded categories and prices. The store later fetches category IDs/rates, but the client still controls `unit_price`; the customer selector must be driven by active database categories and the server must determine prices.
+- `src/portals/customer/pages/Invoice.tsx` shows only the latest invoice. Invoice history and invoice/order selection are incomplete.
+- `src/portals/customer/pages/Transactions.tsx` renders filter buttons without filtering; transaction status is always `Successful`; there is no loading/error state.
+- `src/portals/customer/pages/Settings.tsx` contains a hardcoded renewal date, read-only phone/email fields, a `Coming soon` referral value, and a hardcoded empty recent-payments section.
+- `src/portals/customer/pages/OtpFlow.tsx` uses the first order rather than selecting an active order, so OTP details are wrong when multiple active orders exist.
+- Customer order mapping uses `pickup_location_id` as the display value instead of the pickup location name.
+
+### Completion order
+
+1. Replace simulated top-up with Paystack initialization and trusted verification/webhook crediting.
+2. Load active plans and rates from Supabase; make plan purchase payment-backed and prevent duplicate active subscriptions.
+3. Make new-order categories, prices, services, and subscription units live; move authoritative price calculation to the server/trusted path.
+4. Complete invoice history and expose mismatch/extra-charge details only after vendor confirmation.
+5. Add working transaction filters, real payment statuses, and complete loading/error/empty states.
+6. Finish profile editing, renewal dates, referral state, and remove customer-facing placeholders.
+7. Make OTP flow select an order and verify all customer-visible lifecycle rules.
+
+### Validation checkpoint
+
+- `npm run typecheck` and `npm run build` passed before this pass.
+- `npm run lint` now ignores `.kilo/worktrees` but still reports 21 pre-existing source lint errors in unrelated files.
+- Existing uncommitted files before this pass: `eslint.config.js`, `src/portals/admin/pages/Finance.tsx`, and `src/portals/vendor/pages/Home.tsx`.
+
+### Completed in this pass
+
+- Customer top-up now initializes a Paystack transaction instead of directly crediting the wallet.
+- The Paystack return reference is used only to show payment status; it does not verify or credit the wallet in the browser flow.
+- A signed Paystack webhook is registered at `/api/paystack/webhook` and processes `charge.success` events as the browser-independent fallback.
+- Wallet crediting is idempotent for an already-successful payment reference, preventing duplicate callback credits.
+- RLS remains responsible for allowing customers to create only their own pending payment rows; wallet balances and success status are changed through the trusted server wallet path.
+- The top-up modal now explains the Paystack handoff, pending-order coverage, subscription-debt priority, and webhook-confirmed wallet timing without showing an optimistic post-payment balance.
+- Customer plans now load from active Supabase plan records; choosing a plan creates a pending Paystack payment with `plan_id`, and only the signed webhook activates the subscription. Subscription payments do not credit either wallet balance.
+- The customer Plans page chooses an available billing period by default and shows an explicit empty state when no active database plans exist for the selected period; it does not fall back to hardcoded plan cards.
+- Customers cannot choose another plan while an active subscription exists; the UI disables all plan purchase buttons and the server action rejects duplicate active subscriptions. Expired subscriptions no longer count as current.
+- After Paystack subscription checkout, customers return to `/plans?payment=pending`; the page revalidates until the webhook-created subscription appears, then cleans the URL. This is navigation/data refresh only, never payment verification.
+- Supabase Realtime is the preferred subscription update path; the return-page refresh is bounded to 15 attempts as a fallback and must not become an unbounded polling loop.
+
+### Payment configuration
+
+- Configure `PAYSTACK_SECRET_KEY` on the server and `DATABASE_URL` for the trusted wallet service.
+- Configure the Paystack dashboard webhook URL as `https://<production-host>/api/paystack/webhook`.
+- The webhook validates `x-paystack-signature`, checks the stored customer payment and exact amount, and then credits the wallet through `creditWallet`.
+- The local `.env` now contains non-empty values for the required Supabase, Paystack secret, and direct database variables; restart the dev server after changing them.
+- Top-up initialization now uses React Router's `useFetcher` action submission and surfaces initialization errors in the modal; do not replace it with a raw `fetch('/?index')` call.
+- No Paystack callback or browser-side payment-status flow is used; the signed webhook is the sole path that credits the wallet.
+- Paystack receives a return URL only for navigation back to `/`; it does not perform verification or wallet mutation.
+- Customer wallet and wallet-ledger realtime updates revalidate the customer loader after webhook changes; apply `supabase/migrations/20260915110000_customer_wallet_realtime.sql` before relying on live balance updates.
+- React Router action-origin protection must allow the active public webhook host during tunnel testing; update `react-router.config.ts` when the ngrok hostname changes, and replace it with the production host before deployment.
+- Vite development host protection also requires the active ngrok hostname in `vite.config.ts`; update both files when the tunnel URL changes.
+- A `403 Blocked request. This host ... is not allowed.` from the public tunnel is Vite host protection, not an invalid Paystack signature. After allowlisting the host, an unsigned probe should return the webhook's `401 Invalid webhook signature`.
+
+### Next slice
+
+- Customer NewOrder categories, Wash/Iron/Wash + Iron rates, and subscription units now load from active Supabase categories and `cloth_category_rates`.
+- Customer order creation recalculates customer prices from database rates, preserves post-paid billing, and uses `20260915130000_authoritative_order_item_pricing.sql` to prevent client-supplied `unit_price` values from being stored.
+- Validation for this slice: `npm run typecheck` and `npm run build` pass.
+
+### Next customer task
+
+- Customer invoice history now loads all invoices, supports order/invoice selection, and shows mismatch and extra-charge detail only after vendor confirmation.
+- Confirmed vendor mismatches appear as customer notifications and on the affected order in Home, Orders, and order details; mismatch visibility begins only after vendor confirmation.
+- Customer Home shows a dismissible mismatch banner, following the subscription-ending banner pattern, with a link to affected orders.
+- Mismatch banner lifecycle: unpaid mismatches remain visible until the invoice is paid; paid mismatches show once and can be dismissed, while the mismatch remains on the order details.
+- Customer order details hide pickup OTP after pickup and delivery OTP after delivery; trusted logistics updates also nullify both OTPs at handoff.
+- Validation for this slice: `npm run typecheck` and `npm run build` pass.
+
+### Next customer task
+
+- Customer Transactions now combines real Paystack payment rows with wallet debit ledger rows, supports working All activity/Top ups/Payments filters, and includes loading, error, and empty states.
+- Validation for this slice: `npm run typecheck` and `npm run build` pass.
+
+### Next customer task
+
+- Customer Settings now supports profile name/phone editing, live subscription renewal dates, live referral-code display, live recent payment rows, and independent pickup-location saving.
+- Validation for this slice: `npm run typecheck` and `npm run build` pass.
+
+### Next customer task
+
+- Customer OTP flow now selects the correct active order, uses the public order reference, resets OTP step state when switching orders, and excludes delivered orders.
+- Vendor confirmation now calculates weighted subscription units, applies the remaining subscription allowance first, and charges only any excess from the customer's general wallet. Insufficient excess funds leave the invoice unpaid and delivery blocked.
+- Validation for this slice: `npm run typecheck` and `npm run build` pass.
+
+### Next customer task
+
+- Run live payment, invoice, order, and OTP smoke tests after applying the pending Supabase migrations.
+
+### Public order references
+
+- Orders retain their UUID primary key for internal relationships and trusted actions.
+- Customer, vendor, and admin-facing order references use the globally unique database-generated `public_order_number` format `QO-######`.
+- Migration `supabase/migrations/20260915140000_public_order_numbers.sql` backfills existing orders and assigns future numbers from one database sequence; it does not use RPC.
+
+### Current Customer Portal Handoff
+
+The customer portal payment and subscription foundation is now implemented as of 2026-09-15.
+
+#### Payment architecture
+
+- One-time wallet top-ups initialize Paystack from `src/portals/customer/pages/Home.tsx`.
+- Subscription purchases initialize Paystack from `src/portals/customer/pages/Plans.tsx`.
+- Both payment types create a pending `payments` row before Paystack initialization.
+- One-time payments have `plan_id = null`; subscription payments store the selected `plan_id`.
+- `src/routes/paystack-webhook.ts` is the only payment authority that can mark payments successful, credit one-time wallet funds, or activate subscriptions.
+- The browser never verifies Paystack payments and never mutates wallet balances or subscriptions.
+- Paystack return URLs are navigation-only: `/` for top-ups and `/plans?payment=pending` for subscriptions.
+- Subscription return handling uses Supabase Realtime first and a bounded 15-attempt loader refresh fallback; it does not verify payment.
+- Wallet and subscription Realtime subscriptions are in `src/portals/customer/CustomerLayout.tsx`.
+
+#### Customer subscription behavior
+
+- Customer plans are loaded from active Supabase `plans` rows; no hardcoded customer plan catalog remains.
+- Purchase actions re-read the selected active plan server-side, so the client cannot control price or weekly limit.
+- A customer with an unexpired active subscription cannot select another plan; the UI disables all purchase buttons and the server rejects duplicates.
+- Expired subscriptions no longer count as current. Active subscriptions with no end date remain active.
+- Subscription purchase price does not credit `one_off_balance` or `subscription_balance`; it creates the subscription after webhook success.
+- The active-plan usage bar uses live `subscriptionUsedUnits / weekly_limit` data in both the Plans page and customer sidebar.
+
+#### Required migrations
+
+Apply these migrations to the connected Supabase project before relying on live payment/subscription behavior:
+
+- `supabase/migrations/20260915110000_customer_wallet_realtime.sql`
+- `supabase/migrations/20260915120000_subscription_payment_plan.sql`
+
+The first enables Realtime for wallets, wallet transactions, and subscriptions. The second adds `payments.plan_id`.
+
+#### Recent customer UI updates
+
+- Top-up modal no longer lists pending orders and does not show an optimistic balance.
+- Top-up modal clearly hands off to Paystack and explains webhook-confirmed wallet crediting.
+- Customer Home displays the live Qaffy ID, with Qaffy ID and date justified across the mobile header.
+- Customer Plans no longer shows the removed informational note or admin-facing empty-state explanation.
+
+#### Validation
+
+- `npm run typecheck` passes.
+- `npm run build` passed after the subscription and realtime changes; rerun after future edits.
+- `npm run lint` ignores `.kilo/worktrees` but still reports pre-existing source lint errors unrelated to this pass.
+
+#### Next customer completion slices
+
+1. Make `NewOrder.tsx` categories, services, subscription units, and prices fully live and move authoritative price calculation server-side.
+2. Complete invoice history and order/invoice selection; expose mismatch and extra-charge detail only after vendor confirmation.
+3. Make Transactions filters functional, load real payment rows/statuses, and add complete loading/error/empty states.
+4. Finish Settings profile editing, real renewal dates, referral state, and remove remaining placeholders.
+5. Make OTP flow select an active order instead of always using the first order.
+6. Run live Supabase/Paystack smoke tests after applying migrations, including webhook delivery through the current public tunnel.
+
 ### Current Validation State
 
 - `npm run typecheck` passed.
@@ -439,7 +615,7 @@ Before updating UI components, verify:
 
 1. Apply `supabase/migrations/20260912100000_partner_access_roles.sql` to the deployed Supabase project. The local repository has the migration, but the live database must be linked and migrated before relying on multi-role access in production. The Supabase CLI is not currently installed locally.
 2. Run a live smoke test with real data: sign in with multiple roles, switch logistics Pickup/Delivery tabs, search picked-up orders, verify OTP visibility and clearing, inspect customer Home/Orders, and check the responsive vendor Orders table.
-3. Implement the next operational priority: delivery verification, including item-by-item QA and the final delivery status transition.
+3. Continue the logistics operational audit, including delivery exceptions, public-order-number search, event-history visibility, and permission boundaries.
 4. After that, prioritize payment settlement/payouts and revenue reporting, followed by admin user management, messaging, wallet/credits, and historical archive views.
 
 ### Suggested Continuation Workflow

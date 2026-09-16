@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react'
 import { supabase } from '../../lib/supabase.client'
 import { toast } from '../../lib/toast'
+import { getRateValue, type RateCardService } from '../../lib/rate-card'
 import { CustomerStoreContext } from './customer-store-context'
-import type { Invoice, Order, Plan, Subscription, Wallet, WalletTransaction } from '../../types/database.types'
+import type { Invoice, Order, Payment, Plan, Subscription, Wallet, WalletTransaction } from '../../types/database.types'
 
 export type OrderStatus = 'Awaiting pickup' | 'Picked up' | 'In progress' | 'Pending payment' | 'Ready for delivery' | 'Delivered'
 export type OrderLine = {
@@ -16,6 +17,7 @@ export type OrderLine = {
 export type PickupLocationOption = {
   id: string
   name: string
+  address: string | null
 }
 
 export type PersistedOrderItem = {
@@ -29,16 +31,20 @@ export type PersistedOrderItem = {
 }
 
 export type CustomerTransaction = {
+  id: string
   title: string
   reference: string
   date: string
   amount: string
   direction: 'credit' | 'debit'
+  category: 'topup' | 'payment'
   status: string
 }
 
 export type CustomerInvoice = {
   id: string
+  orderId: string
+  orderReference: string
   reference: string
   status: 'Paid' | 'Awaiting payment'
   total: number
@@ -52,6 +58,7 @@ export type CustomerInvoice = {
 
 export type CustomerOrder = {
   id: string
+  publicOrderNumber: string
   customerId: string
   title: string
   status: OrderStatus
@@ -71,6 +78,7 @@ export type CustomerOrder = {
   isSubscriptionOrder: boolean
   pickupLocation: string
   lines?: OrderLine[]
+  mismatch: { id: string; direction: 'over' | 'under'; detail: string } | null
 }
 
 export type CustomerStore = {
@@ -78,6 +86,7 @@ export type CustomerStore = {
   customerName: string
   customerEmail: string
   customerPhone: string
+  referralCode: string | null
   oneOffBalance: number
   subscriptionBalance: number
   balance: number
@@ -92,37 +101,55 @@ export type CustomerStore = {
   pickupLocations: PickupLocationOption[]
   orders: CustomerOrder[]
   transactions: CustomerTransaction[]
+  transactionError: string | null
   invoice: CustomerInvoice | null
+  invoices: CustomerInvoice[]
   topUpWallet: (amount: number) => Promise<void>
   addOrder: (input: { items: OrderLine[]; notes: string; pickupLocation: string }) => Promise<CustomerOrder> | CustomerOrder
 }
 
 const initialOrders: CustomerOrder[] = []
 
-const initialTransactions: CustomerTransaction[] = []
-
 function createOtp(_prefix: string, number: number) {
   return String(1000 + (Math.abs(number) % 9000))
 }
 
-function mapDatabaseTransaction(transaction: WalletTransaction): CustomerTransaction {
+function mapDatabaseTransaction(transaction: WalletTransaction): CustomerTransaction | null {
   const isCredit = transaction.txn_type === 'topup'
+  if (isCredit) return null
   const amount = `${isCredit ? '+' : '-'}₦${Number(transaction.amount).toLocaleString()}`
 
   return {
+    id: transaction.id,
     title: isCredit ? 'Wallet top up' : 'Order payment',
     reference: transaction.related_invoice_id ? `Invoice • ${transaction.related_invoice_id.slice(0, 8)}` : `Wallet • ${transaction.id.slice(0, 8)}`,
     date: new Date(transaction.created_at).toLocaleString(),
     amount,
     direction: isCredit ? 'credit' : 'debit',
-    status: transaction.txn_type === 'topup' ? 'Successful' : 'Successful',
+    category: 'payment',
+    status: 'Successful',
   }
 }
 
-function mapDatabaseInvoice(invoice: Invoice & { original_count?: number | null; final_count?: number | null; extra_amount?: number | null; mismatch_direction?: 'over' | 'under' | null; mismatch_detail?: string | null }): CustomerInvoice {
+function mapPayment(payment: Payment): CustomerTransaction {
+  return {
+    id: payment.id,
+    title: payment.plan_id ? 'Subscription payment' : 'Wallet top up',
+    reference: payment.reference,
+    date: new Date(payment.created_at).toLocaleString(),
+    amount: `+₦${Number(payment.amount).toLocaleString()}`,
+    direction: 'credit',
+    category: 'topup',
+    status: payment.status === 'success' ? 'Successful' : payment.status === 'failed' ? 'Failed' : 'Pending',
+  }
+}
+
+function mapDatabaseInvoice(invoice: Invoice & { order_reference?: string; original_count?: number | null; final_count?: number | null; extra_amount?: number | null; mismatch_direction?: 'over' | 'under' | null; mismatch_detail?: string | null }): CustomerInvoice {
   return {
     id: invoice.id,
-    reference: `QF-${invoice.id.slice(0, 6).toUpperCase()}`,
+    orderId: invoice.order_id,
+    orderReference: invoice.order_reference ?? invoice.order_id,
+    reference: `INV-${invoice.id.slice(0, 6).toUpperCase()}`,
     status: invoice.status === 'paid' ? 'Paid' : 'Awaiting payment',
     total: Number(invoice.amount),
     dueDate: invoice.paid_at ? new Date(invoice.paid_at).toLocaleDateString() : 'Due today',
@@ -136,7 +163,7 @@ function mapDatabaseInvoice(invoice: Invoice & { original_count?: number | null;
   }
 }
 
-function mapDatabaseOrder(order: Order, persistedItems: PersistedOrderItem[] = [], unpaidInvoiceOrderIds?: Set<string>, invoiceAmountsByOrderId?: Record<string, number>): CustomerOrder {
+function mapDatabaseOrder(order: Order, persistedItems: PersistedOrderItem[] = [], unpaidInvoiceOrderIds?: Set<string>, invoiceAmountsByOrderId?: Record<string, number>, pickupLocations: PickupLocationOption[] = [], orderMismatches: Array<{ id: string; order_id: string; direction: 'over' | 'under'; detail: string | null }> = []): CustomerOrder {
   const statusMap: Record<Order['status'], CustomerOrder['status']> = {
     pending_pickup: 'Awaiting pickup',
     picked_up: 'Picked up',
@@ -165,8 +192,11 @@ function mapDatabaseOrder(order: Order, persistedItems: PersistedOrderItem[] = [
     cancelled: 'bg-rose-50 text-rose-700',
   }
 
+  const mismatch = orderMismatches.find((item) => item.order_id === order.id)
+
   return {
     id: order.id,
+    publicOrderNumber: order.public_order_number,
     customerId: order.customer_id,
     title: serviceMap[order.order_type],
     status: statusMap[order.status],
@@ -182,10 +212,14 @@ function mapDatabaseOrder(order: Order, persistedItems: PersistedOrderItem[] = [
     notes: order.notes ?? '',
     service: serviceMap[order.order_type],
     paymentStatus: unpaidInvoiceOrderIds
-      ? unpaidInvoiceOrderIds.has(order.id) ? 'Pending' : 'Paid'
+      ? unpaidInvoiceOrderIds.has(order.id)
+        ? 'Pending'
+        : Object.prototype.hasOwnProperty.call(invoiceAmountsByOrderId ?? {}, order.id)
+          ? 'Paid'
+          : 'Pending'
       : ['paid', 'out_for_delivery', 'delivered'].includes(order.status) ? 'Paid' : 'Pending',
     isSubscriptionOrder: order.is_subscription_order,
-    pickupLocation: order.pickup_location_id ?? 'Pickup location pending',
+    pickupLocation: pickupLocations.find((location) => location.id === order.pickup_location_id)?.name ?? (order.pickup_location_id ? 'Pickup location pending' : 'Pickup location pending'),
     lines: persistedItems
       .filter((item) => item.order_id === order.id)
       .map((item) => ({
@@ -194,21 +228,25 @@ function mapDatabaseOrder(order: Order, persistedItems: PersistedOrderItem[] = [
         quantity: item.quantity,
         unitPrice: Number(item.unit_price),
       })),
+    mismatch: mismatch ? { id: mismatch.id, direction: mismatch.direction, detail: mismatch.detail ?? 'Vendor confirmed a different item count.' } : null,
   }
 }
 
 type CustomerStoreProviderProps = {
   children: React.ReactNode
-  profile?: { id: string; name: string | null; qaffy_id: string | null; email: string | null; phone: string | null; pickup_location_id: string | null }
+  profile?: { id: string; name: string | null; qaffy_id: string | null; email: string | null; phone: string | null; referral_code: string | null; pickup_location_id: string | null }
   persistedOrders?: Order[]
   persistedWallet?: Wallet | null
   persistedWalletTransactions?: WalletTransaction[]
+  persistedPayments?: Payment[]
+  persistedTransactionError?: string | null
   persistedUnpaidInvoiceOrderIds?: string[]
   invoiceAmountsByOrderId?: Record<string, number>
-  persistedInvoice?: (Invoice & { original_count?: number | null; final_count?: number | null; extra_amount?: number | null; mismatch_direction?: 'over' | 'under' | null; mismatch_detail?: string | null }) | null
+  persistedInvoices?: Array<Invoice & { order_reference?: string; original_count?: number | null; final_count?: number | null; extra_amount?: number | null; mismatch_direction?: 'over' | 'under' | null; mismatch_detail?: string | null }>
   persistedSubscription?: { subscription: Subscription; plan: Plan } | null
   persistedPickupLocations?: PickupLocationOption[]
   persistedOrderItems?: PersistedOrderItem[]
+  persistedOrderMismatches?: Array<{ id: string; order_id: string; direction: 'over' | 'under'; detail: string | null }>
   persistedSubscriptionUsedUnits?: number
 }
 
@@ -218,22 +256,29 @@ export function CustomerStoreProvider({
   persistedOrders,
   persistedWallet,
   persistedWalletTransactions,
+  persistedPayments,
+  persistedTransactionError = null,
   persistedUnpaidInvoiceOrderIds,
   invoiceAmountsByOrderId,
-  persistedInvoice,
+  persistedInvoices,
   persistedSubscription,
   persistedPickupLocations,
   persistedOrderItems,
+  persistedOrderMismatches = [],
   persistedSubscriptionUsedUnits = 0,
 }: CustomerStoreProviderProps) {
   const unpaidInvoiceOrderIds = new Set(persistedUnpaidInvoiceOrderIds)
-  const [orders, setOrders] = useState(() => persistedOrders ? persistedOrders.map((order) => mapDatabaseOrder(order, persistedOrderItems, unpaidInvoiceOrderIds, invoiceAmountsByOrderId)) : initialOrders)
+  const [orders, setOrders] = useState(() => persistedOrders ? persistedOrders.map((order) => mapDatabaseOrder(order, persistedOrderItems, unpaidInvoiceOrderIds, invoiceAmountsByOrderId, persistedPickupLocations, persistedOrderMismatches)) : initialOrders)
   const [savedPickupLocationId, setSavedPickupLocationId] = useState(profile?.pickup_location_id ?? null)
   const [oneOffBalance, setOneOffBalance] = useState(persistedWallet?.one_off_balance ?? 0)
   const [subscriptionBalance, setSubscriptionBalance] = useState(persistedWallet?.subscription_balance ?? 0)
-  const [transactions] = useState(() => persistedWalletTransactions ? persistedWalletTransactions.map(mapDatabaseTransaction) : initialTransactions)
-  const [invoice] = useState(() => persistedInvoice ? mapDatabaseInvoice(persistedInvoice) : null)
-  const [subscriptionUsedUnits, setSubscriptionUsedUnits] = useState(persistedSubscriptionUsedUnits)
+  const [transactions] = useState(() => [
+    ...(persistedPayments ?? []).map(mapPayment),
+    ...(persistedWalletTransactions ?? []).map(mapDatabaseTransaction).filter((transaction): transaction is CustomerTransaction => transaction !== null),
+  ].sort((left, right) => new Date(right.date).getTime() - new Date(left.date).getTime()))
+  const [invoices] = useState(() => (persistedInvoices ?? []).map(mapDatabaseInvoice))
+  const invoice = invoices[0] ?? null
+  const [subscriptionUsedUnits] = useState(persistedSubscriptionUsedUnits)
 
   const store = useMemo<CustomerStore>(() => {
     const subscription = persistedSubscription
@@ -246,6 +291,7 @@ export function CustomerStoreProvider({
       customerName: profile?.name ?? 'Customer',
       customerEmail: profile?.email ?? 'Not available',
       customerPhone: profile?.phone ?? '',
+      referralCode: profile?.referral_code ?? null,
       oneOffBalance,
       subscriptionBalance,
       balance: oneOffBalance,
@@ -262,7 +308,9 @@ export function CustomerStoreProvider({
       pickupLocations: persistedPickupLocations ?? [],
       orders,
       transactions,
+      transactionError: persistedTransactionError,
       invoice,
+      invoices,
       topUpWallet: async (amount) => {
         if (amount <= 0) throw new Error('Enter a valid top-up amount.')
         setSubscriptionBalance((currentBalance) => {
@@ -280,6 +328,7 @@ export function CustomerStoreProvider({
         let savedOrderId: string | null = null
         const order: CustomerOrder = {
           id: `QF-${idNumber}`,
+          publicOrderNumber: `QO-${String(idNumber).padStart(6, '0')}`,
           customerId: profile?.qaffy_id ?? 'Not available',
           title: service,
           status: 'Awaiting pickup',
@@ -297,9 +346,11 @@ export function CustomerStoreProvider({
           isSubscriptionOrder: Boolean(persistedSubscription),
           pickupLocation,
           lines: items,
+          mismatch: null,
         }
 
-        let savedWeightedUnits = clothes
+        let savedPickupOtp: string | null = null
+        let savedPublicOrderNumber: string | null = null
 
         if (supabase && profile?.id) {
           const serviceTypes = new Set(items.map((item) => item.service))
@@ -342,27 +393,34 @@ export function CustomerStoreProvider({
             throw categoryRatesError
           }
 
-          const subscriptionUnitsByCategoryId = new Map((categoryRates ?? []).map((rate) => [rate.category_id, Number(rate.subscription_units)]))
+          const rateByCategoryId = new Map((categoryRates ?? []).map((rate) => [rate.category_id, rate]))
           const weightedClothes = items.reduce((sum, item) => {
             const categoryId = categoryIdByName.get(item.category)
-            const subscriptionUnits = categoryId ? subscriptionUnitsByCategoryId.get(categoryId) : undefined
-            return sum + item.quantity * (subscriptionUnits ?? 0)
+            const subscriptionUnits = categoryId ? Number(rateByCategoryId.get(categoryId)?.subscription_units ?? 0) : 0
+            return sum + item.quantity * subscriptionUnits
           }, 0)
-          savedWeightedUnits = weightedClothes
-
-          if (weightedClothes <= 0 || items.some((item) => !categoryIdByName.has(item.category) || !subscriptionUnitsByCategoryId.has(categoryIdByName.get(item.category)!))) {
+          if (weightedClothes <= 0 || items.some((item) => {
+            const categoryId = categoryIdByName.get(item.category)
+            const rate = categoryId ? rateByCategoryId.get(categoryId) : undefined
+            return !categoryId || !rate || Number(rate.subscription_units) <= 0 || getRateValue(rate, item.service as RateCardService) <= 0
+          })) {
             toast.error('Some laundry categories are not configured yet.')
             throw new Error('Missing cloth category or subscription units')
           }
 
           const hasSubscription = Boolean(persistedSubscription)
-
+          const authoritativeItems = items.map((item) => {
+            const categoryId = categoryIdByName.get(item.category)!
+            const rate = rateByCategoryId.get(categoryId)!
+            return { ...item, unitPrice: getRateValue(rate, item.service as RateCardService), subscriptionUnits: Number(rate.subscription_units) }
+          })
           const { data: insertedOrder, error: orderInsertError } = await supabase
             .from('orders')
             .insert({
               customer_id: profile.id,
               order_type: orderType,
-              clothes_count_customer: weightedClothes,
+              clothes_count_customer: clothes,
+              clothes_count_customer_units: hasSubscription ? weightedClothes : clothes,
               status: 'pending_pickup',
               notes: notes || null,
               pickup_location_id: selectedLocation?.id ?? null,
@@ -377,9 +435,11 @@ export function CustomerStoreProvider({
             throw orderInsertError ?? new Error('Order insert did not return an order')
           }
           savedOrderId = insertedOrder.id
+          savedPickupOtp = insertedOrder.pickup_otp
+          savedPublicOrderNumber = insertedOrder.public_order_number
 
           if (insertedOrder) {
-            const orderItems = items.flatMap((item) => {
+            const orderItems = authoritativeItems.flatMap((item) => {
               const categoryId = categoryIdByName.get(item.category)
               if (!categoryId) return []
 
@@ -409,15 +469,11 @@ export function CustomerStoreProvider({
           }
         }
 
-        setOrders((currentOrders) => [{ ...order, id: savedOrderId ?? order.id }, ...currentOrders])
-        if (persistedSubscription) {
-          setSubscriptionUsedUnits((currentUnits) => currentUnits + savedWeightedUnits)
-        }
-
+        setOrders((currentOrders) => [{ ...order, id: savedOrderId ?? order.id, publicOrderNumber: savedPublicOrderNumber ?? order.publicOrderNumber, pickupOtp: savedPickupOtp ?? order.pickupOtp }, ...currentOrders])
         return order
       },
     }
-  }, [invoice, oneOffBalance, orders, profile, persistedPickupLocations, persistedSubscription, savedPickupLocationId, subscriptionBalance, subscriptionUsedUnits, transactions])
+  }, [invoice, invoices, oneOffBalance, orders, persistedTransactionError, profile, persistedPickupLocations, persistedSubscription, savedPickupLocationId, subscriptionBalance, subscriptionUsedUnits, transactions])
 
   return <CustomerStoreContext.Provider value={store}>{children}</CustomerStoreContext.Provider>
 }

@@ -1,8 +1,10 @@
-import { useMemo, useState } from 'react'
-import { data, Link, useOutletContext } from 'react-router'
+import { useEffect, useMemo, useState } from 'react'
+import { data, Link, useFetcher, useOutletContext, useRevalidator } from 'react-router'
 import { Search } from 'lucide-react'
 import { requireRole } from '../../../lib/auth.server'
+import { useRef } from 'react'
 
+// eslint-disable-next-line react-refresh/only-export-components
 export async function action({ request }: { request: Request }) {
   const auth = await requireRole(request, 'vendor')
   if (!auth) return data({ ok: false, message: 'Please sign in again.' }, { status: 401 })
@@ -32,6 +34,7 @@ export async function action({ request }: { request: Request }) {
 
 type VendorOrder = {
   id: string
+  publicOrderNumber: string
   customer_id: string
   order_type: 'wash' | 'wash_iron' | 'mixed'
   clothes_count_customer: number
@@ -76,8 +79,17 @@ function formatDate(value: string | null) {
 
 export default function Orders() {
   const { orders } = useOutletContext<VendorLayoutData>()
+  const fetcher = useFetcher<typeof action>()
+  const { revalidate } = useRevalidator()
+  const handledFetcherData = useRef<typeof fetcher.data>(null)
   const [query, setQuery] = useState('')
   const [activeTab, setActiveTab] = useState<'unclaimed' | 'claimed' | 'delivered'>('unclaimed')
+
+  useEffect(() => {
+    if (!fetcher.data || handledFetcherData.current === fetcher.data) return
+    handledFetcherData.current = fetcher.data
+    if (fetcher.data.ok) revalidate()
+  }, [fetcher.data, revalidate])
 
   const rows = useMemo(() => orders.map((order) => ({
     ...order,
@@ -88,7 +100,7 @@ export default function Orders() {
   })), [orders])
 
   const filteredOrders = rows.filter((order) => {
-    const searchText = `${order.id} ${order.customer} ${order.customerId} ${order.location} ${orderTypeLabels[order.order_type]}`.toLowerCase()
+    const searchText = `${order.publicOrderNumber} ${order.customer} ${order.customerId} ${order.location} ${orderTypeLabels[order.order_type]}`.toLowerCase()
     const inTab = activeTab === 'unclaimed'
       ? order.status === 'pending_pickup'
       : activeTab === 'claimed'
@@ -166,7 +178,7 @@ export default function Orders() {
                   <td className="whitespace-nowrap px-4 py-4 text-sm text-slate-600">{order.clothes_count_customer}</td>
                   <td className="px-4 py-4"><span className={`inline-flex whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${statusStyle[order.label]}`}>{order.label}</span></td>
                   <td className="whitespace-nowrap px-4 py-4 text-right">
-                    <Link to={`/vendor?orderId=${encodeURIComponent(order.id)}&returnTo=orders`} className="rounded-[7px] border border-[#dedede] px-3 py-2 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary">View details</Link>
+                    {order.status === 'pending_pickup' ? <button type="button" onClick={() => fetcher.submit({ intent: 'claim', orderId: order.id }, { method: 'post' })} disabled={fetcher.state !== 'idle'} className="rounded-[7px] border border-[#dedede] px-3 py-2 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary disabled:cursor-wait disabled:opacity-60">{fetcher.state !== 'idle' ? 'Claiming...' : 'Claim'}</button> : <Link to={`/vendor?orderId=${encodeURIComponent(order.id)}&returnTo=orders`} className="rounded-[7px] border border-[#dedede] px-3 py-2 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary">View details</Link>}
                   </td>
                 </tr>
               ))}

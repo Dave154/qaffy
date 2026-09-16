@@ -1,11 +1,21 @@
+import { useState } from 'react'
+import { useNavigation } from 'react-router'
 import { useCustomerStore } from '../customer-store-hook'
 
 const filterItems = ['All activity', 'Top ups', 'Payments']
 
 export default function Transactions() {
-  const { transactions } = useCustomerStore()
+  const { transactions, transactionError } = useCustomerStore()
+  const navigation = useNavigation()
+  const [activeFilter, setActiveFilter] = useState('All activity')
+  const isLoading = navigation.state === 'loading'
+  const filteredTransactions = activeFilter === 'Top ups'
+    ? transactions.filter((transaction) => transaction.category === 'topup')
+    : activeFilter === 'Payments'
+      ? transactions.filter((transaction) => transaction.category === 'payment')
+      : transactions
   const exportTransactions = () => {
-    const rows = [['Type', 'Reference', 'Amount', 'Date', 'Status'], ...transactions.map((transaction) => [transaction.title, transaction.reference, transaction.amount, transaction.date, transaction.status])]
+    const rows = [['Type', 'Reference', 'Amount', 'Date', 'Status'], ...filteredTransactions.map((transaction) => [transaction.title, transaction.reference, transaction.amount, transaction.date, transaction.status])]
     const csv = rows.map((row) => row.map((value) => `"${value.replaceAll('"', '""')}"`).join(',')).join('\n')
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
     const link = document.createElement('a')
@@ -26,12 +36,14 @@ export default function Transactions() {
 
       <section className="rounded-[26px] border border-slate-200 bg-white p-3 shadow-sm shadow-slate-100 sm:p-4">
         <div className="flex gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {filterItems.map((item, index) => (
+          {filterItems.map((item) => (
             <button
               key={item}
               type="button"
+              onClick={() => setActiveFilter(item)}
+              aria-pressed={activeFilter === item}
               className={`shrink-0 rounded-full px-4 py-2 text-sm font-medium transition ${
-                index === 0 ? 'bg-slate-900 text-white shadow-sm shadow-slate-200' : 'bg-slate-50 text-slate-500 hover:bg-sky-50 hover:text-sky-700'
+                activeFilter === item ? 'bg-slate-900 text-white shadow-sm shadow-slate-200' : 'bg-slate-50 text-slate-500 hover:bg-sky-50 hover:text-sky-700'
               }`}
             >
               {item}
@@ -51,9 +63,10 @@ export default function Transactions() {
           </button>
         </div>
 
-        <div className="divide-y divide-slate-100">
-          {transactions.map((transaction) => (
-            <div key={`${transaction.title}-${transaction.date}`} className="flex items-center gap-3 py-4 first:pt-1 last:pb-1">
+        {transactionError && <div role="alert" className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">Payment activity could not be loaded. Please refresh and try again.</div>}
+        {isLoading ? <div className="space-y-3" aria-live="polite">{[1, 2, 3].map((item) => <div key={item} className="h-16 animate-pulse rounded-2xl bg-slate-100" />)}</div> : filteredTransactions.length === 0 ? <div className="rounded-2xl bg-slate-50 p-8 text-center text-sm text-slate-500">{transactions.length === 0 ? 'No wallet activity yet.' : `No ${activeFilter.toLowerCase()} found.`}</div> : <div className="divide-y divide-slate-100">
+          {filteredTransactions.map((transaction) => (
+            <div key={transaction.id} className="flex items-center gap-3 py-4 first:pt-1 last:pb-1">
               <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl text-lg ${transaction.direction === 'credit' ? 'bg-emerald-50 text-emerald-600' : 'bg-sky-50 text-sky-700'}`}>
                 {transaction.direction === 'credit' ? '↓' : '↑'}
               </span>
@@ -64,11 +77,11 @@ export default function Transactions() {
               </div>
               <div className="shrink-0 text-right">
                 <p className={`font-semibold ${transaction.direction === 'credit' ? 'text-emerald-600' : 'text-slate-900'}`}>{transaction.amount}</p>
-                <p className="mt-1 text-[11px] font-medium text-emerald-600">{transaction.status}</p>
+                <p className={`mt-1 text-[11px] font-medium ${transaction.status === 'Successful' ? 'text-emerald-600' : transaction.status === 'Failed' ? 'text-rose-600' : 'text-amber-600'}`}>{transaction.status}</p>
               </div>
             </div>
           ))}
-        </div>
+        </div>}
       </section>
     </div>
   )

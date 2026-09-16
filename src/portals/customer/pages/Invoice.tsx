@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { data, Link, useFetcher, useRevalidator } from 'react-router'
 import type { Route } from './+types/Invoice'
 import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
@@ -29,7 +29,9 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function Invoice() {
-  const { invoice } = useCustomerStore()
+  const { invoices } = useCustomerStore()
+  const [selectedInvoiceId, setSelectedInvoiceId] = useState(invoices[0]?.id ?? '')
+  const invoice = invoices.find((item) => item.id === selectedInvoiceId) ?? invoices[0] ?? null
   const fetcher = useFetcher<typeof action>()
   const revalidator = useRevalidator()
 
@@ -46,7 +48,6 @@ export default function Invoice() {
       <div className="space-y-5 pb-8">
         <header className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <p className="text-sm font-medium text-violet-600">Billing</p>
             <h2 className="mt-1 text-2xl font-bold tracking-tight text-[#121212] lg:hidden">Invoice</h2>
           </div>
         </header>
@@ -68,17 +69,25 @@ export default function Invoice() {
     <div className="space-y-5 pb-8">
       <header className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="text-sm font-medium text-violet-600">Billing</p>
           <h2 className="mt-1 text-2xl font-bold tracking-tight text-[#121212] lg:hidden">Invoice</h2>
         </div>
         <span className={`rounded-full px-3 py-1.5 text-sm font-medium ${invoice.status === 'Paid' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{invoice.status}</span>
       </header>
 
+      {invoices.length > 1 && <section className="rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-100 sm:p-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div><h3 className="font-bold text-slate-900">Invoice history</h3><p className="mt-1 text-sm text-slate-500">Select an order invoice to view its final billing details.</p></div>
+          <select value={invoice.id} onChange={(event) => setSelectedInvoiceId(event.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 focus:border-brand-primary focus:ring-2 focus:ring-brand-focus">
+            {invoices.map((item) => <option key={item.id} value={item.id}>{item.orderReference} · {item.status} · ₦{item.total.toLocaleString()}</option>)}
+          </select>
+        </div>
+      </section>}
+
       <section className="rounded-[28px] bg-gradient-to-br from-slate-950 via-violet-950 to-violet-700 p-5 text-white shadow-lg shadow-violet-200 sm:p-6">
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="text-xs font-medium uppercase tracking-[0.18em] text-violet-200">Order reference</p>
-            <h3 className="mt-3 text-3xl font-bold">{invoice.reference}</h3>
+            <h3 className="mt-3 text-3xl font-bold">{invoice.orderReference}</h3>
             <p className="mt-2 text-sm text-violet-100">{invoice.dueDate}</p>
           </div>
           <div className="rounded-2xl bg-white/10 px-3 py-2 text-sm font-medium text-violet-50">{invoice.status}</div>

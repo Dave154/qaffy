@@ -1,5 +1,6 @@
 import { Outlet, data, useLoaderData, useNavigate, useRevalidator } from 'react-router'
 import { useEffect, useState } from 'react'
+import { LogOut } from 'lucide-react'
 import type { Route } from './+types/LogisticsLayout'
 import QaffyLogo from '../../components/QaffyLogo'
 import { requireRole } from '../../lib/auth.server'
@@ -74,32 +75,14 @@ export default function LogisticsLayout() {
 
   return (
     <div className="min-h-screen bg-[#f7f9f9] text-slate-900">
-      <header className="sticky top-0 z-10 border-b border-brand-border bg-white/80 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3.5">
+      <header className="sticky top-0 z-10 border-b border-brand-border bg-white/80 backdrop-blur-xl p-1">
+        <div className="mx-auto flex max-w-5xl items-center justify-between px-5 py-4 sm:px-6">
           <div className="flex items-center gap-3">
             <QaffyLogo className="inline-flex" />
-            <h1 className="text-xl font-bold text-slate-900">Logistics</h1>
+            <h1 className="text-base font-bold text-slate-900 sm:text-lg">Logistics</h1>
           </div>
 
-          <div className="rounded-full border border-brand-border bg-brand-soft p-1 shadow-sm">
-            <div className="flex gap-1">
-              <button
-                type="button"
-                onClick={() => setActiveTab('pickup')}
-                className={`rounded-full px-3 py-1.5 text-sm font-medium transition ${activeTab === 'pickup' ? 'bg-brand-primary text-white shadow-sm' : 'text-slate-600 hover:text-brand-primary'}`}
-              >
-                Pickup
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveTab('delivery')}
-                className={`rounded-full px-3 py-1.5 text-sm font-medium transition ${activeTab === 'delivery' ? 'bg-brand-primary text-white shadow-sm' : 'text-slate-600 hover:text-brand-primary'}`}
-              >
-                Delivery
-              </button>
-            </div>
-          </div>
-          <button type="button" onClick={() => void handleLogout()} className="text-sm font-semibold text-slate-600 hover:text-brand-primary">Log out</button>
+          <button type="button" onClick={() => void handleLogout()} aria-label="Log out" title="Log out" className="inline-flex items-center gap-1.5 text-sm font-semibold text-red-600 hover:text-red-700"><LogOut className="h-4 w-4" /></button>
         </div>
       </header>
 

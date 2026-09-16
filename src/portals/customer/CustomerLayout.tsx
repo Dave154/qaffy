@@ -1,19 +1,20 @@
-import { useState } from 'react'
-import { data, NavLink, Outlet, redirect, useLoaderData, useLocation, useNavigate } from 'react-router'
+import { useEffect, useState } from 'react'
+import { data, NavLink, Outlet, redirect, useLoaderData, useLocation, useNavigate, useRevalidator } from 'react-router'
 import type { Route } from './+types/CustomerLayout'
-import { Home, LayoutGrid, ReceiptText, Sparkles, Settings, Menu, X, UserCircle2, Search, Bell, ClipboardList, LogOut } from 'lucide-react'
+import { Home, LayoutGrid, ReceiptText, FileText, Sparkles, Settings, Menu, X, UserCircle2, Search, Bell, ClipboardList, LogOut } from 'lucide-react'
 import QaffyLogo from '../../components/QaffyLogo'
 import { isSupabaseServerConfigured, getSupabaseServerClient } from '../../lib/supabase.server'
 import { supabase } from '../../lib/supabase.client'
 import { CustomerStoreProvider } from './customer-store'
 import type { PersistedOrderItem, PickupLocationOption } from './customer-store'
 import { useCustomerStore } from './customer-store-hook'
-import type { Invoice, Order, Plan, Subscription, Wallet, WalletTransaction } from '../../types/database.types'
+import type { Invoice, Order, Payment, Plan, Subscription, Wallet, WalletTransaction } from '../../types/database.types'
 
 const navItems = [
   { to: '/', label: 'Overview', icon: Home, end: true },
   { to: '/transactions', label: 'Transactions', icon: ReceiptText },
   { to: '/orders', label: 'Orders', icon: LayoutGrid },
+  { to: '/invoice', label: 'Invoice', icon: FileText },
   { to: '/plans', label: 'Plans', icon: Sparkles },
   { to: '/settings', label: 'Settings', icon: Settings },
 ]
@@ -32,7 +33,7 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   const { data: profile } = await serverSupabase
     .from('profiles')
-    .select('id, role, name, qaffy_id, email, phone, pickup_location_id')
+    .select('id, role, name, qaffy_id, email, phone, referral_code, pickup_location_id')
     .eq('id', userData.user.id)
     .maybeSingle()
 
@@ -56,7 +57,7 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   const { data: pickupLocations } = await serverSupabase
     .from('pickup_locations')
-    .select('id, name')
+    .select('id, name, address')
     .eq('active', true)
     .order('name')
 
@@ -80,8 +81,8 @@ export async function loader({ request }: Route.LoaderArgs) {
   weekStart.setHours(0, 0, 0, 0)
   weekStart.setDate(weekStart.getDate() - weekStart.getDay())
   const subscriptionUsedUnits = (orders ?? [])
-    .filter((order) => order.is_subscription_order && new Date(order.created_at) >= weekStart)
-    .reduce((total, order) => total + order.clothes_count_customer, 0)
+    .filter((order) => order.is_subscription_order && order.clothes_count_vendor !== null && new Date(order.created_at) >= weekStart)
+    .reduce((total, order) => total + (order.subscription_units_applied ?? 0), 0)
 
   const { data: wallet } = await serverSupabase
     .from('wallets')
@@ -96,34 +97,47 @@ export async function loader({ request }: Route.LoaderArgs) {
     .order('created_at', { ascending: false })
     .limit(20)
 
-  const { data: invoice } = await serverSupabase
+  const { data: payments, error: paymentsError } = await serverSupabase
+    .from('payments')
+    .select('*')
+    .eq('customer_id', userData.user.id)
+    .order('created_at', { ascending: false })
+    .limit(20)
+
+  const { data: invoiceRows } = await serverSupabase
     .from('invoices')
     .select('*, orders!inner(customer_id)')
     .eq('orders.customer_id', userData.user.id)
     .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-
-  const invoiceOrder = invoice ? (orders ?? []).find((order) => order.id === invoice.order_id) : null
-  const { data: invoiceMismatch } = invoice
-    ? await serverSupabase.from('mismatches').select('direction, detail').eq('order_id', invoice.order_id).order('created_at', { ascending: false }).limit(1).maybeSingle()
-    : { data: null }
-  const invoiceWithDetails = invoice
-    ? {
-        ...invoice,
-        original_count: invoiceOrder?.clothes_count_customer ?? null,
-        final_count: invoiceOrder?.clothes_count_vendor ?? null,
-        extra_amount: invoiceOrder?.billed_extra_amount ?? 0,
-        mismatch_direction: invoiceMismatch?.direction ?? null,
-        mismatch_detail: invoiceMismatch?.detail ?? null,
-      }
-    : null
+  const customerInvoiceOrderIds = (invoiceRows ?? []).map((invoice) => invoice.order_id)
+  const { data: invoiceMismatches } = customerInvoiceOrderIds.length > 0
+    ? await serverSupabase.from('mismatches').select('id, order_id, direction, detail, created_at').in('order_id', customerInvoiceOrderIds).order('created_at', { ascending: false })
+    : { data: [] }
+  const orderMismatches = (invoiceMismatches ?? []).map((mismatch) => ({ id: mismatch.id, order_id: mismatch.order_id, direction: mismatch.direction, detail: mismatch.detail }))
+  const mismatchByOrderId = new Map<string, { direction: 'over' | 'under'; detail: string | null }>()
+  for (const mismatch of invoiceMismatches ?? []) {
+    if (!mismatchByOrderId.has(mismatch.order_id)) mismatchByOrderId.set(mismatch.order_id, mismatch)
+  }
+  const invoicesWithDetails = (invoiceRows ?? []).map((invoice) => {
+    const invoiceOrder = (orders ?? []).find((order) => order.id === invoice.order_id)
+    const invoiceMismatch = mismatchByOrderId.get(invoice.order_id)
+    return {
+      ...invoice,
+      order_reference: invoiceOrder?.public_order_number ?? invoice.order_id,
+      original_count: invoiceOrder?.clothes_count_customer ?? null,
+      final_count: invoiceOrder?.clothes_count_vendor ?? null,
+      extra_amount: invoiceOrder?.billed_extra_amount ?? 0,
+      mismatch_direction: invoiceMismatch?.direction ?? null,
+      mismatch_detail: invoiceMismatch?.detail ?? null,
+    }
+  })
 
   const { data: subscription } = await serverSupabase
     .from('subscriptions')
     .select('*')
     .eq('customer_id', userData.user.id)
     .eq('status', 'active')
+    .or(`end_date.is.null,end_date.gte.${new Date().toISOString().slice(0, 10)}`)
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle()
@@ -143,22 +157,28 @@ export async function loader({ request }: Route.LoaderArgs) {
     subscriptionUsedUnits,
     wallet,
     walletTransactions: walletTransactions ?? [],
-    invoice: invoiceWithDetails,
+    payments: payments ?? [],
+    transactionError: paymentsError?.message ?? null,
+    invoices: invoicesWithDetails,
+    orderMismatches,
     subscription,
     subscriptionPlan,
   }, { headers })
 }
 
 function PlanSummary() {
-  const { activePlan, subscription, subscriptionBalance } = useCustomerStore()
+  const { activePlan, subscription, subscriptionBalance, subscriptionUsedUnits } = useCustomerStore()
+  const displayedUsedUnits = activePlan ? Math.min(subscriptionUsedUnits, activePlan.weekly_limit) : subscriptionUsedUnits
+  const usagePercent = activePlan ? Math.min(100, Math.round((displayedUsedUnits / activePlan.weekly_limit) * 100)) : 0
 
   return (
     <div className="mt-auto rounded-2xl border border-[#a7d7d2] bg-[#eef9f7] p-3.5">
       <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#418d87]">Current plan</p>
       <p className="mt-2 text-sm font-semibold capitalize text-slate-800">{activePlan && subscription ? `${subscription.name} ${subscription.billingPeriod}` : 'No active plan'}</p>
       {subscriptionBalance < 0 && <p className="mt-1 text-xs text-brand-primary">Subscription debt: ₦{Math.abs(subscriptionBalance).toLocaleString()}</p>}
-      <div className="mt-3 h-1.5 overflow-hidden bg-[#d3ebe8]">
-        <div className="h-full w-3/4 bg-[#55aaa3]" />
+      {activePlan && <p className="mt-2 text-xs text-slate-600">{displayedUsedUnits} of {activePlan.weekly_limit} weekly units used</p>}
+      <div className="mt-3 h-1.5 overflow-hidden bg-[#d3ebe8]" aria-label={`${usagePercent}% of weekly plan allowance used`}>
+        <div className="h-full bg-[#55aaa3] transition-[width] duration-500" style={{ width: `${usagePercent}%` }} />
       </div>
     </div>
   )
@@ -171,6 +191,8 @@ export default function CustomerLayout() {
   const location = useLocation()
   const navigate = useNavigate()
   const loaderData = useLoaderData<typeof loader>()
+  const revalidator = useRevalidator()
+  const mismatchCount = loaderData?.orderMismatches?.length ?? 0
   const pageTitle = location.pathname === '/'
     ? 'Overview'
     : location.pathname.startsWith('/invoice')
@@ -187,18 +209,38 @@ export default function CustomerLayout() {
     navigate('/login')
   }
 
+  useEffect(() => {
+    const client = supabase
+    if (!client || !loaderData?.profile?.id) return
+
+    const channel = client
+      .channel(`customer-wallet-${loaderData.profile.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'wallets', filter: `customer_id=eq.${loaderData.profile.id}` }, () => revalidator.revalidate())
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'wallet_transactions', filter: `customer_id=eq.${loaderData.profile.id}` }, () => revalidator.revalidate())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'subscriptions', filter: `customer_id=eq.${loaderData.profile.id}` }, () => revalidator.revalidate())
+      .subscribe()
+
+    return () => {
+      void client.removeChannel(channel)
+    }
+  }, [loaderData?.profile?.id, revalidator])
+
   return (
     <CustomerStoreProvider
+      key={`${loaderData?.profile?.id ?? 'customer'}:${loaderData?.profile?.name ?? ''}:${loaderData?.profile?.phone ?? ''}:${loaderData?.profile?.referral_code ?? ''}:${loaderData?.wallet?.updated_at ?? 'no-wallet'}:${loaderData?.subscription?.id ?? 'no-subscription'}:${loaderData?.subscription?.end_date ?? ''}`}
       profile={loaderData?.profile ?? undefined}
       persistedOrders={loaderData ? (loaderData.orders as Order[]) : undefined}
       persistedUnpaidInvoiceOrderIds={loaderData?.unpaidInvoiceOrderIds as string[] | undefined}
       invoiceAmountsByOrderId={loaderData?.invoiceAmountsByOrderId as Record<string, number> | undefined}
       persistedPickupLocations={loaderData ? (loaderData.pickupLocations as PickupLocationOption[]) : undefined}
       persistedOrderItems={loaderData ? (loaderData.orderItems as PersistedOrderItem[]) : undefined}
+      persistedOrderMismatches={loaderData?.orderMismatches as Array<{ id: string; order_id: string; direction: 'over' | 'under'; detail: string | null }> | undefined}
       persistedSubscriptionUsedUnits={loaderData?.subscriptionUsedUnits as number | undefined}
       persistedWallet={loaderData?.wallet as Wallet | null | undefined}
       persistedWalletTransactions={loaderData?.walletTransactions as WalletTransaction[] | undefined}
-      persistedInvoice={loaderData?.invoice as Invoice | null | undefined}
+      persistedPayments={loaderData?.payments as Payment[] | undefined}
+      persistedTransactionError={loaderData?.transactionError as string | null | undefined}
+      persistedInvoices={loaderData?.invoices as Array<Invoice & { order_reference?: string; original_count?: number | null; final_count?: number | null; extra_amount?: number | null; mismatch_direction?: 'over' | 'under' | null; mismatch_detail?: string | null }> | undefined}
       persistedSubscription={loaderData?.subscription && loaderData.subscriptionPlan
         ? { subscription: loaderData.subscription as Subscription, plan: loaderData.subscriptionPlan as Plan }
         : null}
@@ -330,9 +372,9 @@ export default function CustomerLayout() {
             <Search className="h-3.5 w-3.5 text-[#8e9a9a]" />
             <span>Search orders</span>
           </NavLink>
-          <NavLink to="/transactions" aria-label="Open notifications" className="relative flex h-10 w-10 items-center justify-center rounded-full border border-[#f2f3f3] bg-white text-[#121212]">
+          <NavLink to="/orders?filter=Needs%20attention" aria-label="Open notifications" className="relative flex h-10 w-10 items-center justify-center rounded-full border border-[#f2f3f3] bg-white text-[#121212]">
             <Bell className="h-4 w-4" />
-            <span className="absolute right-2 top-1 h-2 w-2 rounded-full border-2 border-white bg-[#f59e0b]" />
+            {mismatchCount > 0 && <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full border-2 border-white bg-[#f59e0b] px-1 text-[10px] font-bold text-white">{mismatchCount}</span>}
           </NavLink>
           </div>
         </div>

@@ -9,7 +9,7 @@ export type OrderLifecycleStatus =
   | 'cancelled'
 
 export function isReadyForDispatch(status: OrderLifecycleStatus) {
-  return ['picked_up', 'at_vendor', 'invoiced', 'paid'].includes(status)
+  return status === 'paid'
 }
 
 export function isReadyForFinalDelivery(status: OrderLifecycleStatus) {

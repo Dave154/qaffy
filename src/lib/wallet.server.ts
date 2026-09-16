@@ -91,7 +91,7 @@ export async function finalizeVendorOrder(
     }
 
     const items = await tx`
-      select oi.id, oi.quantity, oi.service, r.wash_price, r.iron_price, r.wash_iron_price
+      select oi.id, oi.quantity, oi.service, r.wash_price, r.iron_price, r.wash_iron_price, r.subscription_units
       from order_items oi
       join cloth_category_rates r on r.category_id = oi.category_id
       where oi.order_id = ${orderId}
@@ -100,6 +100,10 @@ export async function finalizeVendorOrder(
     if (receivedItems.some((item) => !orderItemIds.has(item.itemId))) throw new Error('Received item does not belong to this order')
     const receivedById = new Map(receivedItems.map((item) => [item.itemId, item.quantity]))
     const finalCount = items.reduce((total, item) => total + (receivedById.get(item.id) ?? (addedItemIds.includes(item.id) ? Number(item.quantity) : 0)), 0)
+    const finalWeightedUnits = items.reduce((total, item) => {
+      const quantity = receivedById.get(item.id) ?? (addedItemIds.includes(item.id) ? Number(item.quantity) : 0)
+      return total + quantity * Number(item.subscription_units)
+    }, 0)
     const finalAmount = items.reduce((total, item) => {
       const quantity = receivedById.get(item.id) ?? (addedItemIds.includes(item.id) ? Number(item.quantity) : 0)
       const unitPrice = item.service === 'wash_iron'
@@ -109,7 +113,7 @@ export async function finalizeVendorOrder(
           : Number(item.wash_price)
       return total + quantity * unitPrice
     }, 0)
-    const originalAmount = items.reduce((total, item) => {
+    const originalAmount = items.filter((item) => !addedItemIds.includes(item.id)).reduce((total, item) => {
       const unitPrice = item.service === 'wash_iron'
         ? Number(item.wash_iron_price)
         : item.service === 'iron'
@@ -118,18 +122,59 @@ export async function finalizeVendorOrder(
       return total + Number(item.quantity) * unitPrice
     }, 0)
     const extraAmount = Math.max(0, finalAmount - originalAmount)
+    const billingCount = order.is_subscription_order ? finalWeightedUnits : finalCount
     const mismatchDirection = finalCount > Number(order.clothes_count_customer) ? 'over' : finalCount < Number(order.clothes_count_customer) ? 'under' : null
     if (mismatchDirection && !mismatchDetail.trim()) throw new Error('Mismatch details are required when the final count changes')
 
+    let invoiceAmount = Math.round(finalAmount * 100) / 100
+    if (order.is_subscription_order) {
+      const weekStart = new Date()
+      weekStart.setHours(0, 0, 0, 0)
+      weekStart.setDate(weekStart.getDate() - weekStart.getDay())
+      const [subscriptionPlan] = await tx`
+        select p.weekly_limit
+        from subscriptions s
+        join plans p on p.id = s.plan_id
+        where s.customer_id = ${order.customer_id}
+          and s.status = 'active'
+          and (s.end_date is null or s.end_date >= current_date)
+        order by s.created_at desc
+        limit 1
+      `
+      const [usage] = await tx`
+        select coalesce(sum(clothes_count_vendor_units), 0) as used_units
+        from orders
+        where customer_id = ${order.customer_id}
+          and is_subscription_order = true
+          and clothes_count_vendor_units is not null
+          and created_at >= ${weekStart}
+          and id <> ${orderId}
+      `
+      let remainingUnits = Math.max(0, Number(subscriptionPlan?.weekly_limit ?? 0) - Number(usage?.used_units ?? 0))
+      let subscriptionUnitsApplied = 0
+      invoiceAmount = 0
+      for (const item of items) {
+        const quantity = receivedById.get(item.id) ?? (addedItemIds.includes(item.id) ? Number(item.quantity) : 0)
+        const units = Number(item.subscription_units)
+        const coveredQuantity = units > 0 ? Math.min(quantity, Math.floor(remainingUnits / units)) : 0
+        remainingUnits -= coveredQuantity * units
+        subscriptionUnitsApplied += coveredQuantity * units
+        const unitPrice = item.service === 'wash_iron' ? Number(item.wash_iron_price) : item.service === 'iron' ? Number(item.iron_price) : Number(item.wash_price)
+        invoiceAmount += (quantity - coveredQuantity) * unitPrice
+      }
+      invoiceAmount = Math.round(invoiceAmount * 100) / 100
+      await tx`update orders set subscription_units_applied = ${subscriptionUnitsApplied} where id = ${orderId}`
+    }
+
     await tx`
       update orders
-      set clothes_count_vendor = ${finalCount}, billed_extra_amount = ${extraAmount}, status = 'invoiced'
+      set clothes_count_vendor = ${finalCount}, clothes_count_vendor_units = ${billingCount}, subscription_units_applied = ${order.is_subscription_order ? sql`coalesce(subscription_units_applied, 0)` : sql`null`}, billed_extra_amount = ${extraAmount}, status = 'invoiced'
       where id = ${orderId}
     `
     for (const item of items) {
       await tx`
         update order_items
-        set confirmed_quantity = ${receivedById.get(item.id) ?? 0}
+        set confirmed_quantity = ${receivedById.get(item.id) ?? (addedItemIds.includes(item.id) ? Number(item.quantity) : 0)}
         where id = ${item.id}
       `
     }
@@ -142,12 +187,31 @@ export async function finalizeVendorOrder(
     }
     const [invoice] = await tx`
       insert into invoices (order_id, amount, status)
-      values (${orderId}, ${Math.round(finalAmount * 100) / 100}, 'unpaid')
+      values (${orderId}, ${invoiceAmount}, 'unpaid')
       on conflict (order_id) do update set amount = excluded.amount, status = 'unpaid', paid_at = null
       returning id, amount, status
     `
 
-    return { invoiceId: invoice.id, amount: Number(invoice.amount), finalCount, mismatchDirection }
+    if (order.is_subscription_order) {
+      await tx`insert into wallets (customer_id) values (${order.customer_id}) on conflict (customer_id) do nothing`
+      const [wallet] = await tx`select one_off_balance from wallets where customer_id = ${order.customer_id} for update`
+      const availableBalance = Number(wallet?.one_off_balance ?? 0)
+      if (invoiceAmount <= availableBalance) {
+        const newBalance = availableBalance - invoiceAmount
+        const deliveryOtp = generateFourDigitOtp()
+        await tx`update wallets set one_off_balance = ${newBalance}, updated_at = now() where customer_id = ${order.customer_id}`
+        await tx`update invoices set status = 'paid', paid_at = now() where id = ${invoice.id}`
+        await tx`update orders set status = 'paid', delivery_otp = ${deliveryOtp} where id = ${orderId}`
+        if (invoiceAmount > 0) {
+          await tx`
+            insert into wallet_transactions (customer_id, balance_type, txn_type, amount, balance_after, related_invoice_id)
+            values (${order.customer_id}, 'one_off', 'debit', ${invoiceAmount}, ${newBalance}, ${invoice.id})
+          `
+        }
+      }
+    }
+
+    return { invoiceId: invoice.id, amount: Number(invoice.amount), finalCount: billingCount, mismatchDirection }
   })
 }
 
@@ -162,6 +226,12 @@ export async function creditWallet(customerId: string, balanceType: WalletBalanc
       values (${customerId}, ${paymentReference}, ${amount}, ${balanceType}, 'pending')
       on conflict (reference) do nothing
     `
+
+    const [existingPayment] = await tx`select id, status from payments where reference = ${paymentReference} and customer_id = ${customerId}`
+    if (existingPayment?.status === 'success') {
+      const [wallet] = await tx`select one_off_balance, subscription_balance from wallets where customer_id = ${customerId}`
+      return { newBalance: balanceType === 'subscription' ? Number(wallet.subscription_balance) : Number(wallet.one_off_balance), alreadyCredited: true }
+    }
 
     const [wallet] = await tx`select * from wallets where customer_id = ${customerId} for update`
     const subscriptionDebt = Math.max(0, -Number(wallet.subscription_balance))
@@ -190,6 +260,44 @@ export async function creditWallet(customerId: string, balanceType: WalletBalanc
     }
 
     return { newBalance: balanceType === 'subscription' ? subscriptionBalance : oneOffBalance }
+  })
+}
+
+/** Completes a paid subscription transaction without changing either wallet balance. */
+export async function activateSubscriptionFromPayment(customerId: string, paymentReference: string) {
+  return sql.begin(async (tx) => {
+    const [payment] = await tx`
+      select p.id, p.plan_id, p.status, p.customer_id, pl.name, pl.type, pl.semester_end_date
+      from payments p
+      join plans pl on pl.id = p.plan_id
+      where p.reference = ${paymentReference}
+        and p.customer_id = ${customerId}
+        and p.plan_id is not null
+      for update of p
+    `
+    if (!payment) throw new Error('Subscription payment was not found')
+    if (payment.status !== 'success') throw new Error('Subscription payment is not successful')
+
+    const [existingSubscription] = await tx`
+      select id from subscriptions
+      where customer_id = ${customerId} and status = 'active'
+      limit 1
+    `
+    if (existingSubscription) return { alreadyActivated: true }
+
+    const [settings] = await tx`
+      select semester_end_date from app_settings where key = 'semester' limit 1
+    `
+    const startDate = new Date()
+    const endDate = payment.type === 'semester'
+      ? settings?.semester_end_date ?? payment.semester_end_date ?? new Date(startDate.getFullYear(), startDate.getMonth() + 6, startDate.getDate()).toISOString().slice(0, 10)
+      : new Date(startDate.getFullYear(), startDate.getMonth() + 1, startDate.getDate()).toISOString().slice(0, 10)
+
+    await tx`
+      insert into subscriptions (customer_id, plan_id, status, start_date, end_date)
+      values (${customerId}, ${payment.plan_id}, 'active', ${startDate.toISOString().slice(0, 10)}, ${endDate})
+    `
+    return { alreadyActivated: false, planName: payment.name, endDate }
   })
 }
 
@@ -240,7 +348,7 @@ export async function adjustWallet(customerId: string, balanceType: WalletBalanc
   })
 }
 
-/** Charges subscription excess from the customer's subscription balance. */
+/** Charges an unpaid subscription-order excess from the customer's general wallet. */
 export async function chargeSubscriptionInvoice(customerId: string, invoiceId: string) {
   return sql.begin(async (tx) => {
     await tx`insert into wallets (customer_id) values (${customerId}) on conflict (customer_id) do nothing`
@@ -257,20 +365,20 @@ export async function chargeSubscriptionInvoice(customerId: string, invoiceId: s
     if (invoice.status === 'paid') return { amount: Number(invoice.amount), alreadyPaid: true }
 
     const [wallet] = await tx`
-      select subscription_balance from wallets where customer_id = ${customerId} for update
+      select one_off_balance from wallets where customer_id = ${customerId} for update
     `
-    const currentBalance = Number(wallet?.subscription_balance ?? 0)
+    const currentBalance = Number(wallet?.one_off_balance ?? 0)
     const amount = Number(invoice.amount)
     const newBalance = currentBalance - amount
     const deliveryOtp = newBalance >= 0
       ? generateFourDigitOtp()
       : null
-    await tx`update wallets set subscription_balance = ${newBalance}, updated_at = now() where customer_id = ${customerId}`
+    await tx`update wallets set one_off_balance = ${newBalance}, updated_at = now() where customer_id = ${customerId}`
     await tx`update invoices set status = 'paid', paid_at = now() where id = ${invoiceId}`
     if (deliveryOtp) await tx`update orders set delivery_otp = ${deliveryOtp} where id = ${invoice.order_id}`
     await tx`
       insert into wallet_transactions (customer_id, balance_type, txn_type, amount, balance_after, related_invoice_id)
-      values (${customerId}, 'subscription', 'debit', ${amount}, ${newBalance}, ${invoiceId})
+      values (${customerId}, 'one_off', 'debit', ${amount}, ${newBalance}, ${invoiceId})
     `
 
     return { amount, newBalance, deliveryOtp, alreadyPaid: false }

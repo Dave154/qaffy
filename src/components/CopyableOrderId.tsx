@@ -8,7 +8,7 @@ type CopyableOrderIdProps = {
 }
 
 function getDisplayId(id: string) {
-  return id.length > 8 ? `${id.slice(0, 8)}...` : id
+  return id.startsWith('QO-') || id.length <= 8 ? id : `${id.slice(0, 8)}...`
 }
 
 export default function CopyableOrderId({ id, className = '', label = 'Order ID' }: CopyableOrderIdProps) {

@@ -6,6 +6,9 @@ import { defineConfig } from 'vite'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [tailwindcss(), reactRouter()],
+  server: {
+    allowedHosts: ['pitchy-marylouise-dependably.ngrok-free.dev'],
+  },
   resolve: {
     alias: {
       '@': path.resolve(import.meta.dirname, './src'),

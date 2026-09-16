@@ -5,7 +5,11 @@ import { useCustomerStore } from '../customer-store-hook'
 export default function OtpFlow() {
   const { orders } = useCustomerStore()
   const [activeStep, setActiveStep] = useState(0)
-  const order = orders[0]
+  const activeOrders = orders.filter((candidate) => candidate.status !== 'Delivered')
+  const [selectedOrderId, setSelectedOrderId] = useState(activeOrders[0]?.id ?? '')
+  const selectedOrder = activeOrders.find((candidate) => candidate.id === selectedOrderId) ?? activeOrders[0]
+  const order = selectedOrder
+
   const otpSteps = [
     { label: 'Pickup OTP', detail: 'Share this when dropping off your bag', value: order?.pickedUp ? undefined : order?.pickupOtp },
     { label: 'Delivery OTP', detail: 'Use this to collect your clean clothes', value: order?.deliveryOtp },
@@ -19,8 +23,19 @@ export default function OtpFlow() {
         <div>
           <h2 className="mt-1 text-2xl font-bold tracking-tight text-[#121212] lg:hidden">Pickup and delivery OTP</h2>
         </div>
-        <span className="rounded-full bg-sky-50 px-3 py-1.5 text-sm font-medium text-sky-700">{order?.id ?? 'No active order'}</span>
+        <span className="rounded-full bg-sky-50 px-3 py-1.5 text-sm font-medium text-sky-700">{order?.publicOrderNumber ?? 'No active order'}</span>
       </header>
+
+      {activeOrders.length > 0 && <section className="rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-100 sm:p-5">
+        <label className="block">
+          <span className="mb-1.5 block text-sm font-medium text-slate-600">Active order</span>
+          <select value={order?.id ?? ''} onChange={(event) => { setSelectedOrderId(event.target.value); setActiveStep(0) }} className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-900 focus:border-brand-primary focus:ring-2 focus:ring-brand-focus">
+            {activeOrders.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.publicOrderNumber} · {candidate.service} · {candidate.status}</option>)}
+          </select>
+        </label>
+      </section>}
+
+      {activeOrders.length === 0 && <section className="rounded-[26px] border border-slate-200 bg-white p-5 shadow-sm shadow-slate-100"><p className="text-sm text-slate-500">No active orders have OTPs available.</p></section>}
 
       <section className="rounded-[28px] bg-gradient-to-br from-violet-600 via-violet-700 to-fuchsia-500 p-5 text-white shadow-lg shadow-violet-200 sm:p-6">
         <div className="flex items-start justify-between gap-4">

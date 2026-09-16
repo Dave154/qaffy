@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Check, ChevronRight, Clock3, Sparkles } from 'lucide-react'
-import { data, useFetcher, useRevalidator } from 'react-router'
+import { Check, ChevronRight } from 'lucide-react'
+import { data, useFetcher, useLoaderData, useLocation, useRevalidator } from 'react-router'
 import type { Route } from './+types/Plans'
 import PlanEndingBanner from '../../../components/PlanEndingBanner'
 import { useCustomerStore } from '../customer-store-hook'
@@ -23,82 +23,34 @@ type CustomerPlan = {
   featured: boolean
 }
 
-const plans: CustomerPlan[] = [
-  {
-    id: 'lite-monthly',
-    name: 'Lite',
-    billingPeriod: 'monthly',
-    price: 18000,
-    currency: 'NGN',
-    weeklyLimit: 20,
-    service: 'Wash only',
-    description: 'A simple monthly plan for lighter laundry routines.',
-    benefits: ['Professional cleaning', 'Scheduled pickup', 'Quick turnaround'],
-    featured: false,
-  },
-  {
-    id: 'silver-monthly',
-    name: 'Silver',
-    billingPeriod: 'monthly',
-    price: 27000,
-    currency: 'NGN',
-    weeklyLimit: 20,
-    service: 'Wash + Iron',
-    description: 'More care for households with a steady weekly load.',
-    benefits: ['Professional cleaning', 'Scheduled pickup', 'Priority wash queue'],
-    featured: true,
-  },
-  {
-    id: 'gold-monthly',
-    name: 'Gold',
-    billingPeriod: 'monthly',
-    price: 33000,
-    currency: 'NGN',
-    weeklyLimit: 25,
-    service: 'Wash + Iron',
-    description: 'Extra weekly capacity for larger laundry routines.',
-    benefits: ['Professional cleaning', 'Priority pickup', 'Extra garment care'],
-    featured: false,
-  },
-  {
-    id: 'lite-semester',
-    name: 'Lite',
-    billingPeriod: 'semester',
-    price: 100000,
-    currency: 'NGN',
-    weeklyLimit: 20,
-    service: 'Wash only',
-    description: 'A semester plan for lighter weekly laundry.',
-    benefits: ['Professional cleaning', 'Scheduled pickup', 'Quick turnaround'],
-    featured: false,
-  },
-  {
-    id: 'silver-semester',
-    name: 'Silver',
-    billingPeriod: 'semester',
-    price: 150000,
-    currency: 'NGN',
-    weeklyLimit: 20,
-    service: 'Wash + Iron',
-    description: 'Consistent care for households throughout the semester.',
-    benefits: ['Professional cleaning', 'Scheduled pickup', 'Priority wash queue'],
-    featured: true,
-  },
-  {
-    id: 'gold-semester',
-    name: 'Gold',
-    billingPeriod: 'semester',
-    price: 185000,
-    currency: 'NGN',
-    weeklyLimit: 25,
-    service: 'Wash + Iron',
-    description: 'The highest weekly limit for larger households.',
-    benefits: ['Professional cleaning', 'Priority pickup', 'Extra garment care'],
-    featured: false,
-  },
-]
+type PlansData = { plans: CustomerPlan[] }
 
-// Test activation keeps subscription limits testable before payment integration is wired.
+// eslint-disable-next-line react-refresh/only-export-components
+export async function loader({ request }: Route.LoaderArgs) {
+  if (!isSupabaseServerConfigured) return data<PlansData>({ plans: [] }, { status: 200 })
+  const { supabase, headers } = getSupabaseServerClient(request)
+  const { data: rows, error } = await supabase
+    .from('plans')
+    .select('id, name, type, price, weekly_limit, active')
+    .eq('active', true)
+    .order('price')
+  if (error) return data<PlansData>({ plans: [] }, { headers, status: 200 })
+  return data<PlansData>({
+    plans: (rows ?? []).map((plan, index) => ({
+      id: plan.id,
+      name: plan.name,
+      billingPeriod: plan.type,
+      price: Number(plan.price),
+      currency: 'NGN',
+      weeklyLimit: plan.weekly_limit,
+      service: 'Laundry care',
+      description: `${plan.weekly_limit} clothes per week on a ${plan.type} plan.`,
+      benefits: ['Professional laundry care', 'Scheduled pickup', 'Qaffy order tracking'],
+      featured: index === 1,
+    })),
+  }, { headers, status: 200 })
+}
+
 // eslint-disable-next-line react-refresh/only-export-components
 export async function action({ request }: Route.ActionArgs) {
   if (!isSupabaseServerConfigured) return data({ ok: false, message: 'Supabase is not configured.' }, { status: 500 })
@@ -108,17 +60,11 @@ export async function action({ request }: Route.ActionArgs) {
   if (!userData.user) return data({ ok: false, message: 'Please sign in first.' }, { status: 401, headers })
 
   const formData = await request.formData()
-  const planKey = String(formData.get('planKey') ?? '')
-  const selectedPlan = plans.find((plan) => plan.id === planKey)
-  if (!selectedPlan) return data({ ok: false, message: 'That plan is not available.' }, { status: 400, headers })
-
   const { data: planRows, error: planError } = await serverSupabase
     .from('plans')
     .select('*')
-    .eq('name', selectedPlan.name)
-    .eq('type', selectedPlan.billingPeriod)
+    .eq('id', String(formData.get('planId') ?? ''))
     .eq('active', true)
-    .order('created_at', { ascending: false })
     .limit(1)
 
   if (planError || !planRows?.[0]) return data({ ok: false, message: 'This plan is not configured in the database.' }, { status: 400, headers })
@@ -137,29 +83,21 @@ export async function action({ request }: Route.ActionArgs) {
     return data({ ok: false, message: 'You already have an active subscription.' }, { status: 409, headers })
   }
 
-  const { data: semesterSettings } = await serverSupabase
-    .from('app_settings' as any)
-    .select('semester_end_date')
-    .eq('key', 'semester')
-    .maybeSingle() as { data: { semester_end_date: string | null } | null }
+  const amount = Number(plan.price)
+  const reference = `subscription_${crypto.randomUUID()}`
+  const { error: paymentError } = await serverSupabase.from('payments').insert({ customer_id: userData.user.id, provider: 'paystack', reference, amount, balance_type: 'subscription', plan_id: plan.id, status: 'pending' })
+  if (paymentError) return data({ ok: false, message: 'The subscription payment could not be recorded.' }, { status: 500, headers })
 
-  const startDate = new Date()
-  const endDate = selectedPlan.billingPeriod === 'semester'
-    ? semesterSettings?.semester_end_date ?? plan.semester_end_date ?? new Date(startDate.getFullYear(), startDate.getMonth() + 6, startDate.getDate()).toISOString().slice(0, 10)
-    : new Date(startDate.getFullYear(), startDate.getMonth() + 1, startDate.getDate()).toISOString().slice(0, 10)
-
-  const { error: insertError } = await serverSupabase
-    .from('subscriptions')
-    .insert({
-      customer_id: userData.user.id,
-      plan_id: plan.id,
-      status: 'active',
-      start_date: startDate.toISOString().slice(0, 10),
-      end_date: endDate,
-    })
-
-  if (insertError) return data({ ok: false, message: 'Subscription could not be activated.' }, { status: 500, headers })
-  return data({ ok: true, message: `${plan.name} ${plan.type} activated successfully.` }, { headers })
+  const secretKey = process.env.PAYSTACK_SECRET_KEY
+  if (!secretKey) return data({ ok: false, message: 'Paystack is not configured.' }, { status: 503, headers })
+  const initializationResponse = await fetch('https://api.paystack.co/transaction/initialize', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${secretKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: userData.user.email, amount: Math.round(amount * 100), reference, callback_url: new URL('/plans?payment=pending', request.url).toString() }),
+  })
+  const initialization = await initializationResponse.json() as { status?: boolean; message?: string; data?: { authorization_url?: string } }
+  if (!initializationResponse.ok || !initialization.status || !initialization.data?.authorization_url) return data({ ok: false, message: initialization.message ?? 'Paystack could not start this subscription payment.' }, { status: 502, headers })
+  return data({ ok: true, authorizationUrl: initialization.data.authorization_url }, { headers })
 }
 
 function formatPrice(price: number) {
@@ -167,10 +105,12 @@ function formatPrice(price: number) {
 }
 
 export default function Plans() {
-  const { activePlan, subscriptionEndDate } = useCustomerStore()
+  const { plans } = useLoaderData<typeof loader>()
+  const { activePlan, subscriptionEndDate, subscriptionUsedUnits } = useCustomerStore()
   const fetcher = useFetcher<typeof action>()
   const revalidator = useRevalidator()
-  const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>('semester')
+  const location = useLocation()
+  const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>(() => plans.some((plan) => plan.billingPeriod === 'semester') ? 'semester' : 'monthly')
   const visiblePlans = plans.filter((plan) => plan.billingPeriod === billingPeriod)
   const currentPlan = activePlan
     ? {
@@ -180,17 +120,42 @@ export default function Plans() {
         price: activePlan.price,
         currency: 'NGN' as const,
         weeklyLimit: activePlan.weekly_limit,
-        service: 'Current service',
+        service: 'Laundry care',
         description: 'Your active Qaffy subscription.',
         benefits: [],
         featured: false,
       }
     : null
+  const displayedUsedUnits = currentPlan ? Math.min(subscriptionUsedUnits, currentPlan.weeklyLimit) : subscriptionUsedUnits
+  const planUsagePercent = currentPlan ? Math.min(100, Math.round((displayedUsedUnits / currentPlan.weeklyLimit) * 100)) : 0
+
+  useEffect(() => {
+    if (!new URLSearchParams(location.search).has('payment')) return
+    if (activePlan) {
+      window.history.replaceState(null, '', '/plans')
+      return
+    }
+
+    let attempts = 0
+    const refreshTimer = window.setInterval(() => {
+      attempts += 1
+      revalidator.revalidate()
+      if (attempts >= 15) window.clearInterval(refreshTimer)
+    }, 2000)
+    return () => window.clearInterval(refreshTimer)
+  }, [activePlan, location.search, revalidator])
 
   const isSubscribing = fetcher.state !== 'idle'
   useEffect(() => {
-    if (fetcher.data?.ok) {
-      toast.success(fetcher.data.message)
+    if (fetcher.data?.ok && 'authorizationUrl' in fetcher.data && fetcher.data.authorizationUrl) {
+      window.location.assign(fetcher.data.authorizationUrl)
+      return
+    }
+    if (fetcher.data && !fetcher.data.ok && 'message' in fetcher.data) {
+      toast.error(fetcher.data.message)
+    }
+    if (fetcher.data?.ok && !('authorizationUrl' in fetcher.data)) {
+      toast.success('Subscription payment completed.')
       revalidator.revalidate()
     }
   }, [fetcher.data, revalidator])
@@ -207,11 +172,11 @@ export default function Plans() {
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#418d87]">Current plan</p>
             <div className="mt-3 flex items-center gap-2"><h3 className="text-2xl font-bold">{currentPlan.name}</h3><span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold capitalize text-[#418d87]">{currentPlan.billingPeriod}</span></div>
-            <p className="mt-2 text-sm text-slate-600">{currentPlan.service} · {currentPlan.weeklyLimit} clothes per week</p>
+            <p className="mt-2 text-sm text-slate-600">{currentPlan.service} · {displayedUsedUnits} of {currentPlan.weeklyLimit} weekly units used</p>
           </div>
           <div className="text-left sm:text-right"><p className="text-sm font-semibold text-slate-900">{subscriptionEndDate ? `Ends on ${subscriptionEndDate}` : 'Active subscription'}</p><p className="mt-1 text-xs text-slate-500">{currentPlan.weeklyLimit} clothes per week</p></div>
         </div>
-        <div className="mt-5 h-2 overflow-hidden rounded-full bg-[#d3ebe8]"><div className="h-full w-4/5 rounded-full bg-[#55aaa3]" /></div>
+        <div className="mt-5 h-2 overflow-hidden rounded-full bg-[#d3ebe8]" aria-label={`${planUsagePercent}% of weekly plan allowance used`}><div className="h-full rounded-full bg-[#55aaa3] transition-[width] duration-500" style={{ width: `${planUsagePercent}%` }} /></div>
       </section>}
 
       {currentPlan && <PlanEndingBanner planName={`${currentPlan.name} ${currentPlan.billingPeriod}`} endDate={subscriptionEndDate} />}
@@ -224,7 +189,11 @@ export default function Plans() {
       </section>
 
       <section className="grid gap-4 xl:grid-cols-3">
-        {visiblePlans.map((plan) => {
+        {visiblePlans.length === 0 ? (
+          <div className="col-span-full rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
+            <p className="text-sm font-semibold text-slate-700">No {billingPeriod} plans are available yet.</p>
+          </div>
+        ) : visiblePlans.map((plan) => {
           const isCurrent = plan.id === activePlan?.id
           return <article key={plan.id} className={`relative flex flex-col rounded-2xl border p-5 shadow-sm ${plan.featured ? 'border-brand-strong bg-brand-surface' : 'border-[#e7e7e7] bg-white'}`}>
             {plan.featured && <span className="absolute right-5 top-5 rounded-full bg-brand-strong px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-white">Popular</span>}
@@ -232,14 +201,13 @@ export default function Plans() {
             <p className="mt-4 min-h-10 text-sm leading-5 text-slate-600">{plan.description}</p>
             <div className="mt-5 grid gap-2 border-y border-[#eeeeee] py-4 text-sm"><div className="flex items-center justify-between"><span className="text-slate-500">Weekly limit</span><span className="font-semibold text-slate-900">{plan.weeklyLimit} clothes</span></div><div className="flex items-center justify-between"><span className="text-slate-500">Service</span><span className="font-semibold text-slate-900">{plan.service}</span></div></div>
             <ul className="mt-5 flex-1 space-y-3">{plan.benefits.map((benefit) => <li key={benefit} className="flex items-start gap-2 text-sm text-slate-700"><span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#d8f3e9] text-[#418d87]"><Check className="h-3 w-3" /></span><span>{benefit}</span></li>)}</ul>
-            <button type="button" disabled={isCurrent || isSubscribing} onClick={() => { fetcher.submit({ planKey: plan.id }, { method: 'post' }); }} className={`mt-6 flex w-full items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold transition ${isCurrent ? 'cursor-default bg-[#eef9f7] text-[#418d87]' : plan.featured ? 'bg-brand-strong text-white hover:bg-brand-strong-hover' : 'border border-brand-border bg-white text-brand-strong hover:bg-brand-soft'}`}>{isCurrent ? <>Current plan <Check className="h-4 w-4" /></> : isSubscribing ? 'Activating...' : <>Choose plan <ChevronRight className="h-4 w-4" /></>}</button>
+            <button type="button" disabled={Boolean(activePlan) || isSubscribing} onClick={() => { fetcher.submit({ planId: plan.id }, { method: 'post' }); }} className={`mt-6 flex w-full items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold transition ${isCurrent ? 'cursor-default bg-[#eef9f7] text-[#418d87]' : activePlan ? 'cursor-not-allowed border border-slate-200 bg-slate-50 text-slate-400' : plan.featured ? 'bg-brand-strong text-white hover:bg-brand-strong-hover' : 'border border-brand-border bg-white text-brand-strong hover:bg-brand-soft'}`}>{isCurrent ? <>Current plan <Check className="h-4 w-4" /></> : activePlan ? 'Current subscription active' : isSubscribing ? 'Opening secure checkout...' : <>Choose plan <ChevronRight className="h-4 w-4" /></>}</button>
           </article>
         })}
       </section>
 
-      {fetcher.data && !fetcher.data.ok && <p role="alert" className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{fetcher.data.message}</p>}
+      {fetcher.data && !fetcher.data.ok && 'message' in fetcher.data && <p role="alert" className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{fetcher.data.message}</p>}
 
-      <section className="flex items-start gap-3 rounded-2xl border border-[#e7e7e7] bg-white p-4 text-sm text-slate-600"><Clock3 className="mt-0.5 h-4 w-4 shrink-0 text-[#418d87]" /><p>Pay ahead for your next plan and it will begin after your current plan ends. Clothes above the weekly limit are billed separately.</p><Sparkles className="ml-auto mt-0.5 hidden h-4 w-4 shrink-0 text-brand-strong sm:block" /></section>
     </div>
   )
 }

@@ -1,17 +1,18 @@
+import { ArrowRight, ShieldCheck } from 'lucide-react'
 import { useMemo, useState } from 'react'
 
 type TopUpModalProps = {
   currentBalance: number
   subscriptionBalance: number
-  pendingOrders: Array<{ id: string; amount: number }>
   onTopUp: (amount: number) => Promise<void>
+  isProcessing: boolean
+  error: string | null
   onClose: () => void
 }
 
-export default function TopUpModal({ currentBalance, subscriptionBalance, pendingOrders, onTopUp, onClose }: TopUpModalProps) {
+export default function TopUpModal({ currentBalance, subscriptionBalance, onTopUp, isProcessing, error, onClose }: TopUpModalProps) {
   const negativeBalance = Math.max(0, -subscriptionBalance)
-  const pendingTotal = pendingOrders.reduce((sum, order) => sum + order.amount, 0)
-  const debt = Math.max(negativeBalance, pendingTotal)
+  const debt = negativeBalance
 
   const suggestedAmount = useMemo(() => {
     const minimum = 1000
@@ -19,20 +20,12 @@ export default function TopUpModal({ currentBalance, subscriptionBalance, pendin
   }, [debt])
 
   const [amount, setAmount] = useState<number>(suggestedAmount)
-  const [isProcessing, setIsProcessing] = useState(false)
-  const balanceAfterTopUp = currentBalance + Math.max(0, amount - negativeBalance)
-  const appliedToDebt = Math.min(amount, negativeBalance)
-  const newBalance = Math.max(0, balanceAfterTopUp)
+  const appliedToDebt = Math.min(Math.max(amount, 0), negativeBalance)
+  const walletCredit = Math.max(0, amount - negativeBalance)
 
-  const handleSimulatedTopUp = async () => {
+  const handleTopUp = async () => {
     if (amount < 1000) return
-    setIsProcessing(true)
-    try {
-      await onTopUp(amount)
-      onClose()
-    } finally {
-      setIsProcessing(false)
-    }
+    await onTopUp(amount)
   }
 
   return (
@@ -46,7 +39,8 @@ export default function TopUpModal({ currentBalance, subscriptionBalance, pendin
       >
         <header className="flex items-start justify-between gap-3">
           <div>
-            <h2 id="top-up-title" className="mt-1 text-2xl font-bold tracking-tight text-[#121212]">Add funds</h2>
+            <h2 id="top-up-title" className="mt-1 text-2xl font-bold tracking-tight text-[#121212]">Top up your wallet</h2>
+            <p className="mt-1 text-sm text-slate-500">Choose an amount and pay securely with Paystack.</p>
           </div>
           <button type="button" onClick={onClose} aria-label="Close top-up modal" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-xl text-slate-500 shadow-sm transition hover:border-violet-200 hover:text-violet-700">
             ×
@@ -59,13 +53,13 @@ export default function TopUpModal({ currentBalance, subscriptionBalance, pendin
               <p className="text-xs font-medium uppercase tracking-[0.18em] text-sky-200">One-time balance</p>
               <p className="mt-2 text-3xl font-bold">₦{currentBalance.toLocaleString()}</p>
             </div>
-            <span className="rounded-full bg-white/10 px-2.5 py-1 text-xs font-medium text-sky-50">Wallet</span>
+            <span className="rounded-full bg-white/10 px-2.5 py-1 text-xs font-medium text-sky-50">Current balance</span>
           </div>
         </div>
 
         <div className="mt-5 rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-100 sm:p-5">
           <label className="block">
-            <span className="mb-1.5 block text-sm font-medium text-slate-600">Top-up amount</span>
+            <span className="mb-1.5 block text-sm font-semibold text-slate-700">How much would you like to add?</span>
             <input
               type="number"
               min={1000}
@@ -75,14 +69,10 @@ export default function TopUpModal({ currentBalance, subscriptionBalance, pendin
             />
           </label>
 
-          <div className="mt-4 rounded-2xl bg-sky-50 p-3 text-sm text-slate-700">
+          <div className="mt-4 rounded-2xl border border-sky-100 bg-sky-50 p-3 text-sm text-slate-700">
             {negativeBalance > 0 ? (
               <p>
                 Your subscription debt of <span className="font-semibold text-sky-700">₦{negativeBalance.toLocaleString()}</span> will be cleared first. Any remaining amount becomes your one-time balance.
-              </p>
-            ) : pendingTotal > 0 ? (
-              <p>
-                Your pending orders total <span className="font-semibold text-sky-700">₦{pendingTotal.toLocaleString()}</span>. Add funds to cover them before delivery.
               </p>
             ) : (
               <p>
@@ -92,25 +82,17 @@ export default function TopUpModal({ currentBalance, subscriptionBalance, pendin
           </div>
 
           <div className="mt-4 grid gap-2 rounded-2xl border border-slate-200 bg-white p-3 text-sm">
-            <div className="flex items-center justify-between text-slate-600"><span>Applied to balance</span><span className="font-semibold text-slate-900">₦{appliedToDebt.toLocaleString()}</span></div>
-            <div className="flex items-center justify-between text-slate-600"><span>New balance</span><span className={`font-semibold ${newBalance > 0 ? 'text-emerald-700' : 'text-slate-900'}`}>₦{newBalance.toLocaleString()}</span></div>
+            <div className="flex items-center justify-between text-slate-600"><span>Amount to pay</span><span className="font-semibold text-slate-900">₦{Math.max(0, amount).toLocaleString()}</span></div>
+            {negativeBalance > 0 && <div className="flex items-center justify-between text-slate-600"><span>Clears subscription debt</span><span className="font-semibold text-slate-900">₦{appliedToDebt.toLocaleString()}</span></div>}
+            <div className="flex items-center justify-between border-t border-slate-100 pt-2 text-slate-600"><span>Added to wallet</span><span className="font-semibold text-emerald-700">₦{walletCredit.toLocaleString()}</span></div>
           </div>
 
-          <div className="mt-4 rounded-2xl bg-slate-50 p-3">
-            <p className="text-[10px] uppercase tracking-[0.22em] text-slate-400">Pending orders</p>
-            <div className="mt-3 space-y-2">
-              {pendingOrders.length > 0 ? pendingOrders.map((order) => (
-                <div key={order.id} className="flex items-center justify-between text-sm text-slate-600">
-                  <span>{order.id}</span>
-                  <span className="font-semibold text-slate-900">₦{order.amount.toLocaleString()}</span>
-                </div>
-              )) : <p className="text-sm text-slate-500">No pending orders.</p>}
-            </div>
-          </div>
+          {error && <p role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">{error}</p>}
 
-          <button type="button" disabled={amount < 1000 || isProcessing} onClick={handleSimulatedTopUp} className="mt-5 w-full rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white shadow-md shadow-slate-200 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50">
-            {isProcessing ? 'Processing...' : 'Add funds'}
+          <button type="button" disabled={amount < 1000 || isProcessing} onClick={() => void handleTopUp()} className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-brand-primary px-4 py-3 text-sm font-semibold text-white shadow-md shadow-brand-primary/20 transition hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50">
+            {isProcessing ? 'Opening secure checkout...' : <>Continue to Paystack <ArrowRight className="h-4 w-4" /></>}
           </button>
+          <p className="mt-3 flex items-center justify-center gap-1.5 text-center text-xs text-slate-500"><ShieldCheck className="h-3.5 w-3.5 text-emerald-600" /> Your wallet updates automatically after payment confirmation.</p>
         </div>
       </section>
     </div>

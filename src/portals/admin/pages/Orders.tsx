@@ -5,6 +5,7 @@ import { requireRole } from '../../../lib/auth.server'
 
 type AdminOrder = {
   id: string
+  public_order_number: string
   created_at: string
   picked_up_date: string | null
   order_type: 'wash' | 'wash_iron' | 'mixed'
@@ -71,7 +72,7 @@ export default function Orders() {
   const [selectedOrder, setSelectedOrder] = useState<AdminOrder | null>(null)
   const statusFilter = searchParams.get('status') ?? 'all'
   const filteredOrders = useMemo(() => orders.filter((order) => {
-    const text = `${order.id} ${order.customer?.name ?? ''} ${order.customer?.qaffy_id ?? ''} ${order.customer?.email ?? ''} ${order.customer?.phone ?? ''} ${order.location?.name ?? ''}`.toLowerCase()
+    const text = `${order.public_order_number} ${order.customer?.name ?? ''} ${order.customer?.qaffy_id ?? ''} ${order.customer?.email ?? ''} ${order.customer?.phone ?? ''} ${order.location?.name ?? ''}`.toLowerCase()
     return (statusFilter === 'all' || order.status === statusFilter) && text.includes(query.toLowerCase())
   }), [orders, query, statusFilter])
 

@@ -70,7 +70,7 @@ export default function VendorLayout() {
   const [menuOpen, setMenuOpen] = useState(false)
   const location = useLocation()
   const navigate = useNavigate()
-  const revalidator = useRevalidator()
+  const { revalidate } = useRevalidator()
 
   useEffect(() => {
     const client = supabase
@@ -78,14 +78,14 @@ export default function VendorLayout() {
 
     const channel = client
       .channel('vendor-order-feed')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => revalidator.revalidate())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_logistics_events' }, () => revalidator.revalidate())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => revalidate())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_logistics_events' }, () => revalidate())
       .subscribe()
 
     return () => {
       void client.removeChannel(channel)
     }
-  }, [revalidator])
+  }, [revalidate])
   const handleLogout = async () => {
     if (supabase) await supabase.auth.signOut()
     navigate('/vendor/login', { replace: true })

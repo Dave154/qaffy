@@ -1,8 +1,7 @@
-import { useState } from 'react'
-import { data } from 'react-router'
+import { useEffect, useState } from 'react'
+import { data, useFetcher } from 'react-router'
 import type { Route } from './+types/Home'
 import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
-import { creditWallet } from '../../../lib/wallet.server'
 import { ArrowUpRight, ClipboardList, CreditCard, FileText, Gift, Settings2, Sparkles } from 'lucide-react'
 import { Link } from 'react-router'
 import NewOrder from './NewOrder'
@@ -11,8 +10,9 @@ import CopyableOrderId from '../../../components/CopyableOrderId'
 import { useCustomerStore } from '../customer-store-hook'
 import BubblyBackground from '../../../components/BubblyBackground'
 import PlanEndingBanner from '../../../components/PlanEndingBanner'
+import MismatchBanner from '../../../components/MismatchBanner'
 
-// Creates a pending top-up payment, then credits the wallet server-side.
+// Initializes Paystack top-ups and credits the wallet only after server-side verification.
 // eslint-disable-next-line react-refresh/only-export-components
 export async function action({ request }: Route.ActionArgs) {
   if (!isSupabaseServerConfigured) return data({ ok: false, message: 'Supabase is not configured.' }, { status: 500 })
@@ -22,27 +22,41 @@ export async function action({ request }: Route.ActionArgs) {
   if (!userData.user) return data({ ok: false, message: 'Please sign in again.' }, { status: 401, headers })
 
   const formData = await request.formData()
+  const intent = String(formData.get('intent') ?? 'initialize')
   const amount = Number(formData.get('amount'))
+
+  if (intent !== 'initialize') return data({ ok: false, message: 'Unsupported payment action.' }, { status: 400, headers })
+
   if (!Number.isFinite(amount) || amount < 1000) return data({ ok: false, message: 'Minimum top-up is ₦1,000.' }, { status: 400, headers })
 
-  const reference = `topup_${crypto.randomUUID()}`
-  try {
-    const result = await creditWallet(userData.user.id, 'one_off', amount, reference)
-    return data({ ok: true, newBalance: result.newBalance }, { headers })
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Top-up failed.'
-    return data({ ok: false, message }, { status: 500, headers })
+  const secretKey = process.env.PAYSTACK_SECRET_KEY
+  if (!secretKey) return data({ ok: false, message: 'Paystack is not configured.' }, { status: 503, headers })
+  const paymentReference = `topup_${crypto.randomUUID()}`
+  const { error: paymentError } = await serverSupabase.from('payments').insert({ customer_id: userData.user.id, provider: 'paystack', reference: paymentReference, amount, balance_type: 'one_off', status: 'pending' })
+  if (paymentError) {
+    console.error('Paystack pending payment insert failed:', paymentError)
+    return data({ ok: false, message: 'The payment could not be recorded. Please check that the latest database migrations are applied.' }, { status: 500, headers })
   }
+
+  const initializationResponse = await fetch('https://api.paystack.co/transaction/initialize', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${secretKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: userData.user.email, amount: Math.round(amount * 100), reference: paymentReference, callback_url: new URL('/', request.url).toString() }),
+  })
+  const initialization = await initializationResponse.json() as { status?: boolean; message?: string; data?: { authorization_url?: string; reference?: string } }
+  if (!initializationResponse.ok || !initialization.status || !initialization.data?.authorization_url) {
+    return data({ ok: false, message: initialization.message ?? 'Paystack could not start this payment.' }, { status: 502, headers })
+  }
+
+  return data({ ok: true, authorizationUrl: initialization.data.authorization_url }, { headers })
 }
 
 export default function Home() {
-  const { balance, subscriptionBalance, customerName, orders, subscription, subscriptionEndDate } = useCustomerStore()
+  const { balance, subscriptionBalance, customerName, customerId, orders, subscription, subscriptionEndDate } = useCustomerStore()
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false)
   const [isTopUpModalOpen, setIsTopUpModalOpen] = useState(false)
+  const topUpFetcher = useFetcher<typeof action>()
   const activeOrderCount = orders.filter((order) => order.status !== 'Delivered').length
-  const pendingOrders = orders
-    .filter((order) => order.paymentStatus === 'Pending' && !order.isSubscriptionOrder)
-    .map((order) => ({ id: order.id, amount: order.total }))
   const getVisibleOtp = (order: typeof orders[number]) => {
     if (order.status === 'Awaiting pickup') return order.pickupOtp
     if (order.status === 'In progress') return order.deliveryOtp ?? ''
@@ -51,11 +65,15 @@ export default function Home() {
   const today = new Intl.DateTimeFormat(undefined, { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' }).format(new Date())
 
   const handleTopUp = async (amount: number) => {
-    const response = await fetch('/?index', { method: 'POST', body: new URLSearchParams({ amount: String(amount) }) })
-    const result = await response.json().catch(() => null)
-    if (!response.ok || !result?.ok) throw new Error(result?.message ?? 'Top-up failed.')
-    window.location.reload()
+    topUpFetcher.submit({ amount: String(amount) }, { method: 'post', encType: 'application/x-www-form-urlencoded' })
   }
+
+  useEffect(() => {
+    const result = topUpFetcher.data
+    if (result?.ok && 'authorizationUrl' in result && result.authorizationUrl) {
+      window.location.assign(result.authorizationUrl)
+    }
+  }, [topUpFetcher.data])
 
   return (
     <div className="space-y-6 pb-8">
@@ -64,12 +82,15 @@ export default function Home() {
         <div>
           <p className="relative text-base font-semibold text-brand-primary">Good morning, {customerName}</p>
           <h2 className="mt-1 text-2xl font-bold tracking-tight text-[#121212] lg:hidden">Overview</h2>
-          <p className="mt-1 text-sm text-[#505959]">Your laundry, sorted.</p>
+          <div className="mt-2 flex w-full items-center justify-between gap-3 text-xs">
+            <p className="min-w-0 truncate font-semibold uppercase tracking-[0.14em] text-slate-400">Qaffy ID: <span className="text-slate-600">{customerId}</span></p>
+            <p className="shrink-0 text-right text-slate-500">{today}</p>
+          </div>
         </div>
-        <p className="text-sm text-slate-500">{today}</p>
       </div>
 
       {subscription && <PlanEndingBanner planName={`${subscription.name} ${subscription.billingPeriod}`} endDate={subscriptionEndDate} />}
+      <MismatchBanner orders={orders} />
 
       <section className="relative rounded-2xl overflow-hidden border border-[#e7e7e7] bg-[#f8f8f8] p-5 sm:p-6">
         <div className="relative">
@@ -125,7 +146,7 @@ export default function Home() {
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div className="pr-28">
                     <div className="flex flex-wrap items-center gap-2">
-                      <p className="text-lg font-semibold text-slate-900"><CopyableOrderId id={order.id} /></p>
+                      <p className="text-lg font-semibold text-slate-900"><CopyableOrderId id={order.publicOrderNumber} /></p>
                       <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold ${order.statusTone}`}>
                         <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" aria-hidden="true" />
                         <span>{order.status}</span>
@@ -133,6 +154,7 @@ export default function Home() {
                     </div>
                     <p className="mt-2 text-sm font-medium text-slate-700">{order.title}</p>
                     <p className="mt-1 text-xs text-slate-500">{order.date}</p>
+                    {order.mismatch && <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-left"><p className="text-xs font-semibold text-amber-800">Count update: {order.mismatch.direction === 'over' ? 'extra items confirmed' : 'fewer items confirmed'}</p><p className="mt-1 text-xs text-amber-700">{order.mismatch.detail}</p></div>}
                   </div>
 
                   <div className="absolute right-4 top-4 text-right">
@@ -152,7 +174,7 @@ export default function Home() {
 
                 <div className="mt-4 flex flex-col gap-3 border-t border-slate-200 pt-3 sm:flex-row sm:items-center sm:justify-between">
                   <p className="text-sm text-slate-600">{order.pickup}</p>
-                  <Link to="/orders" className="rounded-lg border border-brand-border bg-white px-3.5 py-2 text-center text-sm font-semibold text-brand-primary hover:bg-brand-soft">View order</Link>
+                  <Link to={`/orders?order=${encodeURIComponent(order.publicOrderNumber)}`} className="rounded-lg border border-brand-border bg-white px-3.5 py-2 text-center text-sm font-semibold text-brand-primary hover:bg-brand-soft">View order</Link>
                 </div>
               </article>
             ))}
@@ -185,7 +207,7 @@ export default function Home() {
       </section>
 
       {isOrderModalOpen && <NewOrder onClose={() => setIsOrderModalOpen(false)} />}
-      {isTopUpModalOpen && <TopUpModal currentBalance={balance} subscriptionBalance={subscriptionBalance} pendingOrders={pendingOrders} onTopUp={handleTopUp} onClose={() => setIsTopUpModalOpen(false)} />}
+      {isTopUpModalOpen && <TopUpModal currentBalance={balance} subscriptionBalance={subscriptionBalance} onTopUp={handleTopUp} isProcessing={topUpFetcher.state !== 'idle'} error={topUpFetcher.data && !topUpFetcher.data.ok && 'message' in topUpFetcher.data ? topUpFetcher.data.message : null} onClose={() => setIsTopUpModalOpen(false)} />}
     </div>
   )
 }

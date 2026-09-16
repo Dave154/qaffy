@@ -5,7 +5,7 @@ import CopyableOrderId from '../../../components/CopyableOrderId'
 import ProtectedOtp from '../../../components/ProtectedOtp'
 import { type CustomerOrder } from '../customer-store'
 import { useCustomerStore } from '../customer-store-hook'
-import { data } from 'react-router'
+import { data, useSearchParams } from 'react-router'
 import type { Route } from './+types/Orders'
 import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
 import { chargeSubscriptionInvoice, debitOneOffInvoice, InsufficientBalanceError } from '../../../lib/wallet.server'
@@ -42,12 +42,26 @@ export default function Orders() {
   const { orders } = useCustomerStore()
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false)
   const [selectedOrder, setSelectedOrder] = useState<CustomerOrder | null>(null)
-  const [activeFilter, setActiveFilter] = useState('All orders')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [activeFilter, setActiveFilter] = useState(() => searchParams.get('filter') ?? 'All orders')
+  const requestedOrderId = searchParams.get('order')
+  const requestedOrder = requestedOrderId ? orders.find((order) => order.publicOrderNumber === requestedOrderId || order.id === requestedOrderId) ?? null : null
+  const orderDetails = requestedOrder ?? selectedOrder
+
+  const closeOrderDetails = () => {
+    setSelectedOrder(null)
+    if (searchParams.has('order')) {
+      const nextParams = new URLSearchParams(searchParams)
+      nextParams.delete('order')
+      setSearchParams(nextParams, { replace: true })
+    }
+  }
 
   const filteredOrders = orders.filter((order) => {
     if (activeFilter === 'Active') return order.status !== 'Delivered'
     if (activeFilter === 'Delivered') return order.status === 'Delivered'
     if (activeFilter === 'Pending payment') return order.paymentStatus === 'Pending'
+    if (activeFilter === 'Needs attention') return Boolean(order.mismatch)
     return true
   })
 
@@ -82,7 +96,7 @@ export default function Orders() {
       <section className="rounded-2xl border border-[#e7e7e7] bg-white p-4 sm:p-5">
         <div className="mb-4 flex flex-col gap-3 border-b border-slate-100 pb-4">
           <div className="scrollbar-hidden flex flex-nowrap gap-2 overflow-x-auto pb-1">
-            {['All orders', 'Active', 'Delivered', 'Pending payment'].map((filter) => (
+            {['All orders', 'Active', 'Delivered', 'Pending payment', 'Needs attention'].map((filter) => (
               <button
                 key={filter}
                 type="button"
@@ -107,7 +121,7 @@ export default function Orders() {
               <div className="flex flex-row flex-wrap items-start gap-4">
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-lg font-semibold text-slate-900"><CopyableOrderId id={order.id} /></p>
+                    <p className="text-lg font-semibold text-slate-900"><CopyableOrderId id={order.publicOrderNumber} /></p>
                     <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold ${order.statusTone}`}>
                       <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" aria-hidden="true" />
                       {order.status}
@@ -115,6 +129,7 @@ export default function Orders() {
                   </div>
                   <p className="mt-2 text-sm font-medium text-slate-700">{order.title}</p>
                   <p className="mt-1 text-xs text-slate-500">{order.date}</p>
+                  {order.mismatch && <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-left"><p className="text-xs font-semibold text-amber-800">{order.mismatch.direction === 'over' ? 'Extra items confirmed' : 'Fewer items confirmed'}</p><p className="mt-1 text-xs text-amber-700">{order.mismatch.detail}</p></div>}
                 </div>
 
                 <div className="ml-auto shrink-0 text-right">
@@ -151,7 +166,7 @@ export default function Orders() {
       </section>
 
       {isOrderModalOpen && <NewOrder onClose={() => setIsOrderModalOpen(false)} />}
-      {selectedOrder && <OrderDetailModal order={selectedOrder} onClose={() => setSelectedOrder(null)} />}
+      {orderDetails && <OrderDetailModal order={orderDetails} onClose={closeOrderDetails} />}
     </div>
   )
 }

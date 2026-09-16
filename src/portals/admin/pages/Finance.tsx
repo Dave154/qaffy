@@ -228,20 +228,22 @@ export async function action({ request }: Route.ActionArgs) {
 
     const { data: orders } = await supabase
       .from('orders')
-      .select('id, vendor_id, created_at')
+      .select('id, vendor_id, status, clothes_count_vendor, created_at')
       .eq('vendor_id', vendorId)
       .gte('created_at', new Date(periodStart).toISOString())
       .lte('created_at', new Date(`${periodEnd}T23:59:59.999Z`).toISOString())
-    const orderIds = (orders ?? []).map((order) => order.id)
+    const orderIds = (orders ?? [])
+      .filter((order) => order.status !== 'cancelled' && order.clothes_count_vendor !== null)
+      .map((order) => order.id)
     if (orderIds.length === 0) return data({ error: 'No payable orders are available for this vendor in the selected period.' }, { headers, status: 400 })
 
-    const { data: payoutRows } = await supabase.from('order_items').select('id, order_id, category_id, quantity, service, unit_price')
+    const { data: payoutRows } = await supabase.from('order_items').select('id, order_id, category_id, quantity, confirmed_quantity, service, unit_price')
     const { data: rates } = await supabase.from('cloth_category_rates').select('category_id, vendor_wash_price, vendor_iron_price, vendor_wash_iron_price')
     const rateByCategory = new Map((rates ?? []).map((rate) => [rate.category_id, rate]))
-    const amountDue = (payoutRows ?? []).filter((item) => orderIds.includes(item.order_id)).reduce((sum, item) => {
+    const amountDue = (payoutRows ?? []).filter((item) => orderIds.includes(item.order_id) && item.confirmed_quantity !== null).reduce((sum, item) => {
       const rate = rateByCategory.get(item.category_id)
       const unitPrice = getRateValueFromItem(item, rate, 'vendor')
-      return sum + (unitPrice * Number(item.quantity ?? 0))
+      return sum + (unitPrice * Number(item.confirmed_quantity ?? 0))
     }, 0)
 
     const { data: settlement, error: settlementError } = await supabase

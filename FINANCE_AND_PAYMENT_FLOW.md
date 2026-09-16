@@ -4,6 +4,65 @@
 
 Approved operational billing model as of 2026-09-14.
 
+### Payment implementation status
+
+- Customer top-ups initialize Paystack server-side and record a pending payment row.
+- No customer return callback is configured or used; the browser never verifies payment or credits the wallet.
+- Paystack receives the customer overview URL only as a navigation destination after checkout; it is not a payment callback handler.
+- `POST /api/paystack/webhook` validates Paystack's HMAC signature and is the authoritative processor for `charge.success` events.
+- Wallet crediting is idempotent by payment reference.
+- Production requires `PAYSTACK_SECRET_KEY`, `DATABASE_URL`, and the Paystack dashboard webhook URL pointing to `/api/paystack/webhook`.
+- The pending payment row is created before Paystack initialization so a successful charge always has a local reconciliation record.
+- The customer top-up UI submits through the route fetcher so the index action response is handled reliably and initialization errors are visible to the customer.
+- The top-up modal presents the amount to pay and expected wallet credit, but does not claim the balance has changed until the webhook confirms the payment.
+- Subscription purchases use the same Paystack gateway but carry `plan_id`; the webhook activates the subscription without adding the plan price to one-time or subscription wallet balances.
+- Subscription checkout returns to `/plans?payment=pending` only to refresh the customer loader until webhook activation is visible; the browser does not verify the payment.
+- Wallet changes are made only by the signed webhook; the customer sees the updated balance on the next data load or refresh.
+- The customer portal subscribes to wallet and wallet-ledger changes and revalidates the authoritative loader in real time after webhook crediting.
+- For local webhook testing through ngrok, the current ngrok hostname must be allowlisted in both `vite.config.ts` and `react-router.config.ts`; otherwise Vite returns `403` before the webhook handler runs.
+
+### Customer portal continuation checkpoint
+
+- One-time top-ups and subscription purchases share Paystack initialization but remain separate payment types.
+- One-time top-ups credit `one_off_balance` only through the signed webhook.
+- Subscription purchases store `payments.plan_id` and activate `subscriptions` only through the signed webhook; they do not credit either wallet balance.
+- Customer plans are loaded from active database rows and duplicate active subscriptions are blocked at both UI and server levels.
+- Customer wallet and subscription updates use Supabase Realtime, with bounded return-page refresh fallback for webhook timing.
+- Apply `20260915110000_customer_wallet_realtime.sql`, `20260915120000_subscription_payment_plan.sql`, `20260915130000_authoritative_order_item_pricing.sql`, and `20260915140000_public_order_numbers.sql` before live testing.
+- Customer NewOrder now loads active categories, customer Wash/Iron/Wash + Iron rates, and subscription units from Supabase. Order creation recalculates prices from the database and does not charge the wallet.
+- Subscription orders remain unpaid at creation. Weekly subscription usage and coverage are evaluated from the vendor-confirmed final count, not the customer's original estimate.
+- Migration `20260915130000_authoritative_order_item_pricing.sql` overwrites client-supplied `order_items.unit_price` values from the selected customer rate in the database.
+- Validation for the NewOrder slice: `npm run typecheck` and `npm run build` pass.
+- Customer invoice history now loads every invoice, allows order/invoice selection, and exposes mismatch and extra-charge details only after vendor confirmation.
+- Confirmed vendor mismatches are surfaced in the customer notification badge, affected order cards, and order details; they are not shown before vendor confirmation.
+- Unpaid mismatch banners remain visible while the invoice is outstanding. Once paid, the mismatch notification can be dismissed once and remains available on the affected order details.
+- Customer Transactions now combines Paystack payment rows and wallet ledger debits, with functional filters and real pending/success/failed statuses.
+- Customer Settings now saves profile name/phone, shows the live subscription end date and referral code, and renders recent payment rows from the payment store.
+- Customer OTP flow now selects the correct active order and does not expose OTPs for delivered orders.
+- Vendor confirmation now stores weighted final units for subscription orders, applies remaining weekly allowance first, and settles only excess from the general one-off wallet. If excess funds are insufficient, the invoice remains unpaid and the order is not released for delivery.
+- Next billing-related customer work: run live payment, invoice, order, and OTP smoke tests after applying the pending Supabase migrations.
+- Orders now have a globally unique database-generated `public_order_number` in `QO-######` format for user-facing references; UUID order IDs remain internal keys.
+
+### Vendor review continuation checkpoint
+
+- Vendor review quantity changes submit the underlying order-item IDs expected by the trusted finalization service, preserving accurate final counts and billing.
+- The vendor-confirmed final count remains authoritative for invoices and settlements. Vendor-added categories are retained with their confirmed quantities, and extra billing is measured against the original order items rather than a baseline that includes additions.
+- Vendor review displays only physical customer and received item quantities; subscription-unit accounting remains hidden from the vendor and trusted server-side.
+- Physical counts and weighted subscription units are stored in separate order fields. Mismatch direction uses physical counts; subscription allowance usage uses vendor-confirmed unit fields.
+- Subscription usage meters count only units covered by the plan; excess units charged from the general wallet are excluded from weekly allowance usage.
+- Unclaimed vendor orders are claimed before the vendor sees the detailed review form; count entry is prioritized after ownership is established.
+
+## Logistics continuation checkpoint
+
+- Logistics pickup and delivery remain tabs on one `/logistics` page.
+- Pickup search requires the complete four-digit OTP and uses an exact match.
+- Confirmed pickup sets the order to `picked_up`, records the pickup date, and nullifies the pickup OTP in the same trusted database update.
+- Logistics pickup/delivery results and event history show the global public order reference (`QO-######`); UUIDs remain internal.
+- Logistics dispatch now requires the order status to be `paid`; `invoiced` or otherwise unpaid orders remain blocked from delivery.
+- Final delivery clears `delivery_otp` in the same trusted update that marks the order `delivered`, preventing OTP reuse.
+- Pickup/Delivery was moved out of the header and placed beside the date filter. The controls stay horizontal and compact on small screens. The header has padded spacing, a smaller Logistics label, and a red logout icon.
+- Remaining logistics audit work: delivery exceptions, public order number search, event-history visibility, and permission boundaries, then run live OTP/order smoke tests after applying migrations.
+
 ## Business model
 
 This platform uses a post-paid model.

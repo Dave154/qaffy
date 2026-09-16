@@ -1,6 +1,7 @@
 import { type RouteConfig, index, layout, prefix, route } from '@react-router/dev/routes'
 
 export default [
+  route('api/paystack/webhook', 'routes/paystack-webhook.ts'),
   layout('portals/customer/CustomerLayout.tsx', [
     index('portals/customer/pages/Home.tsx'),
     route('transactions', 'portals/customer/pages/Transactions.tsx'),

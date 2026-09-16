@@ -65,6 +65,7 @@ export interface ClothCategory {
   id: string
   name: string
   is_main: boolean
+  active: boolean
   created_at: string
 }
 
@@ -140,11 +141,15 @@ export interface WalletTransaction {
 
 export interface Order {
   id: string
+  public_order_number: string
   customer_id: string
   vendor_id: string | null
   order_type: OrderType
   clothes_count_customer: number
+  clothes_count_customer_units: number | null
   clothes_count_vendor: number | null
+  clothes_count_vendor_units: number | null
+  subscription_units_applied: number | null
   status: OrderStatus
   pickup_otp: string | null
   delivery_otp: string | null
@@ -191,6 +196,7 @@ export interface Payment {
   reference: string
   amount: number
   balance_type: WalletBalanceType
+  plan_id: string | null
   status: PaymentStatus
   created_at: string
 }
