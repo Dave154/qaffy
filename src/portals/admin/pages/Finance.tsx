@@ -232,9 +232,15 @@ export async function action({ request }: Route.ActionArgs) {
       .eq('vendor_id', vendorId)
       .gte('created_at', new Date(periodStart).toISOString())
       .lte('created_at', new Date(`${periodEnd}T23:59:59.999Z`).toISOString())
-    const orderIds = (orders ?? [])
+    const candidateOrderIds = (orders ?? [])
       .filter((order) => order.status !== 'cancelled' && order.clothes_count_vendor !== null)
       .map((order) => order.id)
+    const { data: existingMappings, error: mappingLookupError } = candidateOrderIds.length
+      ? await supabase.from('vendor_settlement_orders').select('order_id').in('order_id', candidateOrderIds)
+      : { data: [], error: null }
+    if (mappingLookupError) return data({ error: mappingLookupError.message }, { headers, status: 400 })
+    const settledOrderIds = new Set((existingMappings ?? []).map((mapping) => mapping.order_id))
+    const orderIds = candidateOrderIds.filter((orderId) => !settledOrderIds.has(orderId))
     if (orderIds.length === 0) return data({ error: 'No payable orders are available for this vendor in the selected period.' }, { headers, status: 400 })
 
     const { data: payoutRows } = await supabase.from('order_items').select('id, order_id, category_id, quantity, confirmed_quantity, service, unit_price')
@@ -262,7 +268,10 @@ export async function action({ request }: Route.ActionArgs) {
 
     const mappings = orderIds.map((orderId) => ({ settlement_id: settlement.id, order_id: orderId }))
     const { error: mappingError } = await supabase.from('vendor_settlement_orders').insert(mappings)
-    if (mappingError) return data({ error: mappingError.message }, { headers, status: 400 })
+    if (mappingError) {
+      await supabase.from('vendor_settlements').delete().eq('id', settlement.id)
+      return data({ error: mappingError.message }, { headers, status: 400 })
+    }
 
     return data({ ok: true }, { headers, status: 200 })
   }

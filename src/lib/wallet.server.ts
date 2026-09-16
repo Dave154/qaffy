@@ -11,6 +11,47 @@ function generateFourDigitOtp() {
   return String(1000 + Math.floor(Math.random() * 9000))
 }
 
+type SubscriptionAllocationItem = { id: string; quantity: number; units: number; unitPrice: number }
+
+function allocateSubscriptionCoverage(items: SubscriptionAllocationItem[], allowance: number) {
+  const capacity = Math.max(0, Math.floor(allowance))
+  const emptyState = { avoidedAmount: 0, quantities: items.map(() => 0) }
+  let states: Array<{ avoidedAmount: number; quantities: number[] } | null> = Array.from({ length: capacity + 1 }, () => null)
+  states[0] = emptyState
+
+  for (let itemIndex = 0; itemIndex < items.length; itemIndex += 1) {
+    const item = items[itemIndex]
+    const nextStates = states.map((state) => state && { avoidedAmount: state.avoidedAmount, quantities: [...state.quantities] })
+    const maxQuantity = Math.min(item.quantity, Math.floor(capacity / item.units))
+
+    for (let usedUnits = 0; usedUnits <= capacity; usedUnits += 1) {
+      const state = states[usedUnits]
+      if (!state) continue
+      for (let quantity = 1; quantity <= maxQuantity && usedUnits + quantity * item.units <= capacity; quantity += 1) {
+        const nextUsedUnits = usedUnits + quantity * item.units
+        const candidate = {
+          avoidedAmount: state.avoidedAmount + quantity * item.unitPrice,
+          quantities: state.quantities.map((value, index) => index === itemIndex ? value + quantity : value),
+        }
+        const current = nextStates[nextUsedUnits]
+        if (!current || candidate.avoidedAmount > current.avoidedAmount) nextStates[nextUsedUnits] = candidate
+      }
+    }
+
+    states = nextStates
+  }
+
+  const selected = states.reduce<{ avoidedAmount: number; quantities: number[] } | null>((best, state) => {
+    if (!state) return best
+    const bestUnits = best ? best.quantities.reduce((total, quantity, index) => total + quantity * items[index].units, 0) : -1
+    const stateUnits = state.quantities.reduce((total, quantity, index) => total + quantity * items[index].units, 0)
+    if (!best || stateUnits > bestUnits || (stateUnits === bestUnits && state.avoidedAmount > best.avoidedAmount)) return state
+    return best
+  }, null)
+
+  return new Map(items.map((item, index) => [item.id, selected?.quantities[index] ?? 0]))
+}
+
 /** Debits the customer's wallet, marks the invoice paid, and issues the delivery OTP — all in one transaction. */
 export async function payFromWallet(customerId: string, invoiceId: string, balanceType: WalletBalanceType) {
   return sql.begin(async (tx) => {
@@ -19,12 +60,13 @@ export async function payFromWallet(customerId: string, invoiceId: string, balan
       from invoices i
       join orders o on o.id = i.order_id
       where i.id = ${invoiceId}
-      for update of i
+      for update of i, o
     `
 
     if (!invoice) throw new Error('Invoice not found')
     if (invoice.customer_id !== customerId) throw new Error('Not authorized for this invoice')
     if (invoice.status === 'paid') throw new Error('Invoice already paid')
+    if (invoice.status !== 'unpaid' || invoice.order_status !== 'invoiced') throw new Error('Invoice is not payable in its current order state')
 
     const balanceColumn = balanceType === 'one_off' ? 'one_off_balance' : 'subscription_balance'
 
@@ -68,8 +110,8 @@ export async function finalizeVendorOrder(
     if (order.status !== 'at_vendor') throw new Error('This order is not ready for vendor review')
 
     if (!Array.isArray(receivedItems) || !Array.isArray(addedItems)) throw new Error('Order review details are invalid')
-    if (receivedItems.some((item) => !item.itemId || !Number.isInteger(item.quantity) || item.quantity < 0)) throw new Error('Received quantities are invalid')
-    if (addedItems.some((item) => !item.categoryName || !['wash', 'iron', 'wash_iron'].includes(item.service) || !Number.isInteger(item.quantity) || item.quantity < 1)) throw new Error('Added category details are invalid')
+    if (receivedItems.some((item) => !item.itemId || !Number.isSafeInteger(item.quantity) || item.quantity < 0)) throw new Error('Received quantities are invalid')
+    if (addedItems.some((item) => !item.categoryName || !['wash', 'iron', 'wash_iron'].includes(item.service) || !Number.isSafeInteger(item.quantity) || item.quantity < 1)) throw new Error('Added category details are invalid')
 
     const addedItemIds: string[] = []
     for (const item of addedItems) {
@@ -91,14 +133,34 @@ export async function finalizeVendorOrder(
     }
 
     const items = await tx`
-      select oi.id, oi.quantity, oi.service, r.wash_price, r.iron_price, r.wash_iron_price, r.subscription_units
+      select oi.id, oi.quantity, oi.service, oi.unit_price, c.name as category_name, r.wash_price, r.iron_price, r.wash_iron_price, r.subscription_units
       from order_items oi
-      join cloth_category_rates r on r.category_id = oi.category_id
+      join cloth_categories c on c.id = oi.category_id
+      left join cloth_category_rates r on r.category_id = oi.category_id
       where oi.order_id = ${orderId}
     `
+    if (items.some((item) => item.wash_price == null || item.iron_price == null || item.wash_iron_price == null || item.subscription_units == null || !Number.isSafeInteger(Number(item.subscription_units)) || Number(item.subscription_units) <= 0 || Number(item.unit_price) <= 0)) {
+      throw new Error('A valid rate is required for every order item before finalization')
+    }
     const orderItemIds = new Set(items.map((item) => item.id))
-    if (receivedItems.some((item) => !orderItemIds.has(item.itemId))) throw new Error('Received item does not belong to this order')
+    const originalItemIds = new Set(items.filter((item) => !addedItemIds.includes(item.id)).map((item) => item.id))
+    if (receivedItems.length !== originalItemIds.size || new Set(receivedItems.map((item) => item.itemId)).size !== receivedItems.length) throw new Error('Every original order item must have exactly one received quantity')
+    if (receivedItems.some((item) => !orderItemIds.has(item.itemId) || !originalItemIds.has(item.itemId))) throw new Error('Received item does not belong to the original order')
     const receivedById = new Map(receivedItems.map((item) => [item.itemId, item.quantity]))
+    const mismatchItems = items.map((item) => {
+      const originalQuantity = addedItemIds.includes(item.id) ? 0 : Number(item.quantity)
+      const confirmedQuantity = receivedById.get(item.id) ?? (addedItemIds.includes(item.id) ? Number(item.quantity) : 0)
+      const difference = confirmedQuantity - originalQuantity
+      return {
+        category: item.category_name,
+        service: item.service,
+        originalQuantity,
+        confirmedQuantity,
+        difference,
+        unitPrice: Number(item.unit_price),
+        extraAmount: Math.max(0, difference * Number(item.unit_price)),
+      }
+    }).filter((item) => item.difference !== 0)
     const finalCount = items.reduce((total, item) => total + (receivedById.get(item.id) ?? (addedItemIds.includes(item.id) ? Number(item.quantity) : 0)), 0)
     const finalWeightedUnits = items.reduce((total, item) => {
       const quantity = receivedById.get(item.id) ?? (addedItemIds.includes(item.id) ? Number(item.quantity) : 0)
@@ -106,19 +168,11 @@ export async function finalizeVendorOrder(
     }, 0)
     const finalAmount = items.reduce((total, item) => {
       const quantity = receivedById.get(item.id) ?? (addedItemIds.includes(item.id) ? Number(item.quantity) : 0)
-      const unitPrice = item.service === 'wash_iron'
-        ? Number(item.wash_iron_price)
-        : item.service === 'iron'
-          ? Number(item.iron_price)
-          : Number(item.wash_price)
+      const unitPrice = Number(item.unit_price)
       return total + quantity * unitPrice
     }, 0)
     const originalAmount = items.filter((item) => !addedItemIds.includes(item.id)).reduce((total, item) => {
-      const unitPrice = item.service === 'wash_iron'
-        ? Number(item.wash_iron_price)
-        : item.service === 'iron'
-          ? Number(item.iron_price)
-          : Number(item.wash_price)
+      const unitPrice = Number(item.unit_price)
       return total + Number(item.quantity) * unitPrice
     }, 0)
     const extraAmount = Math.max(0, finalAmount - originalAmount)
@@ -147,19 +201,20 @@ export async function finalizeVendorOrder(
         where customer_id = ${order.customer_id}
           and is_subscription_order = true
           and clothes_count_vendor_units is not null
+          and status <> 'cancelled'
           and created_at >= ${weekStart}
           and id <> ${orderId}
       `
       let remainingUnits = Math.max(0, Number(subscriptionPlan?.weekly_limit ?? 0) - Number(usage?.used_units ?? 0))
       let subscriptionUnitsApplied = 0
       invoiceAmount = 0
+      const subscriptionCoverage = allocateSubscriptionCoverage(items.map((item) => ({ id: item.id, quantity: Number(receivedById.get(item.id) ?? (addedItemIds.includes(item.id) ? Number(item.quantity) : 0)), units: Number(item.subscription_units), unitPrice: Number(item.unit_price) })), remainingUnits)
       for (const item of items) {
         const quantity = receivedById.get(item.id) ?? (addedItemIds.includes(item.id) ? Number(item.quantity) : 0)
         const units = Number(item.subscription_units)
-        const coveredQuantity = units > 0 ? Math.min(quantity, Math.floor(remainingUnits / units)) : 0
-        remainingUnits -= coveredQuantity * units
+        const coveredQuantity = subscriptionCoverage.get(item.id) ?? 0
         subscriptionUnitsApplied += coveredQuantity * units
-        const unitPrice = item.service === 'wash_iron' ? Number(item.wash_iron_price) : item.service === 'iron' ? Number(item.iron_price) : Number(item.wash_price)
+        const unitPrice = Number(item.unit_price)
         invoiceAmount += (quantity - coveredQuantity) * unitPrice
       }
       invoiceAmount = Math.round(invoiceAmount * 100) / 100
@@ -181,8 +236,8 @@ export async function finalizeVendorOrder(
     if (mismatchDirection) {
       await tx`delete from mismatches where order_id = ${orderId}`
       await tx`
-        insert into mismatches (order_id, direction, detail)
-        values (${orderId}, ${mismatchDirection}, ${mismatchDetail})
+        insert into mismatches (order_id, direction, detail, details)
+        values (${orderId}, ${mismatchDirection}, ${mismatchDetail}, ${JSON.stringify(mismatchItems)}::jsonb)
       `
     }
     const [invoice] = await tx`
@@ -192,24 +247,46 @@ export async function finalizeVendorOrder(
       returning id, amount, status
     `
 
-    if (order.is_subscription_order) {
-      await tx`insert into wallets (customer_id) values (${order.customer_id}) on conflict (customer_id) do nothing`
-      const [wallet] = await tx`select one_off_balance from wallets where customer_id = ${order.customer_id} for update`
-      const availableBalance = Number(wallet?.one_off_balance ?? 0)
-      if (invoiceAmount <= availableBalance) {
-        const newBalance = availableBalance - invoiceAmount
-        const deliveryOtp = generateFourDigitOtp()
-        await tx`update wallets set one_off_balance = ${newBalance}, updated_at = now() where customer_id = ${order.customer_id}`
-        await tx`update invoices set status = 'paid', paid_at = now() where id = ${invoice.id}`
-        await tx`update orders set status = 'paid', delivery_otp = ${deliveryOtp} where id = ${orderId}`
-        if (invoiceAmount > 0) {
-          await tx`
-            insert into wallet_transactions (customer_id, balance_type, txn_type, amount, balance_after, related_invoice_id)
-            values (${order.customer_id}, 'one_off', 'debit', ${invoiceAmount}, ${newBalance}, ${invoice.id})
-          `
-        }
+    await tx`insert into wallets (customer_id) values (${order.customer_id}) on conflict (customer_id) do nothing`
+    const [wallet] = await tx`select one_off_balance from wallets where customer_id = ${order.customer_id} for update`
+    const availableBalance = Number(wallet?.one_off_balance ?? 0)
+    if (invoiceAmount <= availableBalance) {
+      const newBalance = availableBalance - invoiceAmount
+      const deliveryOtp = generateFourDigitOtp()
+      await tx`update wallets set one_off_balance = ${newBalance}, updated_at = now() where customer_id = ${order.customer_id}`
+      await tx`update invoices set status = 'paid', paid_at = now() where id = ${invoice.id}`
+      await tx`update orders set status = 'paid', delivery_otp = ${deliveryOtp} where id = ${orderId}`
+      if (invoiceAmount > 0) {
+        await tx`
+          insert into wallet_transactions (customer_id, balance_type, txn_type, amount, balance_after, related_invoice_id)
+          values (${order.customer_id}, 'one_off', 'debit', ${invoiceAmount}, ${newBalance}, ${invoice.id})
+        `
       }
     }
+
+    const [finalInvoice] = await tx`select status from invoices where id = ${invoice.id}`
+    await tx`
+      insert into order_confirmation_events (
+        order_id,
+        vendor_profile_id,
+        original_count,
+        confirmed_count,
+        mismatch_direction,
+        mismatch_detail,
+        invoice_amount,
+        invoice_status
+      )
+      values (
+        ${orderId},
+        ${vendorProfileId},
+        ${order.clothes_count_customer},
+        ${finalCount},
+        ${mismatchDirection},
+        ${mismatchDirection ? mismatchDetail : null},
+        ${invoiceAmount},
+        ${finalInvoice.status}
+      )
+    `
 
     return { invoiceId: invoice.id, amount: Number(invoice.amount), finalCount: billingCount, mismatchDirection }
   })
@@ -259,7 +336,38 @@ export async function creditWallet(customerId: string, balanceType: WalletBalanc
       `
     }
 
-    return { newBalance: balanceType === 'subscription' ? subscriptionBalance : oneOffBalance }
+    let settledBalance = oneOffBalance
+    if (oneOffCredit > 0) {
+      const pendingInvoices = await tx`
+        select i.id, i.amount, o.id as order_id
+        from invoices i
+        join orders o on o.id = i.order_id
+        where o.customer_id = ${customerId}
+          and o.status = 'invoiced'
+          and i.status = 'unpaid'
+        order by o.created_at desc
+        for update of i, o
+      `
+
+      for (const invoice of pendingInvoices) {
+        const invoiceAmount = Number(invoice.amount)
+        if (invoiceAmount > settledBalance) break
+
+        settledBalance -= invoiceAmount
+        const deliveryOtp = generateFourDigitOtp()
+        await tx`update wallets set one_off_balance = ${settledBalance}, updated_at = now() where customer_id = ${customerId}`
+        await tx`update invoices set status = 'paid', paid_at = now() where id = ${invoice.id}`
+        await tx`update orders set status = 'paid', delivery_otp = ${deliveryOtp} where id = ${invoice.order_id}`
+        if (invoiceAmount > 0) {
+          await tx`
+            insert into wallet_transactions (customer_id, balance_type, txn_type, amount, balance_after, related_invoice_id)
+            values (${customerId}, 'one_off', 'debit', ${invoiceAmount}, ${settledBalance}, ${invoice.id})
+          `
+        }
+      }
+    }
+
+    return { newBalance: balanceType === 'subscription' ? subscriptionBalance : settledBalance }
   })
 }
 

@@ -16,6 +16,13 @@ export default function OtpFlow() {
   ]
 
   const currentStep = otpSteps[activeStep]
+  const unavailableMessage = activeStep === 0 && order?.pickedUp
+    ? 'Picked up'
+    : activeStep === 1 && order?.status === 'Delivered'
+      ? 'Delivered'
+      : activeStep === 1
+        ? 'Not ready'
+        : 'Not ready'
 
   return (
     <div className="space-y-5 pb-8">
@@ -37,17 +44,17 @@ export default function OtpFlow() {
 
       {activeOrders.length === 0 && <section className="rounded-[26px] border border-slate-200 bg-white p-5 shadow-sm shadow-slate-100"><p className="text-sm text-slate-500">No active orders have OTPs available.</p></section>}
 
-      <section className="rounded-[28px] bg-gradient-to-br from-violet-600 via-violet-700 to-fuchsia-500 p-5 text-white shadow-lg shadow-violet-200 sm:p-6">
+      <section className="rounded-[28px] bg-gradient-to-br from-brand-primary via-brand-primary to-brand-primary-hover p-5 text-white shadow-lg shadow-brand-border sm:p-6">
         <div className="flex items-start justify-between gap-4">
           <div className="w-full">
-            <p className="text-xs font-medium uppercase tracking-[0.18em] text-violet-100">Current code</p>
+            <p className="text-xs font-medium uppercase tracking-[0.18em] text-white/80">Current code</p>
             <div className="mt-3">
-              <ProtectedOtp
-                value={currentStep.value}
-                className="gap-2 sm:gap-3"
-                digitClassName="h-14 w-14 rounded-md border-2 text-2xl sm:h-16 sm:w-16"
-                containerClassName="inline-block"
-              />
+              {currentStep.value ? <ProtectedOtp
+                  value={currentStep.value}
+                  className="gap-2 sm:gap-3"
+                  digitClassName="h-14 w-14 rounded-md border-2 text-2xl sm:h-16 sm:w-16"
+                  containerClassName="inline-block"
+                /> : <p className="max-w-md rounded-xl border border-white/20 bg-white/10 p-3 text-sm font-medium text-white">{unavailableMessage}</p>}
             </div>
           </div>
           <button
@@ -58,7 +65,7 @@ export default function OtpFlow() {
           >Copy</button>
         </div>
 
-        <p className="mt-4 text-sm text-violet-100">{currentStep.detail}</p>
+        <p className="mt-4 text-sm text-white/80">{currentStep.detail}</p>
       </section>
 
       <section className="rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-100 sm:p-5">
@@ -70,8 +77,8 @@ export default function OtpFlow() {
               onClick={() => setActiveStep(index)}
               className={`shrink-0 rounded-full px-4 py-2 text-sm font-medium transition ${
                 index === activeStep
-                  ? 'bg-violet-600 text-white shadow-sm shadow-violet-200'
-                  : 'bg-slate-50 text-slate-500 hover:bg-violet-50 hover:text-violet-700'
+                  ? 'bg-brand-primary text-white shadow-sm shadow-brand-border'
+                  : 'bg-slate-50 text-slate-500 hover:bg-brand-soft hover:text-brand-primary'
               }`}
             >
               {step.label}
@@ -83,7 +90,7 @@ export default function OtpFlow() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-[10px] uppercase tracking-[0.22em] text-slate-400">Status</p>
-              <p className="mt-2 text-lg font-bold text-slate-900">{currentStep.value ? 'Ready for handoff' : 'Waiting for the next step'}</p>
+              <p className="mt-2 text-lg font-bold text-slate-900">{currentStep.value ? 'Ready for handoff' : unavailableMessage}</p>
             </div>
             <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${currentStep.value ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
               {currentStep.value ? 'Active' : 'Unavailable'}
@@ -118,7 +125,7 @@ export default function OtpFlow() {
           <p className="mt-3 text-sm text-slate-600">
             If the code is not working, contact support or ask a staff member to verify the order manually.
           </p>
-          <a href="mailto:support@qaffy.app" className="mt-5 inline-block rounded-full border border-violet-200 bg-violet-50 px-4 py-2.5 text-sm font-semibold text-violet-700">Contact support</a>
+          <a href="mailto:support@qaffy.app" className="mt-5 inline-block rounded-full border border-brand-border bg-brand-soft px-4 py-2.5 text-sm font-semibold text-brand-primary">Contact support</a>
         </div>
       </section>
     </div>

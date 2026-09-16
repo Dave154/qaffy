@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { data, useFetcher } from 'react-router'
+import { data, useFetcher, useSearchParams } from 'react-router'
 import type { Route } from './+types/Home'
 import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
 import { ArrowUpRight, ClipboardList, CreditCard, FileText, Gift, Settings2, Sparkles } from 'lucide-react'
@@ -52,15 +52,23 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function Home() {
-  const { balance, subscriptionBalance, customerName, customerId, orders, subscription, subscriptionEndDate } = useCustomerStore()
+  const { balance, subscriptionBalance, customerName, customerId, orders, subscription, subscriptionEndDate, pendingTopUp } = useCustomerStore()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false)
-  const [isTopUpModalOpen, setIsTopUpModalOpen] = useState(false)
+  const [isTopUpModalOpen, setIsTopUpModalOpen] = useState(() => searchParams.get('topup') === '1')
   const topUpFetcher = useFetcher<typeof action>()
   const activeOrderCount = orders.filter((order) => order.status !== 'Delivered').length
+  const pendingPaymentTotal = orders.filter((order) => order.status === 'Pending payment').reduce((total, order) => total + order.total, 0)
   const getVisibleOtp = (order: typeof orders[number]) => {
     if (order.status === 'Awaiting pickup') return order.pickupOtp
     if (order.status === 'In progress') return order.deliveryOtp ?? ''
     return ''
+  }
+  const getAmountLabel = (order: typeof orders[number]) => {
+    if (order.total > 0) return `₦${order.total.toLocaleString()}`
+    if (order.status === 'In progress') return 'Final billing pending'
+    if (order.isSubscriptionOrder && ['Ready for delivery', 'Delivered'].includes(order.status)) return 'Covered by plan'
+    return 'No charge yet'
   }
   const today = new Intl.DateTimeFormat(undefined, { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' }).format(new Date())
 
@@ -74,6 +82,14 @@ export default function Home() {
       window.location.assign(result.authorizationUrl)
     }
   }, [topUpFetcher.data])
+
+  useEffect(() => {
+    if (searchParams.get('topup') !== '1') return
+    setIsTopUpModalOpen(true)
+    const nextParams = new URLSearchParams(searchParams)
+    nextParams.delete('topup')
+    setSearchParams(nextParams, { replace: true })
+  }, [searchParams, setSearchParams])
 
   return (
     <div className="space-y-6 pb-8">
@@ -111,7 +127,9 @@ export default function Home() {
                 </>
               )}
             </div>
-            <span className="flex h-9 w-9 items-center justify-center rounded-lg border border-[#e1e1e1] bg-white text-sm">{subscription ? '✦' : '₦'}</span>
+            <span className={`flex h-9 w-9 items-center justify-center rounded-lg border bg-white text-sm ${pendingTopUp ? 'border-sky-200 text-sky-700' : 'border-[#e1e1e1]'}`} role={pendingTopUp ? 'status' : undefined} aria-label={pendingTopUp ? 'Top-up payment processing' : undefined} title={pendingTopUp ? 'Top-up payment processing' : undefined}>
+              {pendingTopUp ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-sky-200 border-t-sky-700" aria-hidden="true" /> : subscription ? '✦' : '₦'}
+            </span>
           </div>
 
           {subscriptionBalance < 0 && <p className="mt-2 text-sm font-medium text-brand-primary">Subscription debt: ₦{Math.abs(subscriptionBalance).toLocaleString()}</p>}
@@ -165,7 +183,7 @@ export default function Home() {
                       </>
                     ) : (
                       <>
-                        <p className="text-xl font-bold text-slate-900">₦{order.total.toLocaleString()}</p>
+                        <p className="max-w-40 text-right text-sm font-bold text-slate-900">{getAmountLabel(order)}</p>
                         <p className="mt-1 text-xs text-slate-500">{order.items} clothes</p>
                       </>
                     )}
@@ -207,7 +225,7 @@ export default function Home() {
       </section>
 
       {isOrderModalOpen && <NewOrder onClose={() => setIsOrderModalOpen(false)} />}
-      {isTopUpModalOpen && <TopUpModal currentBalance={balance} subscriptionBalance={subscriptionBalance} onTopUp={handleTopUp} isProcessing={topUpFetcher.state !== 'idle'} error={topUpFetcher.data && !topUpFetcher.data.ok && 'message' in topUpFetcher.data ? topUpFetcher.data.message : null} onClose={() => setIsTopUpModalOpen(false)} />}
+      {isTopUpModalOpen && <TopUpModal currentBalance={balance} subscriptionBalance={subscriptionBalance} pendingPaymentTotal={pendingPaymentTotal} onTopUp={handleTopUp} isProcessing={topUpFetcher.state !== 'idle'} error={topUpFetcher.data && !topUpFetcher.data.ok && 'message' in topUpFetcher.data ? topUpFetcher.data.message : null} onClose={() => setIsTopUpModalOpen(false)} />}
     </div>
   )
 }

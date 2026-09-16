@@ -30,6 +30,16 @@ export type PersistedOrderItem = {
   unit_price: number
 }
 
+export type MismatchLine = {
+  category: string
+  service: 'wash' | 'iron' | 'wash_iron'
+  originalQuantity: number
+  confirmedQuantity: number
+  difference: number
+  unitPrice: number
+  extraAmount: number
+}
+
 export type CustomerTransaction = {
   id: string
   title: string
@@ -53,7 +63,7 @@ export type CustomerInvoice = {
   originalCount: number | null
   finalCount: number | null
   extraAmount: number
-  mismatch: { direction: 'over' | 'under'; detail: string } | null
+  mismatch: { direction: 'over' | 'under'; detail: string; lines: MismatchLine[] } | null
 }
 
 export type CustomerOrder = {
@@ -78,7 +88,7 @@ export type CustomerOrder = {
   isSubscriptionOrder: boolean
   pickupLocation: string
   lines?: OrderLine[]
-  mismatch: { id: string; direction: 'over' | 'under'; detail: string } | null
+  mismatch: { id: string; direction: 'over' | 'under'; detail: string; lines: MismatchLine[] } | null
 }
 
 export type CustomerStore = {
@@ -101,6 +111,7 @@ export type CustomerStore = {
   pickupLocations: PickupLocationOption[]
   orders: CustomerOrder[]
   transactions: CustomerTransaction[]
+  pendingTopUp: boolean
   transactionError: string | null
   invoice: CustomerInvoice | null
   invoices: CustomerInvoice[]
@@ -144,7 +155,8 @@ function mapPayment(payment: Payment): CustomerTransaction {
   }
 }
 
-function mapDatabaseInvoice(invoice: Invoice & { order_reference?: string; original_count?: number | null; final_count?: number | null; extra_amount?: number | null; mismatch_direction?: 'over' | 'under' | null; mismatch_detail?: string | null }): CustomerInvoice {
+function mapDatabaseInvoice(invoice: Invoice & { order_reference?: string; original_count?: number | null; final_count?: number | null; extra_amount?: number | null; mismatch_direction?: 'over' | 'under' | null; mismatch_detail?: string | null; mismatch_details?: MismatchLine[] }): CustomerInvoice {
+  const mismatchLines = Array.isArray(invoice.mismatch_details) ? invoice.mismatch_details : []
   return {
     id: invoice.id,
     orderId: invoice.order_id,
@@ -159,11 +171,11 @@ function mapDatabaseInvoice(invoice: Invoice & { order_reference?: string; origi
     originalCount: invoice.original_count ?? null,
     finalCount: invoice.final_count ?? null,
     extraAmount: Number(invoice.extra_amount ?? 0),
-    mismatch: invoice.mismatch_direction ? { direction: invoice.mismatch_direction, detail: invoice.mismatch_detail ?? 'Vendor confirmed a different item count.' } : null,
+    mismatch: invoice.mismatch_direction ? { direction: invoice.mismatch_direction, detail: invoice.mismatch_detail ?? 'Vendor confirmed a different item count.', lines: mismatchLines } : null,
   }
 }
 
-function mapDatabaseOrder(order: Order, persistedItems: PersistedOrderItem[] = [], unpaidInvoiceOrderIds?: Set<string>, invoiceAmountsByOrderId?: Record<string, number>, pickupLocations: PickupLocationOption[] = [], orderMismatches: Array<{ id: string; order_id: string; direction: 'over' | 'under'; detail: string | null }> = []): CustomerOrder {
+function mapDatabaseOrder(order: Order, persistedItems: PersistedOrderItem[] = [], unpaidInvoiceOrderIds?: Set<string>, invoiceAmountsByOrderId?: Record<string, number>, pickupLocations: PickupLocationOption[] = [], orderMismatches: Array<{ id: string; order_id: string; direction: 'over' | 'under'; detail: string | null; details: MismatchLine[] }> = []): CustomerOrder {
   const statusMap: Record<Order['status'], CustomerOrder['status']> = {
     pending_pickup: 'Awaiting pickup',
     picked_up: 'Picked up',
@@ -228,7 +240,7 @@ function mapDatabaseOrder(order: Order, persistedItems: PersistedOrderItem[] = [
         quantity: item.quantity,
         unitPrice: Number(item.unit_price),
       })),
-    mismatch: mismatch ? { id: mismatch.id, direction: mismatch.direction, detail: mismatch.detail ?? 'Vendor confirmed a different item count.' } : null,
+    mismatch: mismatch ? { id: mismatch.id, direction: mismatch.direction, detail: mismatch.detail ?? 'Vendor confirmed a different item count.', lines: Array.isArray(mismatch.details) ? mismatch.details : [] } : null,
   }
 }
 
@@ -242,11 +254,11 @@ type CustomerStoreProviderProps = {
   persistedTransactionError?: string | null
   persistedUnpaidInvoiceOrderIds?: string[]
   invoiceAmountsByOrderId?: Record<string, number>
-  persistedInvoices?: Array<Invoice & { order_reference?: string; original_count?: number | null; final_count?: number | null; extra_amount?: number | null; mismatch_direction?: 'over' | 'under' | null; mismatch_detail?: string | null }>
+  persistedInvoices?: Array<Invoice & { order_reference?: string; original_count?: number | null; final_count?: number | null; extra_amount?: number | null; mismatch_direction?: 'over' | 'under' | null; mismatch_detail?: string | null; mismatch_details?: MismatchLine[] }>
   persistedSubscription?: { subscription: Subscription; plan: Plan } | null
   persistedPickupLocations?: PickupLocationOption[]
   persistedOrderItems?: PersistedOrderItem[]
-  persistedOrderMismatches?: Array<{ id: string; order_id: string; direction: 'over' | 'under'; detail: string | null }>
+  persistedOrderMismatches?: Array<{ id: string; order_id: string; direction: 'over' | 'under'; detail: string | null; details: MismatchLine[] }>
   persistedSubscriptionUsedUnits?: number
 }
 
@@ -308,6 +320,7 @@ export function CustomerStoreProvider({
       pickupLocations: persistedPickupLocations ?? [],
       orders,
       transactions,
+      pendingTopUp: transactions.some((transaction) => transaction.title === 'Wallet top up' && transaction.status === 'Pending') && orders.some((order) => order.status === 'Pending payment'),
       transactionError: persistedTransactionError,
       invoice,
       invoices,
@@ -321,6 +334,8 @@ export function CustomerStoreProvider({
         toast.success(`₦${amount.toLocaleString()} added to your wallet.`)
       },
       addOrder: async ({ items, notes, pickupLocation }) => {
+        const categoryKeys = items.map((item) => item.category.trim().toLowerCase())
+        if (new Set(categoryKeys).size !== categoryKeys.length) throw new Error('Each laundry category can only be added once.')
         const idNumber = 1042 + orders.length + 1
         const total = items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0)
         const clothes = items.reduce((sum, item) => sum + item.quantity, 0)

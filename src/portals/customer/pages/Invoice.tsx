@@ -1,8 +1,7 @@
-import { useEffect, useState } from 'react'
-import { data, Link, useFetcher, useRevalidator } from 'react-router'
+import { useState } from 'react'
+import { data, Link } from 'react-router'
 import type { Route } from './+types/Invoice'
 import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
-import { toast } from '../../../lib/toast'
 import { useCustomerStore } from '../customer-store-hook'
 import { InsufficientBalanceError, payFromWallet } from '../../../lib/wallet.server'
 
@@ -32,17 +31,6 @@ export default function Invoice() {
   const { invoices } = useCustomerStore()
   const [selectedInvoiceId, setSelectedInvoiceId] = useState(invoices[0]?.id ?? '')
   const invoice = invoices.find((item) => item.id === selectedInvoiceId) ?? invoices[0] ?? null
-  const fetcher = useFetcher<typeof action>()
-  const revalidator = useRevalidator()
-
-  useEffect(() => {
-    if (fetcher.data?.ok) {
-      toast.success('Invoice paid. Delivery OTP is now available.')
-      revalidator.revalidate()
-    }
-    if (fetcher.data && !fetcher.data.ok && 'message' in fetcher.data) toast.error(fetcher.data.message)
-  }, [fetcher.data, revalidator])
-
   if (!invoice) {
     return (
       <div className="space-y-5 pb-8">
@@ -126,7 +114,7 @@ export default function Invoice() {
                 <span>Vendor confirmed</span>
                 <strong className="text-slate-900">{invoice.finalCount} items</strong>
               </div>
-              {invoice.mismatch && <p className="mt-3 border-t border-slate-200 pt-3 text-sm text-amber-700"><strong>{invoice.mismatch.direction === 'over' ? 'Extra billing due to over-count' : 'Under-count adjustment'}</strong><br />{invoice.mismatch.detail}</p>}
+              {invoice.mismatch && <div className="mt-3 border-t border-slate-200 pt-3 text-sm text-amber-700"><strong>{invoice.mismatch.direction === 'over' ? 'Extra billing due to over-count' : 'Under-count adjustment'}</strong><p className="mt-1">{invoice.mismatch.detail}</p>{Array.isArray(invoice.mismatch.lines) && invoice.mismatch.lines.length > 0 && <div className="mt-3 overflow-x-auto rounded-xl border border-amber-200 bg-white"><table className="w-full min-w-[620px] text-left text-xs"><thead className="border-b border-amber-100 bg-amber-50 text-[10px] uppercase tracking-[0.08em] text-amber-700"><tr><th className="px-3 py-2 font-semibold">Item</th><th className="px-3 py-2 font-semibold">Service</th><th className="px-3 py-2 text-right font-semibold">Declared</th><th className="px-3 py-2 text-right font-semibold">Confirmed</th><th className="px-3 py-2 text-right font-semibold">Difference</th><th className="px-3 py-2 text-right font-semibold">Unit price</th><th className="px-3 py-2 text-right font-semibold">Extra</th></tr></thead><tbody>{invoice.mismatch.lines.map((line, index) => <tr key={`${line.category}-${line.service}-${index}`} className="border-b border-amber-50 last:border-0"><td className="px-3 py-2.5 font-semibold text-slate-800">{line.category}</td><td className="px-3 py-2.5 text-slate-600">{line.service === 'wash_iron' ? 'Wash + Iron' : line.service === 'wash' ? 'Wash' : 'Iron'}</td><td className="px-3 py-2.5 text-right text-slate-600">{line.originalQuantity}</td><td className="px-3 py-2.5 text-right text-slate-600">{line.confirmedQuantity}</td><td className="px-3 py-2.5 text-right font-semibold text-amber-700">{line.difference > 0 ? '+' : ''}{line.difference}</td><td className="px-3 py-2.5 text-right text-slate-600">₦{line.unitPrice.toLocaleString()}</td><td className="px-3 py-2.5 text-right font-semibold text-amber-700">₦{line.extraAmount.toLocaleString()}</td></tr>)}</tbody></table></div>}</div>}
               {invoice.extraAmount > 0 && <div className="mt-3 flex items-center justify-between border-t border-slate-200 pt-3 text-sm text-amber-700"><span>Extra confirmed items charge</span><strong>₦{invoice.extraAmount.toLocaleString()}</strong></div>}
             </div>
           )}
@@ -151,16 +139,7 @@ export default function Invoice() {
             </div>
           </div>
 
-          <fetcher.Form method="post">
-            <input type="hidden" name="invoiceId" value={invoice.id} />
-            <button
-              type="submit"
-              disabled={invoice.status === 'Paid' || fetcher.state !== 'idle'}
-              className="mt-6 w-full rounded-2xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white shadow-md shadow-violet-200 transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {invoice.status === 'Paid' ? 'Paid' : fetcher.state !== 'idle' ? 'Paying invoice...' : 'Pay invoice from wallet'}
-            </button>
-          </fetcher.Form>
+          {invoice.status === 'Paid' ? <button type="button" disabled className="mt-6 w-full rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-100">Paid</button> : <Link to="/?topup=1" className="mt-6 block w-full rounded-2xl bg-brand-primary px-4 py-3 text-center text-sm font-semibold text-white shadow-md shadow-brand-primary/20 transition hover:bg-brand-primary-hover">Top up wallet to pay</Link>}
 
           <Link
             to="/otp"

@@ -6,7 +6,7 @@ import QaffyLogo from '../../components/QaffyLogo'
 import { isSupabaseServerConfigured, getSupabaseServerClient } from '../../lib/supabase.server'
 import { supabase } from '../../lib/supabase.client'
 import { CustomerStoreProvider } from './customer-store'
-import type { PersistedOrderItem, PickupLocationOption } from './customer-store'
+import type { MismatchLine, PersistedOrderItem, PickupLocationOption } from './customer-store'
 import { useCustomerStore } from './customer-store-hook'
 import type { Invoice, Order, Payment, Plan, Subscription, Wallet, WalletTransaction } from '../../types/database.types'
 
@@ -81,7 +81,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   weekStart.setHours(0, 0, 0, 0)
   weekStart.setDate(weekStart.getDate() - weekStart.getDay())
   const subscriptionUsedUnits = (orders ?? [])
-    .filter((order) => order.is_subscription_order && order.clothes_count_vendor !== null && new Date(order.created_at) >= weekStart)
+    .filter((order) => order.is_subscription_order && order.status !== 'cancelled' && order.clothes_count_vendor !== null && new Date(order.created_at) >= weekStart)
     .reduce((total, order) => total + (order.subscription_units_applied ?? 0), 0)
 
   const { data: wallet } = await serverSupabase
@@ -111,10 +111,10 @@ export async function loader({ request }: Route.LoaderArgs) {
     .order('created_at', { ascending: false })
   const customerInvoiceOrderIds = (invoiceRows ?? []).map((invoice) => invoice.order_id)
   const { data: invoiceMismatches } = customerInvoiceOrderIds.length > 0
-    ? await serverSupabase.from('mismatches').select('id, order_id, direction, detail, created_at').in('order_id', customerInvoiceOrderIds).order('created_at', { ascending: false })
+    ? await serverSupabase.from('mismatches').select('id, order_id, direction, detail, details, created_at').in('order_id', customerInvoiceOrderIds).order('created_at', { ascending: false })
     : { data: [] }
-  const orderMismatches = (invoiceMismatches ?? []).map((mismatch) => ({ id: mismatch.id, order_id: mismatch.order_id, direction: mismatch.direction, detail: mismatch.detail }))
-  const mismatchByOrderId = new Map<string, { direction: 'over' | 'under'; detail: string | null }>()
+  const orderMismatches = (invoiceMismatches ?? []).map((mismatch) => ({ id: mismatch.id, order_id: mismatch.order_id, direction: mismatch.direction, detail: mismatch.detail, details: (mismatch.details ?? []) as MismatchLine[] }))
+  const mismatchByOrderId = new Map<string, { direction: 'over' | 'under'; detail: string | null; details: MismatchLine[] }>()
   for (const mismatch of invoiceMismatches ?? []) {
     if (!mismatchByOrderId.has(mismatch.order_id)) mismatchByOrderId.set(mismatch.order_id, mismatch)
   }
@@ -129,6 +129,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       extra_amount: invoiceOrder?.billed_extra_amount ?? 0,
       mismatch_direction: invoiceMismatch?.direction ?? null,
       mismatch_detail: invoiceMismatch?.detail ?? null,
+      mismatch_details: invoiceMismatch?.details ?? [],
     }
   })
 
@@ -218,29 +219,36 @@ export default function CustomerLayout() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'wallets', filter: `customer_id=eq.${loaderData.profile.id}` }, () => revalidator.revalidate())
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'wallet_transactions', filter: `customer_id=eq.${loaderData.profile.id}` }, () => revalidator.revalidate())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'subscriptions', filter: `customer_id=eq.${loaderData.profile.id}` }, () => revalidator.revalidate())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders', filter: `customer_id=eq.${loaderData.profile.id}` }, () => revalidator.revalidate())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'payments', filter: `customer_id=eq.${loaderData.profile.id}` }, () => revalidator.revalidate())
       .subscribe()
 
+    const refreshVisibleState = window.setInterval(() => {
+      if (document.visibilityState === 'visible') revalidator.revalidate()
+    }, 5000)
+
     return () => {
+      window.clearInterval(refreshVisibleState)
       void client.removeChannel(channel)
     }
   }, [loaderData?.profile?.id, revalidator])
 
   return (
     <CustomerStoreProvider
-      key={`${loaderData?.profile?.id ?? 'customer'}:${loaderData?.profile?.name ?? ''}:${loaderData?.profile?.phone ?? ''}:${loaderData?.profile?.referral_code ?? ''}:${loaderData?.wallet?.updated_at ?? 'no-wallet'}:${loaderData?.subscription?.id ?? 'no-subscription'}:${loaderData?.subscription?.end_date ?? ''}`}
+      key={`${loaderData?.profile?.id ?? 'customer'}:${loaderData?.profile?.name ?? ''}:${loaderData?.profile?.phone ?? ''}:${loaderData?.profile?.referral_code ?? ''}:${loaderData?.wallet?.updated_at ?? 'no-wallet'}:${loaderData?.subscription?.id ?? 'no-subscription'}:${loaderData?.subscription?.end_date ?? ''}:${(loaderData?.orders ?? []).map((order) => `${order.id}-${order.status}-${order.pickup_otp ?? ''}-${order.delivery_otp ?? ''}-${order.clothes_count_vendor ?? ''}`).join('|')}:${(loaderData?.payments ?? []).map((payment) => `${payment.id}-${payment.status}`).join('|')}`}
       profile={loaderData?.profile ?? undefined}
       persistedOrders={loaderData ? (loaderData.orders as Order[]) : undefined}
       persistedUnpaidInvoiceOrderIds={loaderData?.unpaidInvoiceOrderIds as string[] | undefined}
       invoiceAmountsByOrderId={loaderData?.invoiceAmountsByOrderId as Record<string, number> | undefined}
       persistedPickupLocations={loaderData ? (loaderData.pickupLocations as PickupLocationOption[]) : undefined}
       persistedOrderItems={loaderData ? (loaderData.orderItems as PersistedOrderItem[]) : undefined}
-      persistedOrderMismatches={loaderData?.orderMismatches as Array<{ id: string; order_id: string; direction: 'over' | 'under'; detail: string | null }> | undefined}
+      persistedOrderMismatches={loaderData?.orderMismatches as Array<{ id: string; order_id: string; direction: 'over' | 'under'; detail: string | null; details: MismatchLine[] }> | undefined}
       persistedSubscriptionUsedUnits={loaderData?.subscriptionUsedUnits as number | undefined}
       persistedWallet={loaderData?.wallet as Wallet | null | undefined}
       persistedWalletTransactions={loaderData?.walletTransactions as WalletTransaction[] | undefined}
       persistedPayments={loaderData?.payments as Payment[] | undefined}
       persistedTransactionError={loaderData?.transactionError as string | null | undefined}
-      persistedInvoices={loaderData?.invoices as Array<Invoice & { order_reference?: string; original_count?: number | null; final_count?: number | null; extra_amount?: number | null; mismatch_direction?: 'over' | 'under' | null; mismatch_detail?: string | null }> | undefined}
+      persistedInvoices={loaderData?.invoices as Array<Invoice & { order_reference?: string; original_count?: number | null; final_count?: number | null; extra_amount?: number | null; mismatch_direction?: 'over' | 'under' | null; mismatch_detail?: string | null; mismatch_details?: MismatchLine[] }> | undefined}
       persistedSubscription={loaderData?.subscription && loaderData.subscriptionPlan
         ? { subscription: loaderData.subscription as Subscription, plan: loaderData.subscriptionPlan as Plan }
         : null}

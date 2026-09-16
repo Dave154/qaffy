@@ -53,12 +53,12 @@ export default function Settings() {
         <p className="text-sm text-slate-500">Manage your profile and billing</p>
       </header>
 
-      <section className="rounded-[28px] bg-gradient-to-br from-violet-600 via-violet-700 to-fuchsia-500 p-5 text-white shadow-lg shadow-violet-200 sm:p-6">
+      <section className="rounded-[28px] bg-gradient-to-br from-brand-primary via-brand-primary to-brand-primary-hover p-5 text-white shadow-lg shadow-brand-border sm:p-6">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-xs font-medium uppercase tracking-[0.18em] text-violet-100">Profile</p>
+            <p className="text-xs font-medium uppercase tracking-[0.18em] text-white/80">Profile</p>
             <h3 className="mt-3 text-3xl font-bold">{customerName}</h3>
-            <p className="mt-2 text-sm text-violet-100">{customerEmail} • {customerId}</p>
+            <p className="mt-2 text-sm text-white/80">{customerEmail} • {customerId}</p>
           </div>
           <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/15 text-2xl backdrop-blur-sm">A</div>
         </div>
@@ -66,7 +66,7 @@ export default function Settings() {
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {quickStats.map((stat) => (
-          <div key={stat.label} className="rounded-[22px] border border-violet-100 bg-white p-4 shadow-sm shadow-violet-50">
+          <div key={stat.label} className="rounded-[22px] border border-brand-border bg-white p-4 shadow-sm shadow-brand-soft">
             <p className="text-[10px] uppercase tracking-[0.22em] text-slate-400">{stat.label}</p>
             <p className="mt-3 text-lg font-bold text-slate-900">{stat.value}</p>
             <p className="mt-1 text-sm text-slate-500">{stat.helper}</p>
@@ -149,7 +149,7 @@ export default function Settings() {
             <h3 className="text-lg font-bold text-slate-900">Recent payments</h3>
             <p className="mt-1 text-sm text-slate-500">Your latest plan and service payments</p>
           </div>
-          <Link to="/transactions" className="text-sm font-medium text-violet-600">View all</Link>
+          <Link to="/transactions" className="text-sm font-medium text-brand-primary">View all</Link>
         </div>
 
         {transactions.filter((transaction) => transaction.category === 'topup').slice(0, 3).length === 0 ? <p className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-500">No payments recorded yet.</p> : <div className="divide-y divide-slate-100">{transactions.filter((transaction) => transaction.category === 'topup').slice(0, 3).map((transaction) => <div key={transaction.id} className="flex items-center justify-between gap-3 py-3 text-sm"><div><p className="font-semibold text-slate-900">{transaction.title}</p><p className="mt-1 text-xs text-slate-500">{transaction.date}</p></div><div className="text-right"><p className="font-semibold text-slate-900">{transaction.amount}</p><p className="mt-1 text-xs text-slate-500">{transaction.status}</p></div></div>)}</div>}

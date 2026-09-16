@@ -61,7 +61,7 @@ export default function Orders() {
     if (activeFilter === 'Active') return order.status !== 'Delivered'
     if (activeFilter === 'Delivered') return order.status === 'Delivered'
     if (activeFilter === 'Pending payment') return order.paymentStatus === 'Pending'
-    if (activeFilter === 'Needs attention') return Boolean(order.mismatch)
+    if (activeFilter === 'Needs attention') return Boolean(order.mismatch) && order.paymentStatus === 'Pending'
     return true
   })
 
@@ -71,6 +71,18 @@ export default function Orders() {
     { label: 'Delivered', value: String(orders.filter((order) => order.status === 'Delivered').length), helper: 'Completed' },
     // { label: 'Spend', value: `₦${orders.reduce((total, order) => total + order.total, 0).toLocaleString()}`, helper: 'Across all orders' },
   ]
+
+  const getAmountLabel = (order: typeof orders[number]) => {
+    if (order.total > 0) return `₦${order.total.toLocaleString()}`
+    if (order.status === 'In progress') return 'Final billing pending'
+    if (order.isSubscriptionOrder && ['Ready for delivery', 'Delivered'].includes(order.status)) return 'Covered by plan'
+    return 'No charge yet'
+  }
+  const getVisibleOtp = (order: typeof orders[number]) => {
+    if (order.status === 'Awaiting pickup') return order.pickupOtp
+    if (order.status !== 'Delivered') return order.deliveryOtp ?? ''
+    return ''
+  }
 
   return (
     <div className="space-y-6 pb-8">
@@ -133,16 +145,16 @@ export default function Orders() {
                 </div>
 
                 <div className="ml-auto shrink-0 text-right">
-                  {order.status === 'Awaiting pickup' ? (
+                  {getVisibleOtp(order) ? (
                     <div className="flex flex-col items-start sm:items-end">
-                      <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-primary">Pickup OTP</p>
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-primary">{order.status === 'Awaiting pickup' ? 'Pickup OTP' : 'Delivery OTP'}</p>
                       <div className="mt-2">
-                        <ProtectedOtp value={order.pickupOtp} />
+                        <ProtectedOtp value={getVisibleOtp(order)} />
                       </div>
                     </div>
                   ) : (
                     <>
-                      <p className="text-xl font-bold text-slate-900">₦{order.total.toLocaleString()}</p>
+                      <p className="max-w-40 text-right text-sm font-bold text-slate-900">{getAmountLabel(order)}</p>
                       <p className="mt-1 text-xs text-slate-500">{order.items} clothes</p>
                     </>
                   )}

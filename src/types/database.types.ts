@@ -177,6 +177,15 @@ export interface Mismatch {
   order_id: string
   direction: MismatchDirection
   detail: string | null
+  details: Array<{
+    category: string
+    service: 'wash' | 'iron' | 'wash_iron'
+    originalQuantity: number
+    confirmedQuantity: number
+    difference: number
+    unitPrice: number
+    extraAmount: number
+  }>
   created_at: string
 }
 

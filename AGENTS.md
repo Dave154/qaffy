@@ -420,6 +420,31 @@ Before updating UI components, verify:
 - Customer identifiers should use the customer Qaffy ID, formatted as `QF-XXXX` where available, rather than exposing a raw UUID.
 - The vendor overview now loads live category rates from the database and the “Orders needing attention” queue defaults to real orders.
 
+#### Vendor confirmation audit (2026-09-16)
+
+#### Vendor finance progress (2026-09-16)
+
+- Vendor Finance is the single vendor settlement destination; the duplicate Clearing history route and navigation entry were removed.
+- Vendor Finance now excludes orders already assigned to a settlement batch from Total payable, scopes order-item loading to the vendor's orders, and shows loader errors instead of silently rendering zero totals.
+- Vendor Settings now loads a Nigerian bank dropdown, resolves the account automatically after the tenth digit through Paystack, shows the resolved account name, and saves only after the vendor clicks Save details. Verification state and masked account details persist through `supabase/migrations/20260916150000_vendor_payout_accounts.sql`.
+- Remaining vendor finance gaps: actual payout transfer metadata/workflow, historical payout-rate versioning, and finance-specific loading states.
+- Vendor portal handoff is complete for the current phase. Continue with Admin settlement release and payout transfer work; do not add payout transfers to the vendor portal.
+
+- The trusted vendor review path correctly locks finalization to orders in `at_vendor`; finalized orders must remain read-only.
+- Audit findings requiring follow-up: broad vendor RLS writes, normal-order wallet auto-settlement, subscription usage summing excess units, current-rate billing instead of stored order prices, duplicate settlement membership, order-dependent subscription allowance allocation, missing-rate handling, strict payload completeness, finalized-order confirmed quantity display, settlement transaction atomicity, mismatch detail structure, cancellation allowance handling, and vendor confirmation audit events.
+- The first remediation moves vendor claiming to the trusted database path and removes direct vendor writes to orders, order items, and mismatches through `supabase/migrations/20260916110000_restrict_vendor_writes.sql`.
+- The follow-up billing remediation auto-settles normal invoices when the one-off wallet covers them, uses stored order-item prices, counts only `subscription_units_applied` for weekly allowance usage, excludes cancelled orders from usage, and prevents duplicate settlement membership.
+- Vendor confirmation now requires one safe integer quantity for every original order item, rejects duplicate or added-item IDs in the received payload, and finalized review details display persisted `confirmed_quantity` values.
+- Subscription allowance allocation now uses deterministic bounded allocation to maximize covered weighted units instead of depending on database item order.
+- Vendor finalization now appends a trusted `order_confirmation_events` record with actor, counts, mismatch detail, and invoice outcome.
+- New mismatch records now include structured JSONB item lines, and customer invoices display category, service, declared quantity, confirmed quantity, difference, unit price, and extra charge.
+- Invoice payment now requires an unpaid invoice in the `invoiced` order state; cancelled subscription orders no longer count toward the customer usage meter; duplicate mismatch line keys are avoided in the invoice view.
+- Customer layouts now subscribe to customer-owned order changes and remount their data provider on lifecycle changes, so pickup status, pickup OTP removal, delivery state, invoices, and mismatch indicators update without a reload.
+- Customer wallet and wallet-ledger realtime subscriptions now also include customer payment status; the top-up spinner clears when the signed webhook marks the payment successful.
+- Logistics already revalidates on order changes; migration `supabase/migrations/20260916130000_logistics_order_realtime.sql` now publishes orders and logistics events so newly created customer orders appear in OTP search without a reload.
+- Vendor layout now also has a visible-page fallback revalidation, so pickup status changes remove orders from the available-claim count even if realtime publication setup is delayed.
+- Vendor lifecycle is logistics `pending_pickup` -> `picked_up`, vendor claim `picked_up` -> `at_vendor`; pending pickup orders are excluded from the vendor loader entirely.
+
 #### Admin portal implementation
 
 - `src/portals/admin/pages/Home.tsx` loads live dashboard metrics, revenue, vendor/logistics counts, recent activity, and subscription analytics.

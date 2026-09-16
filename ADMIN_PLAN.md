@@ -194,11 +194,25 @@ Mostly complete for core operational screens.
 
 ### Phase 3: Finance
 
-Partially implemented.
+Vendor-side finance preparation is complete; Admin payout execution remains the next workstream.
 - Revenue and payout summary views are active.
 - Invoice/payment and settlement summary data are being surfaced.
-- Vendor ownership and settlement generation are partially modeled, but product-level payout logic and broader financial workflows remain future work.
+- Vendor ownership, confirmed-quantity payout calculation, settlement generation, and vendor payout-account verification are implemented.
+- Vendor Finance is the single vendor settlement destination and excludes orders already assigned to settlement batches from outstanding payable totals.
+- Admin still needs the trusted settlement release and payout-transfer workflow, including transfer metadata, Paystack recipient/transfer handling, and paid-settlement audit records.
+- Historical payout-rate versioning and finance-specific loading states remain future work.
 - Manual wallet adjustment workflow still needs full validation against the approved wallet service rules.
+
+### Next Admin Workstream: Settlement Payouts
+
+Implement this only after confirming the unresolved product decisions below:
+
+- Review pending settlement batches and their included orders.
+- Confirm the vendor payout account is verified before any transfer.
+- Initiate the approved Paystack transfer from a trusted server action.
+- Persist transfer reference, recipient metadata, actor, timestamps, status, and failure reason.
+- Make payout status transitions auditable and prevent duplicate transfers.
+- Keep settlement reversal and partial payment disabled until explicitly approved.
 
 ### Phase 4: Governance and Subscriptions
 

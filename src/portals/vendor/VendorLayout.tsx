@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { NavLink, Outlet, data, redirect, useLoaderData, useLocation, useNavigate, useRevalidator } from 'react-router'
 import { useEffect } from 'react'
 import type { Route } from './+types/VendorLayout'
-import { ClipboardList, History, LayoutDashboard, LogOut, Menu, X } from 'lucide-react'
+import { ClipboardList, History, LayoutDashboard, LogOut, Menu, Settings, X } from 'lucide-react'
 import QaffyLogo from '../../components/QaffyLogo'
 import { requireRole } from '../../lib/auth.server'
 import { supabase } from '../../lib/supabase.client'
@@ -16,7 +16,7 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   const { data: vendor } = await supabase.from('vendors').select('id').eq('profile_id', auth.profile.id).eq('status', 'approved').maybeSingle()
   const { data: orders } = vendor
-    ? await supabase.from('orders').select('*').or(`vendor_id.is.null,vendor_id.eq.${vendor.id}`).order('created_at', { ascending: false })
+    ? await supabase.from('orders').select('*').or(`vendor_id.eq.${vendor.id},and(vendor_id.is.null,status.eq.picked_up)`).order('created_at', { ascending: false })
     : { data: [] }
   const orderIds = (orders ?? []).map((order) => order.id)
   const customerIds = [...new Set((orders ?? []).map((order) => order.customer_id))]
@@ -25,7 +25,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   const [{ data: profiles }, { data: locations }, { data: items }, { data: invoices }, { data: mismatches }, { data: logisticsEvents }] = await Promise.all([
     customerIds.length ? supabase.from('profiles').select('id, name, qaffy_id, email, phone').in('id', customerIds) : Promise.resolve({ data: [] }),
     locationIds.length ? supabase.from('pickup_locations').select('id, name').in('id', locationIds) : Promise.resolve({ data: [] }),
-    orderIds.length ? supabase.from('order_items').select('id, order_id, category_id, quantity, service, unit_price').in('order_id', orderIds) : Promise.resolve({ data: [] }),
+    orderIds.length ? supabase.from('order_items').select('id, order_id, category_id, quantity, confirmed_quantity, service, unit_price').in('order_id', orderIds) : Promise.resolve({ data: [] }),
     orderIds.length ? supabase.from('invoices').select('id, order_id, amount, status, created_at, paid_at').in('order_id', orderIds) : Promise.resolve({ data: [] }),
     orderIds.length ? supabase.from('mismatches').select('id, order_id, direction, detail, created_at').in('order_id', orderIds).order('created_at', { ascending: false }) : Promise.resolve({ data: [] }),
     orderIds.length ? supabase.from('order_logistics_events').select('id, order_id, event_type, created_at').in('order_id', orderIds).order('created_at', { ascending: false }) : Promise.resolve({ data: [] }),
@@ -62,7 +62,7 @@ const navigation = [
   { to: '/vendor', label: 'Overview', icon: LayoutDashboard, end: true },
   { to: '/vendor/orders', label: 'Orders', icon: ClipboardList },
   { to: '/vendor/finance', label: 'Finance', icon: History },
-  { to: '/vendor/clearing-history', label: 'Clearing history', icon: History },
+  { to: '/vendor/settings', label: 'Settings', icon: Settings },
 ]
 
 export default function VendorLayout() {
@@ -82,7 +82,12 @@ export default function VendorLayout() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'order_logistics_events' }, () => revalidate())
       .subscribe()
 
+    const refreshVisibleState = window.setInterval(() => {
+      if (document.visibilityState === 'visible') revalidate()
+    }, 5000)
+
     return () => {
+      window.clearInterval(refreshVisibleState)
       void client.removeChannel(channel)
     }
   }, [revalidate])

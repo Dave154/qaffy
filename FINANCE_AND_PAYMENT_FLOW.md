@@ -52,6 +52,31 @@ Approved operational billing model as of 2026-09-14.
 - Subscription usage meters count only units covered by the plan; excess units charged from the general wallet are excluded from weekly allowance usage.
 - Unclaimed vendor orders are claimed before the vendor sees the detailed review form; count entry is prioritized after ownership is established.
 
+### Vendor confirmation audit checkpoint
+
+### Vendor finance progress checkpoint (2026-09-16)
+
+- Vendor Finance is now the only vendor settlement screen; the duplicate Clearing history route was removed.
+- Vendor Finance's Total payable card now represents confirmed vendor earnings that are not already assigned to a settlement batch. Pending payout and Paid to date remain sourced from live settlement rows.
+- Vendor order-item loading is scoped to the current vendor's orders, and Supabase query failures are surfaced in the Finance UI instead of appearing as zero-valued metrics.
+- Vendor Settings loads Nigerian banks into a dropdown, resolves the account automatically after the tenth digit through Paystack, shows the resolved account name, and saves only after explicit Save details confirmation. The server re-resolves during save, stores the verified bank/account name and masked account details, and prevents an account from appearing verified unless Paystack resolves it successfully. Apply `supabase/migrations/20260916150000_vendor_payout_accounts.sql` before using this flow.
+- Historical payout-rate versioning is still not implemented. The current rate card is used for derived payout calculations because the product has not yet approved a payout-rate formula or rate-history model.
+- Remaining vendor finance work: payout transfer metadata and final settlement payment workflow.
+- Vendor phase handoff: payout release belongs to Admin. The next implementation should review pending settlement batches, require a verified vendor payout account, execute the approved trusted Paystack transfer, and persist auditable transfer metadata. Do not initiate transfers from the vendor portal.
+
+- Audit on 2026-09-16 identified high-risk follow-up work: restrict vendor RLS writes, auto-settle normal orders when the wallet covers the final invoice, sum only `subscription_units_applied` for allowance usage, preserve stored order-item prices, prevent duplicate settlement membership, make subscription allocation deterministic, reject missing-rate and incomplete payloads, display `confirmed_quantity` after finalization, make settlement creation atomic, improve mismatch detail, exclude cancelled orders from allowance usage, and append vendor confirmation audit events.
+- The first security fix moves vendor claiming to the trusted database path and applies `supabase/migrations/20260916110000_restrict_vendor_writes.sql`.
+- The follow-up billing fix auto-settles covered normal orders, preserves stored customer prices, excludes excess and cancelled orders from subscription usage, and prevents an order from entering more than one settlement.
+- Vendor confirmation payloads now require complete, unique original-item quantities, and finalized vendor details read the persisted confirmed quantities.
+- Subscription coverage now uses deterministic bounded allocation to maximize covered weighted units and no longer depends on database row order.
+- Vendor finalization now records a trusted confirmation event with the vendor actor, original and confirmed counts, mismatch detail, and invoice outcome.
+- New mismatch records now persist structured item lines and customer invoices show the itemized difference and extra-charge breakdown.
+- Invoice payment is now restricted to unpaid `invoiced` orders, cancelled subscription orders are excluded from the customer usage meter, and duplicate mismatch line rendering is safe.
+- Customer order changes now revalidate the customer layout in realtime, and lifecycle fields force the provider snapshot to refresh so pickup and related customer-visible state update without a reload.
+- Logistics order and event tables are now explicitly added to the Supabase realtime publication so new customer orders reach OTP search immediately.
+- Vendor order state has a visible-page fallback refresh so logistics pickup transitions cannot leave the vendor available-claim count stale when realtime setup is delayed.
+- Vendor availability now begins only after logistics pickup: `pending_pickup` is excluded, `picked_up` is claimable, and claiming moves the order to `at_vendor`.
+
 ## Logistics continuation checkpoint
 
 - Logistics pickup and delivery remain tabs on one `/logistics` page.

@@ -1,5 +1,4 @@
-import { AlertTriangle, ArrowRight, X } from 'lucide-react'
-import { useState } from 'react'
+import { AlertTriangle, ArrowRight } from 'lucide-react'
 import type { CustomerOrder } from '../portals/customer/customer-store'
 
 type MismatchBannerProps = {
@@ -7,28 +6,12 @@ type MismatchBannerProps = {
 }
 
 export default function MismatchBanner({ orders }: MismatchBannerProps) {
-  const [dismissedIds, setDismissedIds] = useState<string[]>(() => {
-    if (typeof window === 'undefined') return []
-    try {
-      return JSON.parse(window.localStorage.getItem('qaffy-dismissed-mismatches') ?? '[]') as string[]
-    } catch {
-      return []
-    }
-  })
   const mismatches = orders
-    .filter((order) => order.mismatch && (order.paymentStatus === 'Pending' || !dismissedIds.includes(order.mismatch.id)))
+    .filter((order) => order.mismatch && order.paymentStatus === 'Pending')
     .map((order) => ({ order, mismatch: order.mismatch! }))
   const latestMismatch = mismatches[0]?.mismatch
 
   if (!latestMismatch) return null
-
-  const hasUnpaidMismatch = mismatches.some(({ order }) => order.paymentStatus === 'Pending')
-  const dismiss = () => {
-    if (hasUnpaidMismatch) return
-    const nextDismissedIds = [...new Set([...dismissedIds, ...mismatches.map(({ mismatch }) => mismatch.id)])]
-    window.localStorage.setItem('qaffy-dismissed-mismatches', JSON.stringify(nextDismissedIds))
-    setDismissedIds(nextDismissedIds)
-  }
 
   return (
     <section className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-slate-900 sm:p-5" role="status">
@@ -44,9 +27,6 @@ export default function MismatchBanner({ orders }: MismatchBannerProps) {
           Review affected orders <ArrowRight className="h-4 w-4" />
         </a>
       </div>
-      {!hasUnpaidMismatch && <button type="button" onClick={dismiss} aria-label="Dismiss mismatch notification" title="Dismiss notification" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-amber-700 transition hover:bg-white">
-        <X className="h-4 w-4" />
-      </button>}
     </section>
   )
 }

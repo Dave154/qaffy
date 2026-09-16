@@ -1,4 +1,4 @@
-import { ArrowUpRight, Banknote, CircleDollarSign, WalletCards } from 'lucide-react'
+import { Banknote, WalletCards } from 'lucide-react'
 import { data, useLoaderData } from 'react-router'
 import type { Route } from './+types/Finance'
 import { requireRole } from '../../../lib/auth.server'
@@ -14,8 +14,8 @@ type SettlementRow = {
 }
 
 type VendorFinanceData = {
+  error: string | null
   summary: {
-    totalCollected: number
     totalPayable: number
     pendingAmount: number
     paidAmount: number
@@ -31,7 +31,7 @@ function formatRange(start: string | null, end: string | null) {
 
 export async function loader({ request }: Route.LoaderArgs) {
   const auth = await requireRole(request, 'vendor')
-  if (!auth) return data<VendorFinanceData>({ summary: { totalCollected: 0, totalPayable: 0, pendingAmount: 0, paidAmount: 0 }, settlements: [] }, { status: 200 })
+  if (!auth) return data<VendorFinanceData>({ error: 'Please sign in again.', summary: { totalPayable: 0, pendingAmount: 0, paidAmount: 0 }, settlements: [] }, { status: 401 })
 
   const { supabase, headers } = auth
 
@@ -42,24 +42,29 @@ export async function loader({ request }: Route.LoaderArgs) {
     .maybeSingle()
 
   if (!vendor?.id) {
-    return data<VendorFinanceData>({ summary: { totalCollected: 0, totalPayable: 0, pendingAmount: 0, paidAmount: 0 }, settlements: [] }, { headers, status: 200 })
+    return data<VendorFinanceData>({ error: 'Approved vendor access is required.', summary: { totalPayable: 0, pendingAmount: 0, paidAmount: 0 }, settlements: [] }, { headers, status: 403 })
   }
 
-  const { data: orders } = await supabase
+  const { data: orders, error: ordersError } = await supabase
     .from('orders')
     .select('id, vendor_id, status, clothes_count_vendor, created_at')
     .eq('vendor_id', vendor.id)
     .order('created_at', { ascending: false })
   const orderIds = (orders ?? []).map((order) => order.id)
-  const [{ data: orderItems }, { data: rates }, { data: invoices }, { data: settlements }] = await Promise.all([
-    supabase.from('order_items').select('id, order_id, category_id, quantity, confirmed_quantity, service, unit_price'),
+  const [{ data: orderItems, error: orderItemsError }, { data: rates, error: ratesError }, { data: settlements, error: settlementsError }, { data: settlementOrders, error: settlementOrdersError }] = await Promise.all([
+    orderIds.length ? supabase.from('order_items').select('id, order_id, category_id, quantity, confirmed_quantity, service, unit_price').in('order_id', orderIds) : Promise.resolve({ data: [], error: null }),
     supabase.from('cloth_category_rates').select('category_id, vendor_wash_price, vendor_iron_price, vendor_wash_iron_price'),
-    orderIds.length ? supabase.from('invoices').select('id, order_id, amount, status, created_at').in('order_id', orderIds) : Promise.resolve({ data: [] }),
     supabase.from('vendor_settlements').select('id, vendor_id, period_start, period_end, amount_due, status, created_at').eq('vendor_id', vendor.id).order('created_at', { ascending: false }),
+    orderIds.length ? supabase.from('vendor_settlement_orders').select('order_id, settlement_id').in('order_id', orderIds) : Promise.resolve({ data: [], error: null }),
   ])
 
+  const queryError = ordersError ?? orderItemsError ?? ratesError ?? settlementsError ?? settlementOrdersError
+  if (queryError) {
+    return data<VendorFinanceData>({ error: queryError.message, summary: { totalPayable: 0, pendingAmount: 0, paidAmount: 0 }, settlements: [] }, { headers, status: 500 })
+  }
+
   const rateByCategory = new Map((rates ?? []).map((rate) => [rate.category_id, rate]))
-  const invoiceByOrder = new Map((invoices ?? []).map((invoice) => [invoice.order_id, invoice]))
+  const settledOrderIds = new Set((settlementOrders ?? []).map((mapping) => mapping.order_id))
   const payableByOrder = new Map<string, number>()
 
   for (const item of orderItems ?? []) {
@@ -71,18 +76,13 @@ export async function loader({ request }: Route.LoaderArgs) {
     payableByOrder.set(item.order_id, current + (unitPrice * Number(item.confirmed_quantity ?? 0)))
   }
 
-  const totalCollected = (orders ?? []).reduce((sum, order) => {
-    const invoice = invoiceByOrder.get(order.id)
-    return sum + (invoice?.status === 'paid' ? Number(invoice.amount ?? 0) : 0)
-  }, 0)
-
-  const totalPayable = (orders ?? []).reduce((sum, order) => sum + (payableByOrder.get(order.id) ?? 0), 0)
+  const totalPayable = (orders ?? []).reduce((sum, order) => settledOrderIds.has(order.id) ? sum : sum + (payableByOrder.get(order.id) ?? 0), 0)
   const pendingAmount = (settlements ?? []).filter((settlement) => settlement.status === 'pending').reduce((sum, settlement) => sum + Number(settlement.amount_due ?? 0), 0)
   const paidAmount = (settlements ?? []).filter((settlement) => settlement.status === 'paid').reduce((sum, settlement) => sum + Number(settlement.amount_due ?? 0), 0)
 
   return data<VendorFinanceData>({
+    error: null,
     summary: {
-      totalCollected,
       totalPayable,
       pendingAmount,
       paidAmount,
@@ -99,25 +99,19 @@ export async function loader({ request }: Route.LoaderArgs) {
 }
 
 export default function VendorFinancePage() {
-  const { summary, settlements } = useLoaderData<typeof loader>()
+  const { error, summary, settlements } = useLoaderData<typeof loader>()
 
   return (
     <div className="space-y-6">
       <header className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Vendor clearing</p>
           <h2 className="mt-1 text-2xl font-bold text-slate-900">Finance</h2>
         </div>
-        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-700">
-          <ArrowUpRight size={12} /> Rate-card based payouts
-        </span>
       </header>
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Total collected</p>
-          <div className="mt-3 flex items-end justify-between"><p className="text-2xl font-bold text-slate-900">{money(summary.totalCollected)}</p><CircleDollarSign size={18} className="text-brand-primary" /></div>
-        </div>
+  {error && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">Finance data could not be loaded: {error}</div>}
+
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Total payable</p>
           <div className="mt-3 flex items-end justify-between"><p className="text-2xl font-bold text-slate-900">{money(summary.totalPayable)}</p><Banknote size={18} className="text-emerald-600" /></div>

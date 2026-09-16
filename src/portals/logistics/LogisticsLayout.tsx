@@ -64,7 +64,12 @@ export default function LogisticsLayout() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'order_logistics_events' }, () => revalidator.revalidate())
       .subscribe()
 
+    const refreshVisibleState = window.setInterval(() => {
+      if (document.visibilityState === 'visible') revalidator.revalidate()
+    }, 5000)
+
     return () => {
+      window.clearInterval(refreshVisibleState)
       void client.removeChannel(channel)
     }
   }, [revalidator])

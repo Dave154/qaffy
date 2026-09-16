@@ -32,7 +32,7 @@ export default [
       index('portals/vendor/pages/Home.tsx'),
       route('orders', 'portals/vendor/pages/Orders.tsx'),
       route('finance', 'portals/vendor/pages/Finance.tsx'),
-      route('clearing-history', 'portals/vendor/pages/ClearingHistory.tsx'),
+      route('settings', 'portals/vendor/pages/Settings.tsx'),
     ]),
     route('login', 'portals/vendor/pages/Login.tsx'),
     route('complete-profile', 'portals/vendor/pages/CompleteProfile.tsx'),

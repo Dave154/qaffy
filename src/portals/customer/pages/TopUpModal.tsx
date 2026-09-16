@@ -4,20 +4,21 @@ import { useMemo, useState } from 'react'
 type TopUpModalProps = {
   currentBalance: number
   subscriptionBalance: number
+  pendingPaymentTotal: number
   onTopUp: (amount: number) => Promise<void>
   isProcessing: boolean
   error: string | null
   onClose: () => void
 }
 
-export default function TopUpModal({ currentBalance, subscriptionBalance, onTopUp, isProcessing, error, onClose }: TopUpModalProps) {
+export default function TopUpModal({ currentBalance, subscriptionBalance, pendingPaymentTotal, onTopUp, isProcessing, error, onClose }: TopUpModalProps) {
   const negativeBalance = Math.max(0, -subscriptionBalance)
   const debt = negativeBalance
 
   const suggestedAmount = useMemo(() => {
     const minimum = 1000
-    return Math.max(debt > 0 ? debt : minimum, minimum)
-  }, [debt])
+    return Math.max(pendingPaymentTotal, debt, minimum)
+  }, [debt, pendingPaymentTotal])
 
   const [amount, setAmount] = useState<number>(suggestedAmount)
   const appliedToDebt = Math.min(Math.max(amount, 0), negativeBalance)
@@ -90,7 +91,7 @@ export default function TopUpModal({ currentBalance, subscriptionBalance, onTopU
           {error && <p role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">{error}</p>}
 
           <button type="button" disabled={amount < 1000 || isProcessing} onClick={() => void handleTopUp()} className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-brand-primary px-4 py-3 text-sm font-semibold text-white shadow-md shadow-brand-primary/20 transition hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50">
-            {isProcessing ? 'Opening secure checkout...' : <>Continue to Paystack <ArrowRight className="h-4 w-4" /></>}
+            {isProcessing ? <><span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true" /> Opening secure checkout...</> : <>Continue to Paystack <ArrowRight className="h-4 w-4" /></>}
           </button>
           <p className="mt-3 flex items-center justify-center gap-1.5 text-center text-xs text-slate-500"><ShieldCheck className="h-3.5 w-3.5 text-emerald-600" /> Your wallet updates automatically after payment confirmation.</p>
         </div>
