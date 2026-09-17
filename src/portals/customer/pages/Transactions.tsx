@@ -66,16 +66,18 @@ export default function Transactions() {
         {transactionError && <div role="alert" className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">Payment activity could not be loaded. Please refresh and try again.</div>}
         {isLoading ? <div className="space-y-3" aria-live="polite">{[1, 2, 3].map((item) => <div key={item} className="h-16 animate-pulse rounded-2xl bg-slate-100" />)}</div> : filteredTransactions.length === 0 ? <div className="rounded-2xl bg-slate-50 p-8 text-center text-sm text-slate-500">{transactions.length === 0 ? 'No wallet activity yet.' : `No ${activeFilter.toLowerCase()} found.`}</div> : <div className="divide-y divide-slate-100">
           {filteredTransactions.map((transaction) => (
-            <div key={transaction.id} className="flex items-center gap-3 py-4 first:pt-1 last:pb-1">
-              <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl text-lg ${transaction.direction === 'credit' ? 'bg-emerald-50 text-emerald-600' : 'bg-sky-50 text-sky-700'}`}>
-                {transaction.direction === 'credit' ? '↓' : '↑'}
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="truncate font-semibold text-slate-900">{transaction.title}</p>
-                <p className="mt-0.5 truncate text-xs text-slate-500">{transaction.reference}</p>
-                <p className="mt-1 text-[11px] text-slate-400">{transaction.date}</p>
+            <div key={transaction.id} className="flex flex-col gap-3 py-4 first:pt-1 last:pb-1 sm:flex-row sm:items-center">
+              <div className="flex items-center gap-3 sm:flex-1">
+                <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl text-lg ${transaction.direction === 'credit' ? 'bg-emerald-50 text-emerald-600' : 'bg-sky-50 text-sky-700'}`}>
+                  {transaction.direction === 'credit' ? '↓' : '↑'}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-semibold text-slate-900">{transaction.title}</p>
+                  <p className="mt-0.5 truncate text-xs text-slate-500">{transaction.reference}</p>
+                  <p className="mt-1 text-[11px] text-slate-400">{transaction.date}</p>
+                </div>
               </div>
-              <div className="shrink-0 text-right">
+              <div className="shrink-0 text-left sm:text-right">
                 <p className={`font-semibold ${transaction.direction === 'credit' ? 'text-emerald-600' : 'text-slate-900'}`}>{transaction.amount}</p>
                 <p className={`mt-1 text-[11px] font-medium ${transaction.status === 'Successful' ? 'text-emerald-600' : transaction.status === 'Failed' ? 'text-rose-600' : 'text-amber-600'}`}>{transaction.status}</p>
               </div>

@@ -130,8 +130,8 @@ export default function Orders() {
         <div className="space-y-3">
           {filteredOrders.map((order) => (
             <article key={order.id} className="border-b border-[#eeeeee] bg-white p-4 last:border-b-0">
-              <div className="flex flex-row flex-wrap items-start gap-4">
-                <div className="min-w-0 flex-1">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0 flex-1 sm:pr-4">
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="text-lg font-semibold text-slate-900"><CopyableOrderId id={order.publicOrderNumber} /></p>
                     <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold ${order.statusTone}`}>
@@ -144,19 +144,21 @@ export default function Orders() {
                   {order.mismatch && <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-left"><p className="text-xs font-semibold text-amber-800">{order.mismatch.direction === 'over' ? 'Extra items confirmed' : 'Fewer items confirmed'}</p><p className="mt-1 text-xs text-amber-700">{order.mismatch.detail}</p></div>}
                 </div>
 
-                <div className="ml-auto shrink-0 text-right">
+                <div className="shrink-0 sm:ml-2">
                   {getVisibleOtp(order) ? (
-                    <div className="flex flex-col items-start sm:items-end">
-                      <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-primary">{order.status === 'Awaiting pickup' ? 'Pickup OTP' : 'Delivery OTP'}</p>
-                      <div className="mt-2">
-                        <ProtectedOtp value={getVisibleOtp(order)} />
+                    <div className="flex items-start gap-3 sm:flex-col sm:items-end">
+                      <div className="min-w-0">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-primary">{order.status === 'Awaiting pickup' ? 'Pickup OTP' : 'Delivery OTP'}</p>
+                        <div className="mt-2">
+                          <ProtectedOtp value={getVisibleOtp(order)} />
+                        </div>
                       </div>
                     </div>
                   ) : (
-                    <>
-                      <p className="max-w-40 text-right text-sm font-bold text-slate-900">{getAmountLabel(order)}</p>
+                    <div className="text-left sm:text-right">
+                      <p className="max-w-40 text-sm font-bold text-slate-900">{getAmountLabel(order)}</p>
                       <p className="mt-1 text-xs text-slate-500">{order.items} clothes</p>
-                    </>
+                    </div>
                   )}
                 </div>
               </div>

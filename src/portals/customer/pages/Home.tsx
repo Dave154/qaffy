@@ -161,9 +161,9 @@ export default function Home() {
 
           <div className="space-y-3">
             {orders.slice(0, 3).map((order) => (
-              <article key={order.id} className="relative border-b border-[#eeeeee] bg-white p-4 last:border-b-0">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="pr-28">
+              <article key={order.id} className="border-b border-[#eeeeee] bg-white p-4 last:border-b-0">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0 flex-1 sm:pr-4">
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="text-lg font-semibold text-slate-900"><CopyableOrderId id={order.publicOrderNumber} /></p>
                       <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold ${order.statusTone}`}>
@@ -176,17 +176,21 @@ export default function Home() {
                     {order.mismatch && <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-left"><p className="text-xs font-semibold text-amber-800">Count update: {order.mismatch.direction === 'over' ? 'extra items confirmed' : 'fewer items confirmed'}</p><p className="mt-1 text-xs text-amber-700">{order.mismatch.detail}</p></div>}
                   </div>
 
-                  <div className="absolute right-4 top-4 text-right">
+                  <div className="shrink-0 sm:ml-2">
                     {getVisibleOtp(order) ? (
-                      <>
-                        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-primary">{order.status === 'Awaiting pickup' ? 'Pickup OTP' : 'Delivery OTP'}</p>
-                        <p className="mt-2 text-xl font-bold tracking-[0.12em] text-brand-primary">{getVisibleOtp(order)}</p>
-                      </>
+                      <div className="flex items-start gap-3 sm:flex-col sm:items-end">
+                        <div className="min-w-0">
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-primary">{order.status === 'Awaiting pickup' ? 'Pickup OTP' : 'Delivery OTP'}</p>
+                          <div className="mt-2">
+                            <p className="text-xl font-bold tracking-[0.12em] text-brand-primary">{getVisibleOtp(order)}</p>
+                          </div>
+                        </div>
+                      </div>
                     ) : (
-                      <>
-                        <p className="max-w-40 text-right text-sm font-bold text-slate-900">{getAmountLabel(order)}</p>
+                      <div className="text-left sm:text-right">
+                        <p className="max-w-40 text-sm font-bold text-slate-900">{getAmountLabel(order)}</p>
                         <p className="mt-1 text-xs text-slate-500">{order.items} clothes</p>
-                      </>
+                      </div>
                     )}
                   </div>
                 </div>
