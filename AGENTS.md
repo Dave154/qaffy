@@ -672,6 +672,14 @@ The first enables Realtime for wallets, wallet transactions, and subscriptions. 
 - Required migrations are `20260917120000_referral_attribution_foundation.sql`, `20260917130000_referral_campaign_reward_ledger.sql`, and `20260917140000_promotional_wallet_rewards.sql`.
 - Remaining work is live Supabase/payment smoke testing, Admin referral/reward history and export, and audited exceptional reversal/correction workflows.
 
+### Admin and UI Continuation Update
+
+- Admin provisioning is available at `/admin/admins` under Settings. It reuses or creates an auth user server-side, assigns an approved `admin` profile role, and records an `admin_access_granted` audit event. `SUPABASE_SERVICE_ROLE_KEY` is required for provisioning.
+- The Admin sidebar uses larger menu rows, consistent parent spacing, expandable Partners/Settings groups, and flexible nested submenu rows with chevron arrows. Preserve these navigation conventions when adding Admin screens.
+- The customer notification badge counts only mismatches attached to unpaid invoices, matching the `/orders?filter=Needs attention` filter.
+- Vendor Settings keeps its page heading mobile-only because the desktop shared layout already renders the Settings title.
+- Admin referral campaign dates default to the current local datetime and one month later while remaining editable.
+
 ### Suggested Continuation Workflow
 
 - Start by checking `git status --short` so existing user work is not overwritten.

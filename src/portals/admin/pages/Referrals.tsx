@@ -27,6 +27,11 @@ function formatDate(value: string | null) {
   return value ? new Date(value).toLocaleDateString() : 'No end date'
 }
 
+function formatDatetimeLocal(value: Date) {
+  const pad = (part: number) => String(part).padStart(2, '0')
+  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}T${pad(value.getHours())}:${pad(value.getMinutes())}`
+}
+
 // eslint-disable-next-line react-refresh/only-export-components
 export async function loader({ request }: Route.LoaderArgs) {
   const auth = await requireRole(request, 'admin')
@@ -110,6 +115,11 @@ export async function action({ request }: Route.ActionArgs) {
 export default function Referrals() {
   const { campaigns } = useLoaderData<typeof loader>()
   const fetcher = useFetcher<typeof action>()
+  const defaultStartsAt = new Date()
+  const defaultEndsAt = new Date(defaultStartsAt)
+  defaultEndsAt.setMonth(defaultEndsAt.getMonth() + 1)
+  const defaultStartsAtValue = formatDatetimeLocal(defaultStartsAt)
+  const defaultEndsAtValue = formatDatetimeLocal(defaultEndsAt)
   const pendingIntent = fetcher.state === 'idle' ? '' : String(fetcher.formData?.get('intent') ?? '')
   const isPending = (intent: string, id?: string) => pendingIntent === intent && (!id || String(fetcher.formData?.get('id') ?? '') === id)
 
@@ -129,8 +139,8 @@ export default function Referrals() {
           <label><span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">New customer reward</span><input name="referredRewardValue" type="number" min="1" step="1" defaultValue="1000" className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" /></label>
           <label><span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Minimum order</span><input name="minimumOrderAmount" type="number" min="0" step="1" defaultValue="0" className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" /></label>
           <label><span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Reward expiry days</span><input name="rewardExpiryDays" type="number" min="1" step="1" defaultValue="90" className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" /></label>
-          <label><span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Starts</span><input name="startsAt" type="datetime-local" className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" /></label>
-          <label><span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Ends</span><input name="endsAt" type="datetime-local" className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" /></label>
+          <label><span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Starts</span><input name="startsAt" type="datetime-local" defaultValue={defaultStartsAtValue} className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" /></label>
+          <label><span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Ends</span><input name="endsAt" type="datetime-local" defaultValue={defaultEndsAtValue} className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" /></label>
           <label><span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Max rewards per referrer</span><input name="maxRewardsPerReferrer" type="number" min="1" step="1" placeholder="Unlimited" className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" /></label>
           <div className="flex items-end"><button type="submit" disabled={isPending('create')} className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-brand-primary px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-70">{isPending('create') ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}{isPending('create') ? 'Saving...' : 'Save draft'}</button></div>
         </fetcher.Form>

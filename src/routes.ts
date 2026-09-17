@@ -50,6 +50,7 @@ export default [
       route('mismatches', 'portals/admin/pages/Mismatches.tsx'),
       route('plans', 'portals/admin/pages/Plans.tsx'),
       route('referrals', 'portals/admin/pages/Referrals.tsx'),
+      route('admins', 'portals/admin/pages/Admins.tsx'),
       route('partners', 'portals/admin/pages/Partners.tsx'),
       route('partners/vendors', 'portals/admin/pages/Vendors.tsx'),
       route('partners/logistics', 'portals/admin/pages/Logistics.tsx'),

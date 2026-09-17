@@ -217,7 +217,8 @@ export default function CustomerLayout() {
   const navigate = useNavigate()
   const loaderData = useLoaderData<typeof loader>()
   const revalidator = useRevalidator()
-  const mismatchCount = loaderData?.orderMismatches?.length ?? 0
+  const unpaidOrderIds = new Set(loaderData?.unpaidInvoiceOrderIds ?? [])
+  const mismatchCount = loaderData?.orderMismatches?.filter((mismatch) => unpaidOrderIds.has(mismatch.order_id)).length ?? 0
   const pageTitle = location.pathname === '/'
     ? 'Overview'
     : location.pathname.startsWith('/invoice')

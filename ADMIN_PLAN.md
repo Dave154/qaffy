@@ -24,11 +24,12 @@ Read this before implementing the admin portal. Confirmed product decisions are 
 ## Current Admin State
 
 - Admin authentication and `requireRole(request, 'admin')` exist.
-- `src/portals/admin/AdminLayout.tsx` has a working sidebar and navigation for the implemented admin screens.
+- `src/portals/admin/AdminLayout.tsx` has the shared Admin sidebar with consistent menu spacing, expandable Settings/Partners groups, and nested chevron navigation.
 - `src/portals/admin/pages/Home.tsx` loads live overview analytics and chart data.
-- The admin routes in `src/routes.ts` include overview, orders, finance, categories, pickup locations, mismatches, plans, partners, and user screens.
+- The admin routes in `src/routes.ts` include overview, orders, finance, categories, pickup locations, mismatches, plans, referrals, Admin management, partners, and user screens.
 - The codebase includes working data tables and screens for profiles, profile_roles, vendors, logistics_agents, orders, order_items, mismatches, invoices, payments, wallet tooling, plans, subscriptions, cloth_categories, cloth_category_rates, pickup_locations, vendor_settlements, vendor_settlement_orders, referrals, and order_logistics_events.
 - Admin functionality already implemented in code includes overview, partner management, categories/rates, mismatch review, finance summaries, and plan configuration.
+- Admin provisioning is implemented at `/admin/admins` under Settings. An existing or new email can receive approved Admin access through `profile_roles`; the action is server-side and audited.
 
 ## Outstanding Admin Work
 
@@ -55,7 +56,7 @@ These items are **not complete yet**:
 
 - **Customer/vendor messaging.**
 - **Historical/archive views.**
-- **Granular Admin permissions.**
+- **Granular Admin permissions.** Admin provisioning currently grants the single approved Admin role; permission levels are still deferred.
 - **Settlement reversal or partial payments**, pending explicit product approval.
 
 ### Next Admin UX and Reporting Requirements

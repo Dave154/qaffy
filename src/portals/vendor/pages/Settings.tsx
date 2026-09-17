@@ -149,7 +149,7 @@ export default function VendorSettings() {
 
   return <div className="space-y-6">
     <header>
-      <h2 className="text-2xl font-bold tracking-tight text-slate-900">Settings</h2>
+      <h2 className="text-2xl font-bold tracking-tight text-slate-900 lg:hidden">Settings</h2>
       <p className="mt-2 text-sm text-slate-500">Manage {businessName} payout details.</p>
     </header>
 
