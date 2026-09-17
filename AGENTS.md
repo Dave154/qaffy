@@ -447,6 +447,14 @@ Before updating UI components, verify:
 
 #### Admin portal implementation
 
+#### Next Admin reporting slice
+
+- Admin Orders: date filtering and CSV export based on the current filters **implemented 2026-09-16**. Date filtering currently uses created date.
+- Admin Overview: date filtering for the order graph and related statistics, plus live Wash, Iron, and Wash + Iron clothes metrics.
+- Admin User Details: the Cancelled metric is hidden for now; subscription dates should derive automatically from the selected plan and semester settings.
+
+Outstanding Admin work is highlighted in `ADMIN_PLAN.md` under **Outstanding Admin Work**. The highest-priority unfinished items are Orders date/CSV filtering, Overview date/service metrics, and trusted settlement payout release.
+
 - `src/portals/admin/pages/Home.tsx` loads live dashboard metrics, revenue, vendor/logistics counts, recent activity, and subscription analytics.
 - `src/portals/admin/pages/Orders.tsx` is routed at `/admin/orders` and supports search, filtering, and read-only detail views.
 - `src/portals/admin/pages/Partners.tsx` supports vendor and logistics partner creation, approval, rejection, suspension, and deletion flows.

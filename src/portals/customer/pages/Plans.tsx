@@ -15,7 +15,7 @@ type CustomerPlan = {
   name: string
   billingPeriod: BillingPeriod
   price: number
-  currency: 'NGN'
+  currency: '₦'
   weeklyLimit: number
   service: string
   description: string
@@ -41,7 +41,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       name: plan.name,
       billingPeriod: plan.type,
       price: Number(plan.price),
-      currency: 'NGN',
+      currency: '₦',
       weeklyLimit: plan.weekly_limit,
       service: 'Laundry care',
       description: `${plan.weekly_limit} clothes per week on a ${plan.type} plan.`,
@@ -118,7 +118,7 @@ export default function Plans() {
         name: activePlan.name,
         billingPeriod: activePlan.type,
         price: activePlan.price,
-        currency: 'NGN' as const,
+        currency: '₦' as const,
         weeklyLimit: activePlan.weekly_limit,
         service: 'Laundry care',
         description: 'Your active Qaffy subscription.',

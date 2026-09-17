@@ -28,6 +28,54 @@ Read this before implementing the admin portal. Confirmed product decisions are 
 - The codebase includes working data tables and screens for profiles, profile_roles, vendors, logistics_agents, orders, order_items, mismatches, invoices, payments, wallet tooling, plans, subscriptions, cloth_categories, cloth_category_rates, pickup_locations, vendor_settlements, vendor_settlement_orders, referrals, and order_logistics_events.
 - Admin functionality already implemented in code includes overview, partner management, categories/rates, mismatch review, finance summaries, and plan configuration.
 
+## Outstanding Admin Work
+
+These items are **not complete yet**:
+
+### High Priority
+
+- **Admin Orders date filter:** filter orders by date range. **Implemented 2026-09-16** using created date.
+- **Admin Orders CSV export:** export only the currently filtered order results. **Implemented 2026-09-16** with search, status, and date filters applied.
+- **Admin Overview date filter:** implemented 2026-09-16 with independent general and chart date ranges using All time, This month, Last month, and Custom options.
+- **Admin Overview service metrics:** implemented 2026-09-16 with live Wash, Iron, and Wash + Iron clothes counts from order items.
+- **Admin Overview chart metrics:** implemented 2026-09-16 with Orders, Revenue, and New customers chart options.
+- **Settlement payout release:** execute trusted Admin payout transfers after verifying the vendor payout account.
+
+### Medium Priority
+
+- **Automatic subscription dates:** derive subscription start/end dates from the selected plan and semester settings in Admin User Details.
+- **Settlement transfer audit trail:** persist transfer reference, actor, timestamps, status, and failure reason.
+- **Duplicate payout prevention:** prevent a settlement from being transferred more than once.
+- **Finance loading/error states:** show dedicated loading and query-error states in Admin and Vendor Finance.
+- **Historical payout-rate versioning:** preserve the rate used for historical vendor calculations.
+
+### Deferred
+
+- **Customer/vendor messaging.**
+- **Historical/archive views.**
+- **Granular Admin permissions.**
+- **Settlement reversal or partial payments**, pending explicit product approval.
+
+### Next Admin UX and Reporting Requirements
+
+#### Admin Orders
+
+- Add date-range filtering to the Orders page.
+- Add CSV export for the currently filtered order results only, using the active search/status/date filters.
+- Keep export data aligned with the visible order table and avoid exporting internal OTPs or unnecessary sensitive fields.
+
+#### Admin Overview
+
+- Add date filtering to the overview dashboard and apply it consistently to the order graph, revenue, pipeline, and related statistics.
+- Make the order graph filterable by date range and compatible with the other overview filters.
+- Add live clothes-processed metrics split into Wash, Iron, and Wash + Iron counts, based on confirmed/order item service data.
+- Define whether overview date filters use order creation date, pickup date, or another operational date before implementation; default recommendation is created date for order/revenue trends and confirmed date for processing metrics.
+
+#### Admin User Details
+
+- Hide the Cancelled order metric for now; retain the underlying status data for future use.
+- Subscription start and end dates should populate automatically from the selected plan and current semester settings when an admin creates a subscription. Manual date overrides should not be required for the standard flow.
+
 ### Phase 1 Progress
 
 - Admin Overview now loads live order, customer, vendor, logistics, invoice, subscription, and plan data.

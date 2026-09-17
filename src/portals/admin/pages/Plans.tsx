@@ -1,5 +1,5 @@
 import { CheckCircle2, Loader2, MoreVertical, Pencil, Plus, Save, Sparkles, ToggleLeft, ToggleRight } from 'lucide-react'
-import { data, useFetcher, useLoaderData } from 'react-router'
+import { data, useFetcher, useLoaderData, useNavigation } from 'react-router'
 import { useEffect, useState } from 'react'
 import type { Route } from './+types/Plans'
 import { requireRole } from '../../../lib/auth.server'
@@ -146,7 +146,7 @@ export async function action({ request }: Route.ActionArgs) {
 export default function Plans() {
   const { plans, semesterSettings } = useLoaderData<typeof loader>()
   const fetcher = useFetcher<typeof action>()
-  const [isSubmitting, setIsSubmitting] = useState(false)
+  const navigation = useNavigation()
   const [planType, setPlanType] = useState<'monthly' | 'semester'>('monthly')
   const [semesterConfig, setSemesterConfig] = useState<SemesterSettings>(semesterSettings)
   const [editingPlan, setEditingPlan] = useState<PlanRow | null>(null)
@@ -157,10 +157,6 @@ export default function Plans() {
   useEffect(() => {
     setSemesterConfig(semesterSettings)
   }, [semesterSettings])
-
-  useEffect(() => {
-    if (fetcher.state === 'idle') setIsSubmitting(false)
-  }, [fetcher.state])
 
   useEffect(() => {
     if (fetcher.state !== 'idle' || !fetcher.data || !('ok' in fetcher.data)) return
@@ -176,20 +172,17 @@ export default function Plans() {
     return () => window.removeEventListener('click', closeMenu)
   }, [openMenuId])
 
-  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
-    if (isSubmitting) {
-      event.preventDefault()
-      return
-    }
-    setIsSubmitting(true)
-  }
-
   const handleSemesterChange = (field: 'semesterStartDate' | 'semesterEndDate', value: string) => {
     setSemesterConfig((current) => ({ ...current, [field]: value || null }))
   }
+  const pendingIntent = fetcher.state === 'idle' ? '' : String(fetcher.formData?.get('intent') ?? '')
+  const isPending = (intent: string) => pendingIntent === intent
+  const isTogglePending = (id: string) => isPending('toggle') && String(fetcher.formData?.get('id') ?? '') === id
+  const isPageLoading = navigation.state === 'loading'
 
   return (
     <div className="space-y-6">
+      {isPageLoading && <div role="status" className="flex items-center gap-2 rounded-xl border border-brand-border bg-brand-soft px-4 py-3 text-sm font-medium text-brand-primary"><Loader2 size={16} className="animate-spin" />Refreshing plans...</div>}
       {fetcher.state === 'idle' && fetcher.data && 'error' in fetcher.data && (
         <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{fetcher.data.error}</div>
       )}
@@ -201,7 +194,7 @@ export default function Plans() {
           <h3 className="text-lg font-bold text-slate-900">Add a plan</h3>
         </div>
 
-        <fetcher.Form method="post" onSubmit={handleSubmit} className="mt-5 space-y-4">
+        <fetcher.Form method="post" className="mt-5 space-y-4">
           <input type="hidden" name="intent" value="create" />
 
           <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr_0.9fr_0.8fr_0.9fr]">
@@ -229,9 +222,9 @@ export default function Plans() {
             </label>
 
             <div className="flex items-end">
-              <button type="submit" disabled={isSubmitting} className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-brand-primary px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-70">
-                {isSubmitting ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-                {isSubmitting ? 'Saving...' : 'Save'}
+              <button type="submit" disabled={isPending('create')} className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-brand-primary px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-70">
+                {isPending('create') ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                {isPending('create') ? 'Saving...' : 'Save'}
               </button>
             </div>
           </div>
@@ -252,9 +245,9 @@ export default function Plans() {
             <input type="date" name="semesterEndDate" value={semesterConfig.semesterEndDate ?? ''} onChange={(event) => handleSemesterChange('semesterEndDate', event.target.value)} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" />
           </label>
           <div className="md:col-span-2 flex justify-end">
-            <button type="submit" disabled={isSubmitting} className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand-primary px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-70">
-              {isSubmitting ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-              {isSubmitting ? 'Saving settings...' : 'Save semester settings'}
+            <button type="submit" disabled={isPending('update-semester-settings')} className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand-primary px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-70">
+              {isPending('update-semester-settings') ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+              {isPending('update-semester-settings') ? 'Saving settings...' : 'Save semester settings'}
             </button>
           </div>
         </fetcher.Form>
@@ -267,7 +260,7 @@ export default function Plans() {
             <h3 className="text-lg font-bold text-slate-900">Plan catalogue</h3>
           </div>
         </div>
-        {selectedIds.length > 0 && <fetcher.Form method="post" className="flex items-center justify-between gap-3 border-b border-slate-100 bg-slate-50 px-4 py-3"><div className="text-sm font-semibold text-slate-700">{selectedIds.length} selected</div><div className="flex gap-2"><input type="hidden" name="intent" value="bulk-toggle" />{selectedIds.map((id) => <input key={id} type="hidden" name="ids" value={id} />)}<button type="submit" name="active" value="false" disabled={fetcher.state !== 'idle'} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">{fetcher.state !== 'idle' ? <Loader2 size={13} className="animate-spin" /> : null}{fetcher.state !== 'idle' ? 'Updating...' : 'Deactivate selected'}</button><button type="submit" name="active" value="true" disabled={fetcher.state !== 'idle'} className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-white px-3 py-2 text-xs font-semibold text-emerald-700">{fetcher.state !== 'idle' ? <Loader2 size={13} className="animate-spin" /> : null}{fetcher.state !== 'idle' ? 'Updating...' : 'Activate selected'}</button></div></fetcher.Form>}
+        {selectedIds.length > 0 && <fetcher.Form method="post" className="flex items-center justify-between gap-3 border-b border-slate-100 bg-slate-50 px-4 py-3"><div className="text-sm font-semibold text-slate-700">{selectedIds.length} selected</div><div className="flex gap-2"><input type="hidden" name="intent" value="bulk-toggle" />{selectedIds.map((id) => <input key={id} type="hidden" name="ids" value={id} />)}<button type="submit" name="active" value="false" disabled={isPending('bulk-toggle')} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-60">{isPending('bulk-toggle') ? <Loader2 size={13} className="animate-spin" /> : null}{isPending('bulk-toggle') ? 'Updating...' : 'Deactivate selected'}</button><button type="submit" name="active" value="true" disabled={isPending('bulk-toggle')} className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-white px-3 py-2 text-xs font-semibold text-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">{isPending('bulk-toggle') ? <Loader2 size={13} className="animate-spin" /> : null}{isPending('bulk-toggle') ? 'Updating...' : 'Activate selected'}</button></div></fetcher.Form>}
 
         <div className="overflow-x-auto">
           <table className="w-full min-w-[980px] table-fixed text-left">
@@ -344,9 +337,9 @@ export default function Plans() {
                             <fetcher.Form method="post">
                               <input type="hidden" name="intent" value="toggle" />
                               <input type="hidden" name="id" value={plan.id} />
-                              <button type="submit" disabled={fetcher.state !== 'idle'} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60">
-                                {fetcher.state !== 'idle' ? <Loader2 size={14} className="animate-spin" /> : plan.active ? <ToggleLeft size={14} /> : <ToggleRight size={14} />}
-                                {plan.active ? 'Deactivate' : 'Activate'}
+                              <button type="submit" disabled={isTogglePending(plan.id)} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60">
+                                {isTogglePending(plan.id) ? <Loader2 size={14} className="animate-spin" /> : plan.active ? <ToggleLeft size={14} /> : <ToggleRight size={14} />}
+                                {isTogglePending(plan.id) ? 'Updating...' : plan.active ? 'Deactivate' : 'Activate'}
                               </button>
                             </fetcher.Form>
                           </div>
@@ -375,7 +368,7 @@ export default function Plans() {
               <label><span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Type</span><select name="type" defaultValue={editingPlan.type} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"><option value="monthly">Monthly</option><option value="semester">Semester</option></select></label>
               <label><span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Price</span><input type="number" min="1" step="100" name="price" defaultValue={editingPlan.price} className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" /></label>
               <label><span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Weekly limit</span><input type="number" min="1" step="1" name="weeklyLimit" defaultValue={editingPlan.weeklyLimit} className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" /></label>
-              <div className="flex justify-end gap-3 sm:col-span-2"><button type="button" onClick={() => setEditingPlan(null)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700">Cancel</button><button type="submit" disabled={fetcher.state !== 'idle'} className="inline-flex items-center gap-2 rounded-xl bg-brand-primary px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"><Save size={16} />Save changes</button></div>
+              <div className="flex justify-end gap-3 sm:col-span-2"><button type="button" onClick={() => setEditingPlan(null)} disabled={isPending('update')} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-60">Cancel</button><button type="submit" disabled={isPending('update')} className="inline-flex items-center gap-2 rounded-xl bg-brand-primary px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60">{isPending('update') ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}{isPending('update') ? 'Saving changes...' : 'Save changes'}</button></div>
             </fetcher.Form>
           </div>
         </div>
