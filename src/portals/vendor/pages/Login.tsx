@@ -56,9 +56,23 @@ export default function Login() {
 
   return <>
     <RouteLoadingScreen isLoading={isSubmitting} watchNavigation={false} />
-    <main className="flex min-h-screen items-center justify-center overflow-hidden bg-[#0d1016] px-4 py-6 sm:px-6 lg:px-10" style={{ backgroundImage: 'linear-gradient(90deg, rgba(12,15,22,0.82) 0%, rgba(12,15,22,0.62) 32%, rgba(12,15,22,0.1) 100%), url("https://images.unsplash.com/photo-1617347454431-f49d7ff5c3b1?q=80&w=1415&auto=format&fit=crop")', backgroundSize: 'cover', backgroundPosition: 'center' }}>
+    <main className="flex min-h-screen items-center justify-center overflow-hidden bg-[#0d1016] px-4 py-6 sm:px-6 lg:px-10" style={{ backgroundImage: 'linear-gradient(90deg, rgba(11,14,19,0.82) 0%, rgba(11,14,19,0.7) 30%, rgba(11,14,19,0.18) 100%), url("https://images.unsplash.com/photo-1604335398980-ededcadcc37d?q=80&w=1470&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D")', backgroundSize: 'cover', backgroundPosition: 'center' }}>
       <div className="w-full max-w-6xl items-center gap-12 lg:flex lg:justify-between">
-        <div className="hidden max-w-xl flex-1 pb-10 pt-10 text-white lg:block"><QaffyLogo light className="inline-flex" /><h1 className="mt-8 text-5xl font-semibold leading-[1.06] text-white">Vendor care,<span className="block text-white/85">made simple.</span></h1><p className="mt-6 max-w-md text-base leading-7 text-slate-200">Manage pickups, process laundry, and keep every order moving.</p></div>
+        <div className="hidden max-w-xl flex-1 pb-10 pt-10 text-white lg:block">
+          <QaffyLogo light className="inline-flex" />
+          <h1 className="mt-8 text-5xl font-semibold leading-[1.02] tracking-[-0.04em] text-white">
+            Your laundry operations,
+            <span className="block text-white/85">organized and on time.</span>
+          </h1>
+          <p className="mt-6 max-w-lg text-base leading-7 text-slate-200">
+            Stay on top of pickups, confirm item counts, and keep every order moving without the usual chaos.
+          </p>
+          <div className="mt-8 flex flex-wrap gap-3 text-sm text-slate-100/90">
+            <span className="rounded-full border border-white/15 bg-white/5 px-3 py-1.5">Pickup tracking</span>
+            <span className="rounded-full border border-white/15 bg-white/5 px-3 py-1.5">Count verification</span>
+            <span className="rounded-full border border-white/15 bg-white/5 px-3 py-1.5">Fast service flow</span>
+          </div>
+        </div>
         <div className="w-full max-w-[430px] rounded-[36px] bg-white/95 p-5 shadow-[0_30px_80px_rgba(0,0,0,0.28)] backdrop-blur-sm sm:p-7">
           <div className="mb-7 text-center"><QaffyLogo className="mx-auto inline-flex lg:hidden" /><h2 className="mt-4 text-[2.5rem] font-semibold text-slate-900">Vendor sign in</h2><p className="mt-2 text-sm text-slate-500">Access your Qaffy vendor workspace</p></div>
           <button type="button" onClick={() => void signInWithGoogle()} className="flex w-full items-center justify-center gap-3 rounded-2xl bg-brand-primary px-4 py-3.5 text-sm font-semibold text-white shadow-md shadow-brand-soft transition hover:bg-brand-primary-hover"><svg viewBox="0 0 48 48" aria-hidden="true" className="h-5 w-5 rounded-full bg-white" role="img"><path fill="#EA4335" d="M24 9.5c3.54 0 6.72 1.22 9.23 3.61l6.86-6.86C35.47 2.39 30.27 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.2C12.13 13.52 17.6 9.5 24 9.5Z"/><path fill="#4285F4" d="M46.5 24.6c0-1.64-.15-3.22-.42-4.74H24v9h12.7c-.55 2.96-2.2 5.47-4.69 7.17l7.6 5.9c4.43-4.09 7.89-10.15 7.89-17.33Z"/><path fill="#FBBC05" d="M32.01 36.11c-1.99 1.35-4.54 2.14-8.01 2.14-6.4 0-11.87-4.02-13.81-9.42l-8.02 6.21C3.99 41.38 13.14 48 24 48c7.1 0 13.08-2.34 17.42-6.36l-9.41-5.53Z"/><path fill="#34A853" d="M10.2 28.83A14.42 14.42 0 0 1 9.5 24c0-1.63.28-3.22.78-4.74L2.56 13.22A23.92 23.92 0 0 0 0 24c0 3.78.89 7.35 2.56 10.49l7.64-5.66Z"/></svg>Continue with Google</button>

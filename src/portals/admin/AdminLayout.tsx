@@ -1,4 +1,4 @@
-import { AlertTriangle, Bell, Boxes, ChevronDown, ChevronLeft, ChevronRight, CircleDollarSign, ClipboardList, LayoutDashboard, LogOut, MapPin, Settings, ShieldCheck, Search, UsersRound } from 'lucide-react'
+import { AlertTriangle, Bell, Boxes, ChevronDown, ChevronLeft, ChevronRight, CircleDollarSign, ClipboardList, Gift, LayoutDashboard, LogOut, MapPin, Settings, ShieldCheck, Search, UsersRound } from 'lucide-react'
 import { useState } from 'react'
 import { data, NavLink, Outlet, useLoaderData, useLocation, useNavigate } from 'react-router'
 import type { Route } from './+types/AdminLayout'
@@ -20,6 +20,7 @@ const navItems = [
   { to: '/admin/finance', label: 'Finance', icon: CircleDollarSign },
   { to: '/admin/users', label: 'Users', icon: UsersRound },
   { to: '/admin/plans', label: 'Plans', icon: CircleDollarSign },
+  { to: '/admin/referrals', label: 'Referrals', icon: Gift },
   { to: '/admin/settings', label: 'Settings', icon: Settings, children: [{ to: '/admin/categories', label: 'Categories', icon: Boxes }, { to: '/admin/pickup-locations', label: 'Pickup locations', icon: MapPin }] },
 ]
 
@@ -57,6 +58,8 @@ export default function AdminLayout() {
                       ? 'Users'
                       : location.pathname.includes('/plans')
                         ? 'Plans'
+                        : location.pathname.includes('/referrals')
+                          ? 'Referrals'
                         : location.pathname.includes('/settings')
                           ? 'Settings'
                           : 'Admin'

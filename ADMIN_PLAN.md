@@ -1,7 +1,9 @@
 # Qaffy Admin Implementation Plan
 
+Referral product rules and implementation sequencing are documented in [REFERRAL_PLAN.md](REFERRAL_PLAN.md). Treat that document as the source of truth before building referral attribution, campaigns, or rewards.
+
 **Status:** Approved planning baseline
-**Updated:** 2026-09-13
+**Updated:** 2026-09-17
 
 Read this before implementing the admin portal. Confirmed product decisions are binding unless the user changes them.
 
@@ -39,7 +41,7 @@ These items are **not complete yet**:
 - **Admin Overview date filter:** implemented 2026-09-16 with independent general and chart date ranges using All time, This month, Last month, and Custom options.
 - **Admin Overview service metrics:** implemented 2026-09-16 with live Wash, Iron, and Wash + Iron clothes counts from order items.
 - **Admin Overview chart metrics:** implemented 2026-09-16 with Orders, Revenue, and New customers chart options.
-- **Settlement payout release:** execute trusted Admin payout transfers after verifying the vendor payout account.
+- **Settlement payout release:** execute trusted Admin payout transfers after verifying the vendor payout account. The current Admin Finance page records internal withdrawals and settlement batches, but does not initiate bank transfers yet.
 
 ### Medium Priority
 
@@ -47,7 +49,7 @@ These items are **not complete yet**:
 - **Settlement transfer audit trail:** persist transfer reference, actor, timestamps, status, and failure reason.
 - **Duplicate payout prevention:** prevent a settlement from being transferred more than once.
 - **Finance loading/error states:** show dedicated loading and query-error states in Admin and Vendor Finance.
-- **Historical payout-rate versioning:** preserve the rate used for historical vendor calculations.
+- **Historical payout-rate versioning:** item-level payout snapshots are now stored when a settlement batch is created through `supabase/migrations/20260917110000_admin_finance_ledger_and_settlement_snapshots.sql`.
 
 ### Deferred
 
@@ -83,11 +85,13 @@ These items are **not complete yet**:
 - Admin Orders is registered at `/admin/orders` with live rows, search, status filtering, truncation, payment/status badges, and a read-only order detail modal.
 - Admin Partners now supports vendor and logistics onboarding, approval, suspension, rejection, and deletion flows.
 - Admin Categories and Rates now supports category creation, updates, activation, archival-safe deletion behavior, and customer/vendor pricing controls.
-- Admin Mismatch Review is in place and supports unresolved mismatch filtering and resolution.
-- Admin Finance loads live payout summaries and settlement creation data from live orders and rates.
+- Admin Mismatch Review is a read-only accountability view with search, direction filtering, compact/truncated rows, a detail modal, and a modal-only link to the exact Admin order detail.
+- Admin Finance loads live payout summaries and settlement creation data from live orders and rates. Admin profit withdrawals persist in `admin_finance_transactions`, and settlement item snapshots preserve historical vendor rates and amounts.
+- Finance now renders Paystack balance failures as `Unavailable` with an explanatory state instead of silently showing `₦0`.
+- Finance cards and payout panels have responsive containment; million-level amounts use compact notation such as `₦7.36M`.
 - Admin Plans supports plan edits and semester configuration settings.
 - Admin sidebar links now use `/admin/*` paths instead of leaving the admin portal.
-- Delivery verification, final settlement workflow maturity, and wallet/messaging/archive layers remain future work.
+- Delivery verification, trusted settlement transfer execution, and wallet/messaging/archive layers remain future work.
 
 ## Navigation and Screens
 
@@ -203,7 +207,10 @@ Do not implement a vendor payout rate until the product decision is provided. Do
 
 ### Mismatches
 
-Track over and under counts by order, vendor, customer, category, and date. Vendor confirmation changes the final customer amount due. Add a review/resolution workflow before treating mismatch metrics as financial truth.
+- Admin reviews mismatches for accountability only; there is no admin approval or reviewed action.
+- Full mismatch details are shown in a modal. The modal contains the `View order` link, which opens the exact Admin order detail using the internal order UUID in the query string while the UI displays the public `QO-######` reference.
+
+Track over and under counts by order, vendor, customer, category, and date. Vendor confirmation changes the final customer amount due. Admin only reviews and references mismatch records; the admin screen does not approve or resolve billing math.
 
 ## Required Schema Work
 
@@ -238,7 +245,7 @@ Mostly complete for core operational screens.
 - Customer/user management screens are present.
 - Categories and rates are implemented.
 - Pickup locations are implemented.
-- Mismatch review and resolution are implemented.
+- Read-only mismatch accountability is implemented with compact rows, filters, a detail modal, and exact-order navigation.
 
 ### Phase 3: Finance
 
@@ -248,8 +255,18 @@ Vendor-side finance preparation is complete; Admin payout execution remains the 
 - Vendor ownership, confirmed-quantity payout calculation, settlement generation, and vendor payout-account verification are implemented.
 - Vendor Finance is the single vendor settlement destination and excludes orders already assigned to settlement batches from outstanding payable totals.
 - Admin still needs the trusted settlement release and payout-transfer workflow, including transfer metadata, Paystack recipient/transfer handling, and paid-settlement audit records.
-- Historical payout-rate versioning and finance-specific loading states remain future work.
+- Historical payout-rate snapshots are implemented for settlement items through `supabase/migrations/20260917110000_admin_finance_ledger_and_settlement_snapshots.sql`.
+- Finance-specific loading and query-error states remain future work.
 - Manual wallet adjustment workflow still needs full validation against the approved wallet service rules.
+
+### Referral MVP
+
+- Referral attribution supports email OTP and Google OAuth signup flows with immutable database-generated codes.
+- Admin can create, activate, pause, and end referral campaigns at `/admin/referrals`.
+- Paid qualifying invoices issue idempotent rewards to both the referrer and referred customer.
+- Promotional referral credit is stored separately from Paystack-funded wallet balances, expires per reward, and is consumed before ordinary one-off funds.
+- Customer Settings shows referral sharing, referral history, and reward status.
+- Remaining referral governance work is Admin reward history/export and audited exceptional reversal or correction workflows.
 
 ### Next Admin Workstream: Settlement Payouts
 
@@ -266,7 +283,7 @@ Implement this only after confirming the unresolved product decisions below:
 
 Partially implemented.
 - Plan management and semester settings are in place.
-- Referral and audit governance screens remain future work.
+- Referral campaign configuration is implemented; referral/reward history, exports, and exceptional governance actions remain future work.
 - Granular permissions are not yet implemented.
 
 ## Unresolved Product Questions

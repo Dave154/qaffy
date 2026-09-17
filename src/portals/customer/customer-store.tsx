@@ -47,8 +47,19 @@ export type CustomerTransaction = {
   date: string
   amount: string
   direction: 'credit' | 'debit'
-  category: 'topup' | 'payment'
+  category: 'topup' | 'payment' | 'reward'
   status: string
+}
+
+export type CustomerReferral = {
+  id: string
+  status: string
+  createdAt: string
+  qualifiedAt: string | null
+  isReferrer: boolean
+  rewardStatus: string | null
+  rewardValue: number | null
+  rewardExpiresAt: string | null
 }
 
 export type CustomerInvoice = {
@@ -97,8 +108,10 @@ export type CustomerStore = {
   customerEmail: string
   customerPhone: string
   referralCode: string | null
+  referrals: CustomerReferral[]
   oneOffBalance: number
   subscriptionBalance: number
+  promotionalBalance: number
   balance: number
   debt: number
   subscription: { name: string; billingPeriod: 'monthly' | 'semester' } | null
@@ -127,17 +140,18 @@ function createOtp(_prefix: string, number: number) {
 
 function mapDatabaseTransaction(transaction: WalletTransaction): CustomerTransaction | null {
   const isCredit = transaction.txn_type === 'topup'
+  const isReferralReward = transaction.txn_type === 'referral_reward'
   if (isCredit) return null
-  const amount = `${isCredit ? '+' : '-'}₦${Number(transaction.amount).toLocaleString()}`
+  const amount = `${isReferralReward ? '+' : '-'}₦${Number(transaction.amount).toLocaleString()}`
 
   return {
     id: transaction.id,
-    title: isCredit ? 'Wallet top up' : 'Order payment',
-    reference: transaction.related_invoice_id ? `Invoice • ${transaction.related_invoice_id.slice(0, 8)}` : `Wallet • ${transaction.id.slice(0, 8)}`,
+    title: isReferralReward ? 'Referral reward' : 'Order payment',
+    reference: transaction.related_referral_reward_id ? `Referral • ${transaction.related_referral_reward_id.slice(0, 8)}` : transaction.related_invoice_id ? `Invoice • ${transaction.related_invoice_id.slice(0, 8)}` : `Wallet • ${transaction.id.slice(0, 8)}`,
     date: new Date(transaction.created_at).toLocaleString(),
     amount,
-    direction: isCredit ? 'credit' : 'debit',
-    category: 'payment',
+    direction: isReferralReward ? 'credit' : 'debit',
+    category: isReferralReward ? 'reward' : 'payment',
     status: 'Successful',
   }
 }
@@ -247,6 +261,7 @@ function mapDatabaseOrder(order: Order, persistedItems: PersistedOrderItem[] = [
 type CustomerStoreProviderProps = {
   children: React.ReactNode
   profile?: { id: string; name: string | null; qaffy_id: string | null; email: string | null; phone: string | null; referral_code: string | null; pickup_location_id: string | null }
+  persistedReferrals?: CustomerReferral[]
   persistedOrders?: Order[]
   persistedWallet?: Wallet | null
   persistedWalletTransactions?: WalletTransaction[]
@@ -265,6 +280,7 @@ type CustomerStoreProviderProps = {
 export function CustomerStoreProvider({
   children,
   profile,
+  persistedReferrals = [],
   persistedOrders,
   persistedWallet,
   persistedWalletTransactions,
@@ -284,6 +300,7 @@ export function CustomerStoreProvider({
   const [savedPickupLocationId, setSavedPickupLocationId] = useState(profile?.pickup_location_id ?? null)
   const [oneOffBalance, setOneOffBalance] = useState(persistedWallet?.one_off_balance ?? 0)
   const [subscriptionBalance, setSubscriptionBalance] = useState(persistedWallet?.subscription_balance ?? 0)
+  const [promotionalBalance] = useState(persistedWallet?.promotional_balance ?? 0)
   const [transactions] = useState(() => [
     ...(persistedPayments ?? []).map(mapPayment),
     ...(persistedWalletTransactions ?? []).map(mapDatabaseTransaction).filter((transaction): transaction is CustomerTransaction => transaction !== null),
@@ -304,9 +321,11 @@ export function CustomerStoreProvider({
       customerEmail: profile?.email ?? 'Not available',
       customerPhone: profile?.phone ?? '',
       referralCode: profile?.referral_code ?? null,
+      referrals: persistedReferrals,
       oneOffBalance,
       subscriptionBalance,
-      balance: oneOffBalance,
+      promotionalBalance,
+      balance: oneOffBalance + promotionalBalance,
       debt: Math.max(0, -subscriptionBalance),
       subscription,
       subscriptionEndDate: persistedSubscription?.subscription.end_date ?? null,
@@ -488,7 +507,7 @@ export function CustomerStoreProvider({
         return order
       },
     }
-  }, [invoice, invoices, oneOffBalance, orders, persistedTransactionError, profile, persistedPickupLocations, persistedSubscription, savedPickupLocationId, subscriptionBalance, subscriptionUsedUnits, transactions])
+  }, [invoice, invoices, oneOffBalance, orders, persistedReferrals, persistedTransactionError, profile, persistedPickupLocations, persistedSubscription, promotionalBalance, savedPickupLocationId, subscriptionBalance, subscriptionUsedUnits, transactions])
 
   return <CustomerStoreContext.Provider value={store}>{children}</CustomerStoreContext.Provider>
 }

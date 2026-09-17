@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router'
 import QaffyLogo from '../../../components/QaffyLogo'
 import RouteLoadingScreen from '../../../components/RouteLoadingScreen'
 import { isSupabaseConfigured, supabase } from '../../../lib/supabase.client'
+import { captureReferralCodeFromUrl } from '../../../lib/referral.client'
 
 export default function CreateAccount() {
   const navigate = useNavigate()
@@ -13,6 +14,10 @@ export default function CreateAccount() {
   const [showEmailAuth, setShowEmailAuth] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    captureReferralCodeFromUrl()
+  }, [])
 
   const handleContinue = async (event?: FormEvent) => {
     event?.preventDefault()
@@ -29,6 +34,7 @@ export default function CreateAccount() {
     }
 
     setIsSubmitting(true)
+    captureReferralCodeFromUrl()
     const { error: authError } = await supabase.auth.signInWithOtp({
       email: email.trim(),
       options: {
@@ -55,6 +61,7 @@ export default function CreateAccount() {
     }
 
     setIsSubmitting(true)
+    captureReferralCodeFromUrl()
     const { error: authError } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: { redirectTo: `${window.location.origin}/auth/callback` },

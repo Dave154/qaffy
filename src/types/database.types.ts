@@ -6,8 +6,8 @@ export type UserRole = 'customer' | 'logistics' | 'vendor' | 'admin'
 export type PartnerStatus = 'pending' | 'approved' | 'rejected' | 'suspended'
 export type PlanType = 'monthly' | 'semester'
 export type SubscriptionStatus = 'active' | 'ended' | 'cancelled'
-export type WalletBalanceType = 'one_off' | 'subscription'
-export type WalletTxnType = 'topup' | 'debit' | 'refund' | 'adjustment'
+export type WalletBalanceType = 'one_off' | 'subscription' | 'promotional'
+export type WalletTxnType = 'topup' | 'debit' | 'refund' | 'adjustment' | 'referral_reward' | 'referral_reward_expiry'
 export type OrderType = 'wash' | 'wash_iron' | 'mixed'
 export type OrderStatus =
   | 'pending_pickup'
@@ -22,7 +22,10 @@ export type MismatchDirection = 'over' | 'under'
 export type InvoiceStatus = 'unpaid' | 'paid'
 export type PaymentStatus = 'pending' | 'success' | 'failed'
 export type SettlementStatus = 'pending' | 'paid'
-export type ReferralStatus = 'pending' | 'rewarded'
+export type ReferralStatus = 'pending' | 'qualified' | 'rewarded' | 'rejected' | 'expired' | 'reversed'
+export type ReferralCampaignStatus = 'draft' | 'active' | 'paused' | 'ended'
+export type ReferralRewardStatus = 'pending' | 'issued' | 'expired' | 'reversed' | 'failed'
+export type ReferralRewardType = 'wallet_credit'
 export type LogisticsEventType = 'picked_up' | 'delivered'
 
 export interface Profile {
@@ -124,6 +127,7 @@ export interface Wallet {
   customer_id: string
   one_off_balance: number
   subscription_balance: number
+  promotional_balance: number
   updated_at: string
 }
 
@@ -136,6 +140,7 @@ export interface WalletTransaction {
   balance_after: number
   related_invoice_id: string | null
   related_payment_id: string | null
+  related_referral_reward_id: string | null
   created_at: string
 }
 
@@ -229,10 +234,53 @@ export interface Referral {
   id: string
   referrer_id: string
   referred_id: string
+  campaign_id: string | null
   reward_type: string | null
   reward_value: number | null
   status: ReferralStatus
+  attributed_at: string
+  qualified_at: string | null
+  qualifying_order_id: string | null
+  rejection_reason: string | null
   created_at: string
+  updated_at: string
+}
+
+export interface ReferralCampaign {
+  id: string
+  name: string
+  status: ReferralCampaignStatus
+  starts_at: string | null
+  ends_at: string | null
+  referrer_reward_type: ReferralRewardType
+  referrer_reward_value: number
+  referred_reward_type: ReferralRewardType
+  referred_reward_value: number
+  minimum_order_amount: number
+  reward_expiry_days: number
+  max_rewards_per_referrer: number | null
+  created_by: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ReferralReward {
+  id: string
+  referral_id: string
+  recipient_id: string
+  campaign_id: string
+  qualifying_order_id: string
+  reward_type: ReferralRewardType
+  reward_value: number
+  remaining_value: number
+  status: ReferralRewardStatus
+  wallet_transaction_id: string | null
+  expires_at: string
+  issued_at: string | null
+  reversed_at: string | null
+  failure_reason: string | null
+  created_at: string
+  updated_at: string
 }
 
 export interface OrderLogisticsEvent {
@@ -282,6 +330,8 @@ export interface Database {
       vendor_settlements: TableDef<VendorSettlement>
       vendor_settlement_orders: TableDef<VendorSettlementOrder>
       referrals: TableDef<Referral>
+      referral_campaigns: TableDef<ReferralCampaign>
+      referral_rewards: TableDef<ReferralReward>
       order_logistics_events: TableDef<OrderLogisticsEvent>
       admin_audit_events: TableDef<AdminAuditEvent>
     }

@@ -277,7 +277,7 @@ export default function Home() {
               className="min-h-[147px] rounded-[10px] border border-[#f2f3f3] bg-white p-5 shadow-[0_2px_8px_rgba(0,0,0,0.02)] transition hover:border-brand-border"
             >
               <div className="flex items-start justify-between">
-                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#729ea1]">
+                <p className="text-xs font-semibold capitalize tracking-[0.12em] text-[#729ea1]">
                   {label}
                 </p>
                 <Icon

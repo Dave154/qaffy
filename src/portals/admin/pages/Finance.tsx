@@ -3,6 +3,7 @@ import { data, useFetcher, useLoaderData } from 'react-router'
 import { useState } from 'react'
 import type { Route } from './+types/Finance'
 import { requireRole } from '../../../lib/auth.server'
+import { sql } from '../../../lib/db.server'
 import { getRateValueFromItem } from '../../../lib/rate-card'
 
 type SettlementRow = {
@@ -35,18 +36,33 @@ type FinanceData = {
     pendingSettlements: number
     pendingAmount: number
     paidSettlements: number
-    paystackBalance: number
+    paystackBalance: number | null
+    paystackBalanceError: string | null
     totalOwedToVendors: number
+    withdrawalTotal: number
   }
   vendors: VendorSummary[]
   settlements: SettlementRow[]
 }
 
-function money(value: number) { return `₦${value.toLocaleString()}` }
+type SettlementItemSnapshot = {
+  settlement_id: string
+  order_item_id: string
+  confirmed_quantity: number
+  vendor_unit_price: number
+  amount: number
+}
+
+function money(value: number) {
+  if (Math.abs(value) >= 1_000_000) {
+    return `₦${(value / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 2 })}M`
+  }
+  return `₦${value.toLocaleString()}`
+}
 function formatDate(value: string | null) { return value ? new Date(value).toLocaleString([], { month: 'short', day: 'numeric', year: 'numeric' }) : 'No period' }
 
 async function fetchPaystackBalance(secretKey: string) {
-  if (!secretKey) return 0
+  if (!secretKey) return { amount: null, error: 'Paystack secret key is not configured.' }
 
   try {
     const response = await fetch('https://api.paystack.co/balance', {
@@ -59,25 +75,25 @@ async function fetchPaystackBalance(secretKey: string) {
 
     if (!response.ok) {
       console.error('Paystack balance request failed:', response.status, await response.text())
-      return 0
+      return { amount: null, error: `Paystack balance unavailable (${response.status}).` }
     }
 
     const payload = await response.json() as { data?: Array<{ balance?: number | string }> }
     const totalBalanceKobo = (payload.data ?? []).reduce((sum, item) => sum + Number(item.balance ?? 0), 0)
-    return totalBalanceKobo / 100
+    return { amount: totalBalanceKobo / 100, error: null }
   } catch (error) {
     console.error('Paystack balance lookup error:', error)
-    return 0
+    return { amount: null, error: 'Paystack balance could not be reached.' }
   }
 }
 
 // eslint-disable-next-line react-refresh/only-export-components
 export async function loader({ request }: Route.LoaderArgs) {
   const auth = await requireRole(request, 'admin')
-  if (!auth) return data<FinanceData>({ summary: { totalCollected: 0, totalVendorPayout: 0, platformProfit: 0, pendingSettlements: 0, pendingAmount: 0, paidSettlements: 0, paystackBalance: 0, totalOwedToVendors: 0 }, vendors: [], settlements: [] }, { status: 200 })
+  if (!auth) return data<FinanceData>({ summary: { totalCollected: 0, totalVendorPayout: 0, platformProfit: 0, pendingSettlements: 0, pendingAmount: 0, paidSettlements: 0, paystackBalance: null, paystackBalanceError: 'Paystack balance unavailable.', totalOwedToVendors: 0, withdrawalTotal: 0 }, vendors: [], settlements: [] }, { status: 200 })
 
   const { supabase, headers } = auth
-  const [{ data: vendors }, { data: orders }, { data: orderItems }, { data: rates }, { data: invoices }, { data: settlements }, { data: settlementOrders }] = await Promise.all([
+  const [{ data: vendors }, { data: orders }, { data: orderItems }, { data: rates }, { data: invoices }, { data: settlements }, { data: settlementOrders }, { data: settlementItems }] = await Promise.all([
     supabase.from('vendors').select('id, profile_id, business_name, status').eq('status', 'approved').order('created_at', { ascending: false }),
     supabase.from('orders').select('id, vendor_id, status, clothes_count_vendor, created_at').not('vendor_id', 'is', null).order('created_at', { ascending: false }),
     supabase.from('order_items').select('id, order_id, category_id, quantity, confirmed_quantity, service, unit_price'),
@@ -85,13 +101,20 @@ export async function loader({ request }: Route.LoaderArgs) {
     supabase.from('invoices').select('id, order_id, amount, status, created_at'),
     supabase.from('vendor_settlements').select('id, vendor_id, period_start, period_end, amount_due, status, created_at').order('created_at', { ascending: false }),
     supabase.from('vendor_settlement_orders').select('settlement_id, order_id'),
+    supabase.from('vendor_settlement_items').select('settlement_id, order_item_id, confirmed_quantity, vendor_unit_price, amount'),
   ])
 
   const rateByCategory = new Map((rates ?? []).map((rate) => [rate.category_id, rate]))
   const invoiceByOrder = new Map((invoices ?? []).map((invoice) => [invoice.order_id, invoice]))
+  const settlementItemByOrderItem = new Map(((settlementItems ?? []) as SettlementItemSnapshot[]).map((item) => [item.order_item_id, item]))
   const payoutByOrder = new Map<string, number>()
   for (const item of orderItems ?? []) {
     if (item.confirmed_quantity === null || item.confirmed_quantity === undefined) continue
+    const snapshot = settlementItemByOrderItem.get(item.id)
+    if (snapshot) {
+      payoutByOrder.set(item.order_id, (payoutByOrder.get(item.order_id) ?? 0) + Number(snapshot.amount ?? 0))
+      continue
+    }
     const rate = rateByCategory.get(item.category_id)
     const unitPrice = getRateValueFromItem(item, rate, 'vendor')
     const current = payoutByOrder.get(item.order_id) ?? 0
@@ -177,18 +200,26 @@ export async function loader({ request }: Route.LoaderArgs) {
   const paidSettlements = (settlements ?? []).filter((settlement) => settlement.status === 'paid').length
   const paidSettlementAmount = (settlements ?? []).filter((settlement) => settlement.status === 'paid').reduce((sum, settlement) => sum + Number(settlement.amount_due ?? 0), 0)
   const totalOwedToVendors = Math.max(totalVendorPayout - paidSettlementAmount, 0)
+  const [{ total: withdrawalTotal }] = await sql<{ total: number }[]>`
+    select coalesce(sum(amount), 0) as total
+    from admin_finance_transactions
+    where transaction_type = 'profit_withdrawal'
+  `
   const paystackBalance = await fetchPaystackBalance(process.env.PAYSTACK_SECRET_KEY ?? '')
+  const grossPlatformProfit = totalCollected - totalVendorPayout
 
   return data<FinanceData>({
     summary: {
       totalCollected,
       totalVendorPayout,
-      platformProfit: totalCollected - totalVendorPayout,
+      platformProfit: grossPlatformProfit - Number(withdrawalTotal ?? 0),
       pendingSettlements,
       pendingAmount,
       paidSettlements,
-      paystackBalance,
+      paystackBalance: paystackBalance.amount,
+      paystackBalanceError: paystackBalance.error,
       totalOwedToVendors,
+      withdrawalTotal: Number(withdrawalTotal ?? 0),
     },
     vendors: vendorSummaries,
     settlements: settlementRows,
@@ -208,6 +239,15 @@ export async function action({ request }: Route.ActionArgs) {
     const amount = Number(formData.get('amount') ?? 0)
     const note = String(formData.get('note') ?? '').trim()
     if (!Number.isFinite(amount) || amount <= 0) return data({ error: 'Withdrawal amount must be greater than zero.' }, { headers, status: 400 })
+
+    try {
+      await sql`
+        insert into admin_finance_transactions (transaction_type, amount, note, admin_profile_id)
+        values ('profit_withdrawal', ${amount}, ${note || null}, ${auth.profile.id})
+      `
+    } catch (error) {
+      return data({ error: error instanceof Error ? error.message : 'Withdrawal could not be recorded.' }, { headers, status: 400 })
+    }
 
     const { error } = await supabase.from('admin_audit_events').insert({
       admin_profile_id: auth.profile.id,
@@ -273,6 +313,34 @@ export async function action({ request }: Route.ActionArgs) {
       return data({ error: mappingError.message }, { headers, status: 400 })
     }
 
+    const snapshotItems = (payoutRows ?? [])
+      .filter((item) => orderIds.includes(item.order_id) && item.confirmed_quantity !== null)
+      .map((item) => {
+        const rate = rateByCategory.get(item.category_id)
+        const vendorUnitPrice = getRateValueFromItem(item, rate, 'vendor')
+        const confirmedQuantity = Number(item.confirmed_quantity ?? 0)
+        return {
+          orderItemId: item.id,
+          confirmedQuantity,
+          vendorUnitPrice,
+          amount: vendorUnitPrice * confirmedQuantity,
+        }
+      })
+
+    try {
+      await sql.begin(async (tx) => {
+        for (const item of snapshotItems) {
+          await tx`
+            insert into vendor_settlement_items (settlement_id, order_item_id, confirmed_quantity, vendor_unit_price, amount)
+            values (${settlement.id}, ${item.orderItemId}, ${item.confirmedQuantity}, ${item.vendorUnitPrice}, ${item.amount})
+          `
+        }
+      })
+    } catch (error) {
+      await supabase.from('vendor_settlements').delete().eq('id', settlement.id)
+      return data({ error: error instanceof Error ? error.message : 'Payout rate snapshot could not be saved.' }, { headers, status: 400 })
+    }
+
     return data({ ok: true }, { headers, status: 200 })
   }
 
@@ -292,21 +360,21 @@ export default function Finance() {
         <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{fetcher.data.error}</div>
       )}
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Paystack balance</p><div className="mt-3 flex items-end justify-between"><p className="text-3xl font-bold text-slate-900">{money(summary.paystackBalance)}</p><CircleDollarSign size={18} className="text-brand-primary" /></div></div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Total collected</p><div className="mt-3 flex items-end justify-between"><p className="text-3xl font-bold text-slate-900">{money(summary.totalCollected)}</p><Banknote size={18} className="text-emerald-600" /></div></div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Owed to vendors</p><div className="mt-3 flex items-end justify-between"><p className="text-3xl font-bold text-slate-900">{money(summary.totalOwedToVendors)}</p><TrendingUp size={18} className="text-violet-600" /></div></div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Platform profit</p><div className="mt-3 flex items-end justify-between"><p className="text-3xl font-bold text-slate-900">{money(summary.platformProfit)}</p><CheckCircle2 size={18} className="text-amber-600" /></div></div>
+      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><p className="truncate text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Paystack balance</p><div className="mt-3 flex min-w-0 items-end justify-between gap-2"><p className="min-w-0 truncate text-2xl font-bold text-slate-900 sm:text-3xl">{summary.paystackBalance === null ? 'Unavailable' : money(summary.paystackBalance)}</p><CircleDollarSign size={18} className="shrink-0 text-brand-primary" /></div>{summary.paystackBalanceError && <p className="mt-2 truncate text-[11px] text-amber-700" title={summary.paystackBalanceError}>{summary.paystackBalanceError}</p>}</div>
+        <div className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><p className="truncate text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Total collected</p><div className="mt-3 flex min-w-0 items-end justify-between gap-2"><p className="min-w-0 truncate text-2xl font-bold text-slate-900 sm:text-3xl">{money(summary.totalCollected)}</p><Banknote size={18} className="shrink-0 text-emerald-600" /></div></div>
+        <div className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><p className="truncate text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Owed to vendors</p><div className="mt-3 flex min-w-0 items-end justify-between gap-2"><p className="min-w-0 truncate text-2xl font-bold text-slate-900 sm:text-3xl">{money(summary.totalOwedToVendors)}</p><TrendingUp size={18} className="shrink-0 text-violet-600" /></div></div>
+        <div className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><p className="truncate text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Platform profit</p><div className="mt-3 flex min-w-0 items-end justify-between gap-2"><p className="min-w-0 truncate text-2xl font-bold text-slate-900 sm:text-3xl">{money(summary.platformProfit)}</p><CheckCircle2 size={18} className="shrink-0 text-amber-600" /></div></div>
       </section>
 
-      <section className="grid gap-5 xl:grid-cols-[1.6fr_0.9fr]">
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <section className="grid gap-5 2xl:grid-cols-[minmax(0,1.6fr)_minmax(280px,0.9fr)]">
+        <div className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex items-center justify-between gap-3">
             <h3 className="text-lg font-bold text-slate-900">Vendor payouts</h3>
             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-600">Rate card basis</span>
           </div>
           <div className="mt-4 overflow-x-auto">
-            <table className="w-full min-w-[760px] text-left">
+            <table className="w-full min-w-[680px] text-left">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50 text-[10px] uppercase tracking-[0.12em] text-slate-500">
                   <th className="px-4 py-3 font-semibold">Vendor</th>
@@ -342,7 +410,7 @@ export default function Finance() {
           </div>
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <h3 className="text-lg font-bold text-slate-900">Create settlement</h3>
           <fetcher.Form method="post" className="mt-4 space-y-4">
             <input type="hidden" name="intent" value="create-settlement" />
@@ -368,14 +436,14 @@ export default function Finance() {
         </div>
       </section>
 
-      <section className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <section className="grid gap-5 2xl:grid-cols-[minmax(0,1.2fr)_minmax(280px,0.8fr)]">
+        <div className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="mb-4 flex items-center justify-between">
             <h3 className="text-lg font-bold text-slate-900">Settlement history</h3>
             <span className="text-sm text-slate-500">{settlements.length} records</span>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[620px] text-left">
+            <table className="w-full min-w-[560px] text-left">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50 text-[10px] uppercase tracking-[0.12em] text-slate-500">
                   <th className="px-4 py-3 font-semibold">Vendor</th>
@@ -402,7 +470,7 @@ export default function Finance() {
           </div>
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <h3 className="text-lg font-bold text-slate-900">Admin profit withdrawal</h3>
           <p className="mt-2 text-sm text-slate-500">Record a withdrawal from the platform profit ledger. This is a controlled admin action; actual bank transfer logic will be handled by the payment provider layer.</p>
           <fetcher.Form method="post" className="mt-5 space-y-4">

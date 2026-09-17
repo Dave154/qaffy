@@ -447,20 +447,30 @@ Before updating UI components, verify:
 
 #### Admin portal implementation
 
+#### Admin and Finance continuation update (2026-09-17)
+
+- `src/portals/admin/pages/Mismatches.tsx` is read-only for accountability. It has compact/truncated rows, search and direction filters, a details modal, and a modal-only `View order` link to the exact `/admin/orders?orderId=<uuid>` detail view. The table no longer has a Reviewed/Resolve button.
+- `src/portals/admin/pages/Finance.tsx` persists admin profit withdrawals in `admin_finance_transactions` and subtracts them from displayed platform profit. This is an internal ledger entry, not a bank transfer.
+- Finance settlement batches snapshot each confirmed order-item quantity, vendor unit rate, and payout amount in `vendor_settlement_items`, so later rate-card edits do not rewrite historical payouts.
+- Paystack balance failures display as unavailable with an error message instead of being represented as `₦0`.
+- Apply `supabase/migrations/20260917110000_admin_finance_ledger_and_settlement_snapshots.sql` before using the new Finance ledger or settlement snapshot paths. The generated Supabase TypeScript types do not yet include these new tables; Finance uses a local snapshot row type until types are regenerated.
+- Finance uses compact Naira formatting at million values, such as `₦7.36M`, and its cards, payout table, and side forms stack more safely at narrower widths.
+- Vendor and admin login landing screens use role-specific copy and imagery. Vendor uses the requested Unsplash laundry image; admin uses a separate operations image.
+
 #### Next Admin reporting slice
 
 - Admin Orders: date filtering and CSV export based on the current filters **implemented 2026-09-16**. Date filtering currently uses created date.
 - Admin Overview: date filtering for the order graph and related statistics, plus live Wash, Iron, and Wash + Iron clothes metrics.
 - Admin User Details: the Cancelled metric is hidden for now; subscription dates should derive automatically from the selected plan and semester settings.
 
-Outstanding Admin work is highlighted in `ADMIN_PLAN.md` under **Outstanding Admin Work**. The highest-priority unfinished items are Orders date/CSV filtering, Overview date/service metrics, and trusted settlement payout release.
+Outstanding Admin work is highlighted in `ADMIN_PLAN.md` under **Outstanding Admin Work**. The highest-priority unfinished item is trusted settlement payout release through Paystack Transfers, including transfer metadata, duplicate-transfer prevention, and paid-settlement audit records.
 
 - `src/portals/admin/pages/Home.tsx` loads live dashboard metrics, revenue, vendor/logistics counts, recent activity, and subscription analytics.
 - `src/portals/admin/pages/Orders.tsx` is routed at `/admin/orders` and supports search, filtering, and read-only detail views.
 - `src/portals/admin/pages/Partners.tsx` supports vendor and logistics partner creation, approval, rejection, suspension, and deletion flows.
 - `src/portals/admin/pages/Categories.tsx` manages category creation, updates, main-category designation, activation, and rate-card pricing for customer and vendor values.
-- `src/portals/admin/pages/Mismatches.tsx` provides mismatch review and resolution workflow with search and filtering.
-- `src/portals/admin/pages/Finance.tsx` loads live vendor settlement and payout summaries, finance totals, and settlement creation actions.
+- `src/portals/admin/pages/Mismatches.tsx` provides read-only mismatch accountability with search, filtering, truncation, a details modal, and exact-order navigation.
+- `src/portals/admin/pages/Finance.tsx` loads live vendor settlement and payout summaries, finance totals, settlement creation actions, persistent withdrawal ledger totals, historical payout snapshots, and explicit Paystack availability errors.
 - `src/portals/admin/pages/Plans.tsx` manages plan records and the semester configuration settings.
 - `src/routes.ts` registers the admin screens and their `/admin/*` routes.
 
@@ -643,13 +653,24 @@ The first enables Realtime for wallets, wallet transactions, and subscriptions. 
 - `npm run build` passed.
 - The recently edited logistics action and customer callback have no typecheck errors.
 - `npm run lint` still reports one unrelated existing `react-hooks/set-state-in-effect` error in `src/components/RouteLoadingScreen.tsx`.
+- After the 2026-09-17 Finance and mismatch changes, `npm run typecheck` and `npm run build` pass. Build output contains only existing React Router/Vite deprecation and future-flag warnings.
 
 ### Next Required Actions
 
-1. Apply `supabase/migrations/20260912100000_partner_access_roles.sql` to the deployed Supabase project. The local repository has the migration, but the live database must be linked and migrated before relying on multi-role access in production. The Supabase CLI is not currently installed locally.
+1. Apply `supabase/migrations/20260912100000_partner_access_roles.sql` and `supabase/migrations/20260917110000_admin_finance_ledger_and_settlement_snapshots.sql` to the deployed Supabase project. The local repository has the migrations, but the live database must be linked and migrated before relying on multi-role access or the new Finance ledger/snapshot paths in production. The Supabase CLI is not currently installed locally.
 2. Run a live smoke test with real data: sign in with multiple roles, switch logistics Pickup/Delivery tabs, search picked-up orders, verify OTP visibility and clearing, inspect customer Home/Orders, and check the responsive vendor Orders table.
 3. Continue the logistics operational audit, including delivery exceptions, public-order-number search, event-history visibility, and permission boundaries.
-4. After that, prioritize payment settlement/payouts and revenue reporting, followed by admin user management, messaging, wallet/credits, and historical archive views.
+4. Implement trusted Admin settlement payout release using verified vendor payout accounts and Paystack Transfers. Persist transfer reference, recipient metadata, actor, timestamps, status, and failure reason; prevent duplicate transfers. Do not add payout transfers to the vendor portal.
+5. After that, prioritize admin user management, messaging, wallet/credits, and historical archive views.
+
+### Referral Implementation Handoff
+
+- Referral attribution, campaign configuration, reward issuance, promotional wallet credit, expiry, and customer referral history are implemented.
+- Referral attribution works through email OTP and Google OAuth signup flows and is protected by the trusted server/database path.
+- Referral rewards are issued after a qualifying paid invoice, once per recipient, and do not affect vendor settlement amounts.
+- Promotional credit is consumed before ordinary one-off wallet funds and is tracked separately from Paystack top-ups.
+- Required migrations are `20260917120000_referral_attribution_foundation.sql`, `20260917130000_referral_campaign_reward_ledger.sql`, and `20260917140000_promotional_wallet_rewards.sql`.
+- Remaining work is live Supabase/payment smoke testing, Admin referral/reward history and export, and audited exceptional reversal/correction workflows.
 
 ### Suggested Continuation Workflow
 

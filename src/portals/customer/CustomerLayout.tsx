@@ -6,7 +6,7 @@ import QaffyLogo from '../../components/QaffyLogo'
 import { isSupabaseServerConfigured, getSupabaseServerClient } from '../../lib/supabase.server'
 import { supabase } from '../../lib/supabase.client'
 import { CustomerStoreProvider } from './customer-store'
-import type { MismatchLine, PersistedOrderItem, PickupLocationOption } from './customer-store'
+import type { CustomerReferral, MismatchLine, PersistedOrderItem, PickupLocationOption } from './customer-store'
 import { useCustomerStore } from './customer-store-hook'
 import type { Invoice, Order, Payment, Plan, Subscription, Wallet, WalletTransaction } from '../../types/database.types'
 
@@ -147,6 +147,29 @@ export async function loader({ request }: Route.LoaderArgs) {
     ? await serverSupabase.from('plans').select('*').eq('id', subscription.plan_id).maybeSingle()
     : { data: null }
 
+  const [{ data: referredRows }, { data: referrerRows }] = await Promise.all([
+    serverSupabase.from('referrals').select('id, referrer_id, referred_id, status, qualified_at, created_at').eq('referred_id', userData.user.id).order('created_at', { ascending: false }),
+    serverSupabase.from('referrals').select('id, referrer_id, referred_id, status, qualified_at, created_at').eq('referrer_id', userData.user.id).order('created_at', { ascending: false }),
+  ])
+  const referralRows = [...(referredRows ?? []), ...(referrerRows ?? [])].filter((row, index, rows) => rows.findIndex((candidate) => candidate.id === row.id) === index)
+  const referralIds = referralRows.map((row) => row.id)
+  const { data: referralRewards } = referralIds.length > 0
+    ? await serverSupabase.from('referral_rewards').select('referral_id, recipient_id, reward_value, status, expires_at').in('referral_id', referralIds).eq('recipient_id', userData.user.id)
+    : { data: [] }
+  const persistedReferrals: CustomerReferral[] = referralRows.map((row) => {
+    const reward = (referralRewards ?? []).find((candidate) => candidate.referral_id === row.id)
+    return {
+      id: row.id,
+      status: row.status,
+      createdAt: row.created_at,
+      qualifiedAt: row.qualified_at,
+      isReferrer: row.referrer_id === userData.user.id,
+      rewardStatus: reward?.status ?? null,
+      rewardValue: reward ? Number(reward.reward_value) : null,
+      rewardExpiresAt: reward?.expires_at ?? null,
+    }
+  })
+
   return data({
     user: userData.user,
     profile,
@@ -164,6 +187,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     orderMismatches,
     subscription,
     subscriptionPlan,
+    persistedReferrals,
   }, { headers })
 }
 
@@ -235,7 +259,7 @@ export default function CustomerLayout() {
 
   return (
     <CustomerStoreProvider
-      key={`${loaderData?.profile?.id ?? 'customer'}:${loaderData?.profile?.name ?? ''}:${loaderData?.profile?.phone ?? ''}:${loaderData?.profile?.referral_code ?? ''}:${loaderData?.wallet?.updated_at ?? 'no-wallet'}:${loaderData?.subscription?.id ?? 'no-subscription'}:${loaderData?.subscription?.end_date ?? ''}:${(loaderData?.orders ?? []).map((order) => `${order.id}-${order.status}-${order.pickup_otp ?? ''}-${order.delivery_otp ?? ''}-${order.clothes_count_vendor ?? ''}`).join('|')}:${(loaderData?.payments ?? []).map((payment) => `${payment.id}-${payment.status}`).join('|')}`}
+      key={`${loaderData?.profile?.id ?? 'customer'}:${loaderData?.profile?.name ?? ''}:${loaderData?.profile?.phone ?? ''}:${loaderData?.profile?.referral_code ?? ''}:${loaderData?.wallet?.updated_at ?? 'no-wallet'}:${loaderData?.subscription?.id ?? 'no-subscription'}:${loaderData?.subscription?.end_date ?? ''}:${(loaderData?.orders ?? []).map((order) => `${order.id}-${order.status}-${order.pickup_otp ?? ''}-${order.delivery_otp ?? ''}-${order.clothes_count_vendor ?? ''}`).join('|')}:${(loaderData?.payments ?? []).map((payment) => `${payment.id}-${payment.status}`).join('|')}:${(loaderData?.persistedReferrals ?? []).map((referral) => `${referral.id}-${referral.status}-${referral.rewardStatus ?? ''}`).join('|')}`}
       profile={loaderData?.profile ?? undefined}
       persistedOrders={loaderData ? (loaderData.orders as Order[]) : undefined}
       persistedUnpaidInvoiceOrderIds={loaderData?.unpaidInvoiceOrderIds as string[] | undefined}
@@ -247,6 +271,7 @@ export default function CustomerLayout() {
       persistedWallet={loaderData?.wallet as Wallet | null | undefined}
       persistedWalletTransactions={loaderData?.walletTransactions as WalletTransaction[] | undefined}
       persistedPayments={loaderData?.payments as Payment[] | undefined}
+      persistedReferrals={loaderData?.persistedReferrals as CustomerReferral[] | undefined}
       persistedTransactionError={loaderData?.transactionError as string | null | undefined}
       persistedInvoices={loaderData?.invoices as Array<Invoice & { order_reference?: string; original_count?: number | null; final_count?: number | null; extra_amount?: number | null; mismatch_direction?: 'over' | 'under' | null; mismatch_detail?: string | null; mismatch_details?: MismatchLine[] }> | undefined}
       persistedSubscription={loaderData?.subscription && loaderData.subscriptionPlan

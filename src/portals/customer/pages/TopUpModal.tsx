@@ -51,7 +51,7 @@ export default function TopUpModal({ currentBalance, subscriptionBalance, pendin
         <div className="mt-5 rounded-[26px] bg-slate-900 p-5 text-white shadow-lg shadow-slate-200">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <p className="text-xs font-medium uppercase tracking-[0.18em] text-sky-200">One-time balance</p>
+              <p className="text-xs font-medium uppercase tracking-[0.18em] text-sky-200">Available wallet credit</p>
               <p className="mt-2 text-3xl font-bold">₦{currentBalance.toLocaleString()}</p>
             </div>
             <span className="rounded-full bg-white/10 px-2.5 py-1 text-xs font-medium text-sky-50">Current balance</span>

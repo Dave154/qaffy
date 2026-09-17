@@ -52,7 +52,7 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function Home() {
-  const { balance, subscriptionBalance, customerName, customerId, orders, subscription, subscriptionEndDate, pendingTopUp } = useCustomerStore()
+  const { balance, promotionalBalance, subscriptionBalance, customerName, customerId, orders, subscription, subscriptionEndDate, pendingTopUp } = useCustomerStore()
   const [searchParams, setSearchParams] = useSearchParams()
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false)
   const [isTopUpModalOpen, setIsTopUpModalOpen] = useState(() => searchParams.get('topup') === '1')
@@ -133,6 +133,7 @@ export default function Home() {
           </div>
 
           {subscriptionBalance < 0 && <p className="mt-2 text-sm font-medium text-brand-primary">Subscription debt: ₦{Math.abs(subscriptionBalance).toLocaleString()}</p>}
+          {promotionalBalance > 0 && <p className="mt-2 text-sm font-medium text-emerald-700">Referral credit: ₦{promotionalBalance.toLocaleString()}</p>}
 
           <div className="mt-6 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-slate-500">
             <span>Active orders <strong className="ml-1 text-slate-800">{activeOrderCount}</strong></span>

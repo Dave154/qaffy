@@ -2,6 +2,7 @@ import { type RouteConfig, index, layout, prefix, route } from '@react-router/de
 
 export default [
   route('api/paystack/webhook', 'routes/paystack-webhook.ts'),
+  route('api/referrals/attribute', 'routes/referral-attribution.ts'),
   layout('portals/customer/CustomerLayout.tsx', [
     index('portals/customer/pages/Home.tsx'),
     route('transactions', 'portals/customer/pages/Transactions.tsx'),
@@ -48,6 +49,7 @@ export default [
       route('pickup-locations', 'portals/admin/pages/PickupLocations.tsx'),
       route('mismatches', 'portals/admin/pages/Mismatches.tsx'),
       route('plans', 'portals/admin/pages/Plans.tsx'),
+      route('referrals', 'portals/admin/pages/Referrals.tsx'),
       route('partners', 'portals/admin/pages/Partners.tsx'),
       route('partners/vendors', 'portals/admin/pages/Vendors.tsx'),
       route('partners/logistics', 'portals/admin/pages/Logistics.tsx'),

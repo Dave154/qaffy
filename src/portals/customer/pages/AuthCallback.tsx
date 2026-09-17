@@ -1,6 +1,7 @@
 import { redirect } from 'react-router'
 import type { Route } from './+types/AuthCallback'
 import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
+import { attributeReferral, getReferralCodeFromRequest } from '../../../lib/referrals.server'
 
 // React Router route modules require the loader and component to share this file.
 // eslint-disable-next-line react-refresh/only-export-components
@@ -91,6 +92,16 @@ export async function loader({ request }: Route.LoaderArgs) {
       throw redirect(`${completeProfilePath}?next=${encodeURIComponent(nextPath)}`, { headers })
     }
     throw redirect(nextPath, { headers })
+  }
+
+  const referralCode = getReferralCodeFromRequest(request)
+  if (expectedRole === 'customer' && referralCode) {
+    try {
+      await attributeReferral(userData.user.id, referralCode)
+      headers.append('Set-Cookie', 'qaffy_referral_code=; Max-Age=0; Path=/; SameSite=Lax')
+    } catch {
+      // Keep authentication successful; a later authenticated attribution attempt can retry safely.
+    }
   }
 
   if (!customerProfile?.name || !customerProfile?.phone) {

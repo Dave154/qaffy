@@ -2,6 +2,7 @@ import { useLocation, useNavigate } from 'react-router'
 import { useEffect, useState } from 'react'
 import QaffyLogo from '../../../components/QaffyLogo'
 import { isSupabaseConfigured, supabase } from '../../../lib/supabase.client'
+import { clearReferralCodeCookie } from '../../../lib/referral.client'
 
 export default function VerifyOtp() {
   const navigate = useNavigate()
@@ -68,6 +69,20 @@ export default function VerifyOtp() {
         setIsSubmitting(false)
         return
       }
+    }
+
+    if (mode === 'create-account') {
+      const { data: sessionData } = await supabase.auth.getSession()
+      const referralResponse = await fetch('/api/referrals/attribute', {
+        method: 'POST',
+        headers: sessionData.session?.access_token ? { Authorization: `Bearer ${sessionData.session.access_token}` } : undefined,
+      })
+      if (!referralResponse.ok) {
+        setError('Your account was created, but the referral could not be recorded. Please try again.')
+        setIsSubmitting(false)
+        return
+      }
+      clearReferralCodeCookie()
     }
 
     const { data: profile } = await supabase.from('profiles').select('role, name, phone').eq('id', userData.user.id).maybeSingle()

@@ -1,11 +1,12 @@
-import { AlertTriangle, ArrowRight, CheckCircle2, Search, ShieldAlert } from 'lucide-react'
-import { data, useFetcher, useLoaderData } from 'react-router'
+import { AlertTriangle, Search, ShieldAlert } from 'lucide-react'
+import { data, Link, useLoaderData } from 'react-router'
 import { useMemo, useState } from 'react'
 import type { Route } from './+types/Mismatches'
 import { requireRole } from '../../../lib/auth.server'
 
 type MismatchRow = {
   id: string
+  publicOrderNumber: string
   orderId: string
   direction: 'over' | 'under'
   detail: string | null
@@ -34,6 +35,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   const orderIds = [...new Set((mismatchRows ?? []).map((row) => row.order_id))]
   type OrderRecord = {
     id: string
+    public_order_number: string | null
     customer_id: string
     status: string | null
     clothes_count_customer: number | null
@@ -43,7 +45,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   type ProfileRecord = { id: string; qaffy_id: string | null; name: string | null }
 
   const ordersResult = orderIds.length
-    ? await supabase.from('orders').select('id, customer_id, status, clothes_count_customer, clothes_count_vendor, pickup_location_id').in('id', orderIds)
+    ? await supabase.from('orders').select('id, public_order_number, customer_id, status, clothes_count_customer, clothes_count_vendor, pickup_location_id').in('id', orderIds)
     : { data: [] as OrderRecord[] }
   const orders = (ordersResult.data ?? []) as OrderRecord[]
   const customerIds = [...new Set(orders.map((order) => order.customer_id))]
@@ -63,6 +65,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       const profile = order ? profileById.get(order.customer_id) ?? null : null
       return {
         id: row.id,
+        publicOrderNumber: order?.public_order_number ?? 'QO-UNKNOWN',
         orderId: row.order_id,
         direction: row.direction,
         detail: row.detail,
@@ -128,12 +131,12 @@ function formatDate(value: string) {
 
 export default function Mismatches() {
   const { mismatches } = useLoaderData<typeof loader>()
-  const fetcher = useFetcher<typeof action>()
   const [query, setQuery] = useState('')
   const [directionFilter, setDirectionFilter] = useState<'all' | 'over' | 'under'>('all')
+  const [selectedMismatch, setSelectedMismatch] = useState<MismatchRow | null>(null)
 
   const filteredMismatches = useMemo(() => mismatches.filter((mismatch) => {
-    const text = `${mismatch.orderId} ${mismatch.customerName ?? ''} ${mismatch.qaffyId ?? ''} ${mismatch.detail ?? ''} ${mismatch.pickupLocation ?? ''}`.toLowerCase()
+    const text = `${mismatch.publicOrderNumber} ${mismatch.orderId} ${mismatch.customerName ?? ''} ${mismatch.qaffyId ?? ''} ${mismatch.detail ?? ''} ${mismatch.pickupLocation ?? ''}`.toLowerCase()
     return (directionFilter === 'all' || mismatch.direction === directionFilter) && text.includes(query.toLowerCase())
   }), [mismatches, query, directionFilter])
 
@@ -164,17 +167,17 @@ export default function Mismatches() {
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1100px] text-left">
+          <table className="w-full min-w-[860px] text-left">
             <thead>
-              <tr className="border-b border-slate-200 bg-slate-50 text-[10px] uppercase tracking-[0.12em] text-slate-500">
-                <th className="px-5 py-3 font-semibold">Order</th>
-                <th className="px-5 py-3 font-semibold">Customer</th>
-                <th className="px-5 py-3 font-semibold">Location</th>
-                <th className="px-5 py-3 font-semibold">Count</th>
-                <th className="px-5 py-3 font-semibold">Direction</th>
-                <th className="px-5 py-3 font-semibold">Detail</th>
-                <th className="px-5 py-3 font-semibold">Created</th>
-                <th className="px-5 py-3 text-right font-semibold">Action</th>
+              <tr className="border-b border-slate-200 bg-slate-50 text-[9px] uppercase tracking-[0.12em] text-slate-500">
+                <th className="w-[120px] px-3 py-3 font-semibold">Order</th>
+                <th className="w-[150px] px-3 py-3 font-semibold">Customer</th>
+                <th className="w-[120px] px-3 py-3 font-semibold">Location</th>
+                <th className="w-[110px] px-3 py-3 font-semibold">Count</th>
+                <th className="w-[110px] px-3 py-3 font-semibold">Type</th>
+                <th className="w-[220px] px-3 py-3 font-semibold">Detail</th>
+                <th className="w-[120px] px-3 py-3 font-semibold">Created</th>
+                <th className="w-[160px] px-3 py-3 text-right font-semibold">Action</th>
               </tr>
             </thead>
             <tbody>
@@ -184,49 +187,59 @@ export default function Mismatches() {
                 </tr>
               ) : (
                 filteredMismatches.map((mismatch) => (
-                  <tr key={mismatch.id} className="border-b border-slate-100 last:border-0">
-                    <td className="px-5 py-4">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold text-slate-900">{mismatch.orderId}</p>
-                        <p className="mt-1 text-xs text-slate-500">{mismatch.orderStatus ? orderStatusLabels[mismatch.orderStatus] ?? mismatch.orderStatus : 'Status pending'}</p>
+                  <tr key={mismatch.id} className="border-b border-slate-100 align-top last:border-0">
+                    <td className="px-3 py-3">
+                      <div className="max-w-[110px] min-w-0">
+                        <p className="truncate text-sm font-semibold text-slate-900">{mismatch.publicOrderNumber}</p>
+                        <p className="mt-1 truncate text-[10px] text-slate-500">{mismatch.orderStatus ? orderStatusLabels[mismatch.orderStatus] ?? mismatch.orderStatus : 'Status pending'}</p>
                       </div>
                     </td>
-                    <td className="px-5 py-4">
-                      <div className="min-w-0">
-                        <p className="text-sm font-semibold text-slate-900">{mismatch.customerName}</p>
-                        <p className="truncate text-xs text-slate-500">{mismatch.qaffyId ?? 'Qaffy ID unavailable'}</p>
+                    <td className="px-3 py-3">
+                      <div className="max-w-[140px] min-w-0">
+                        <p className="truncate text-sm font-semibold text-slate-900">{mismatch.customerName}</p>
+                        <p className="mt-1 truncate text-[10px] text-slate-500">{mismatch.qaffyId ?? 'Qaffy ID unavailable'}</p>
                       </div>
                     </td>
-                    <td className="px-5 py-4 text-sm text-slate-600">{mismatch.pickupLocation ?? 'Location pending'}</td>
-                    <td className="px-5 py-4 text-sm text-slate-700">
-                      <div className="flex flex-col gap-0.5">
-                        <span>Customer: {mismatch.customerCount}</span>
-                        <span>Vendor: {mismatch.vendorCount ?? '—'}</span>
+                    <td className="px-3 py-3">
+                      <div className="max-w-[110px] min-w-0">
+                        <p className="truncate text-sm text-slate-600">{mismatch.pickupLocation ?? 'Location pending'}</p>
                       </div>
                     </td>
-                    <td className="px-5 py-4">
-                      <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${directionStyles[mismatch.direction]}`}>
-                        <ShieldAlert size={12} />
+                    <td className="px-3 py-3 text-sm text-slate-700">
+                      <div className="flex max-w-[100px] flex-col gap-0.5">
+                        <span className="truncate">Customer: {mismatch.customerCount}</span>
+                        <span className="truncate">Vendor: {mismatch.vendorCount ?? '—'}</span>
+                      </div>
+                    </td>
+                    <td className="px-3 py-3">
+                      <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.12em] ${directionStyles[mismatch.direction]}`}>
+                        <ShieldAlert size={10} />
                         {directionLabels[mismatch.direction]}
                       </span>
                     </td>
-                    <td className="px-5 py-4 text-sm text-slate-700">
-                      <div className="max-w-md break-words">{mismatch.detail ?? 'No mismatch notes were supplied.'}</div>
-                    </td>
-                    <td className="px-5 py-4 text-sm text-slate-500">{formatDate(mismatch.createdAt)}</td>
-                    <td className="px-5 py-4">
-                      <fetcher.Form method="post" className="flex justify-end">
-                        <input type="hidden" name="intent" value="resolve" />
-                        <input type="hidden" name="mismatchId" value={mismatch.id} />
+                    <td className="px-3 py-3 text-sm text-slate-700">
+                      <div className="max-w-[200px] min-w-0">
+                        <p className="truncate">{mismatch.detail ?? 'No mismatch notes were supplied.'}</p>
                         <button
-                          type="submit"
-                          disabled={fetcher.state !== 'idle'}
-                          className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+                          type="button"
+                          onClick={() => setSelectedMismatch(mismatch)}
+                          className="mt-2 text-[10px] font-semibold text-brand-primary underline-offset-2 hover:underline"
                         >
-                          {fetcher.state !== 'idle' ? <ArrowRight size={14} className="animate-pulse" /> : <CheckCircle2 size={14} />}
-                          Mark reviewed
+                          View details
                         </button>
-                      </fetcher.Form>
+                      </div>
+                    </td>
+                    <td className="px-3 py-3 text-xs text-slate-500">{formatDate(mismatch.createdAt)}</td>
+                    <td className="px-3 py-3">
+                      <div className="flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedMismatch(mismatch)}
+                          className="rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[10px] font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50"
+                        >
+                          Details
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -235,6 +248,82 @@ export default function Mismatches() {
           </table>
         </div>
       </section>
+
+      {selectedMismatch && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
+          <div className="w-full max-w-xl rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h4 className="mt-2 text-xl font-bold text-slate-900">{selectedMismatch.publicOrderNumber}</h4>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedMismatch(null)}
+                className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 text-lg text-slate-500 hover:bg-slate-50"
+                aria-label="Close mismatch details"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="mt-5 space-y-4">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-xl bg-slate-50 p-3">
+                  <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Customer</p>
+                  <p className="mt-2 text-sm font-semibold text-slate-900">{selectedMismatch.customerName}</p>
+                  <p className="mt-1 text-xs text-slate-500">{selectedMismatch.qaffyId ?? 'Qaffy ID unavailable'}</p>
+                </div>
+                <div className="rounded-xl bg-slate-50 p-3">
+                  <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Type</p>
+                  <div className="mt-2">
+                    <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${directionStyles[selectedMismatch.direction]}`}>
+                      <ShieldAlert size={12} />
+                      {directionLabels[selectedMismatch.direction]}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-white p-3">
+                <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Count summary</p>
+                <div className="mt-2 grid gap-1 text-sm text-slate-700 sm:grid-cols-2">
+                  <span>Customer count: {selectedMismatch.customerCount}</span>
+                  <span>Vendor count: {selectedMismatch.vendorCount ?? '—'}</span>
+                  <span className="sm:col-span-2">Location: {selectedMismatch.pickupLocation ?? 'Location pending'}</span>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Detailed note</p>
+                <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                  {selectedMismatch.detail ?? 'No mismatch notes were supplied.'}
+                </p>
+              </div>
+
+              <div className="flex items-center justify-between rounded-xl border border-slate-200 p-3 text-xs text-slate-500">
+                <span>Status: {selectedMismatch.orderStatus ? orderStatusLabels[selectedMismatch.orderStatus] ?? selectedMismatch.orderStatus : 'Status pending'}</span>
+                <span>{formatDate(selectedMismatch.createdAt)}</span>
+              </div>
+            </div>
+
+            <div className="mt-6 flex justify-end gap-2">
+              <Link
+                to={`/admin/orders?orderId=${encodeURIComponent(selectedMismatch.orderId)}`}
+                className="rounded-lg bg-brand-primary px-4 py-2 text-sm font-semibold text-white hover:bg-brand-primary-hover"
+              >
+                View order
+              </Link>
+              <button
+                type="button"
+                onClick={() => setSelectedMismatch(null)}
+                className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

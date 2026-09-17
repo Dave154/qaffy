@@ -21,6 +21,17 @@ Approved operational billing model as of 2026-09-14.
 - The customer portal subscribes to wallet and wallet-ledger changes and revalidates the authoritative loader in real time after webhook crediting.
 - For local webhook testing through ngrok, the current ngrok hostname must be allowlisted in both `vite.config.ts` and `react-router.config.ts`; otherwise Vite returns `403` before the webhook handler runs.
 
+### Referral reward accounting
+
+- Referral rewards are promotional wallet credit, not Paystack funds, customer revenue, or vendor payable.
+- Promotional balance is stored separately from `one_off_balance` and `subscription_balance`.
+- Promotional credit is consumed before ordinary one-off credit when an invoice is paid.
+- Each referral reward keeps its remaining value, expiry, qualifying order, and linked wallet transaction.
+- Expired promotional value creates an explicit expiry ledger transaction.
+- Reward issuance is trusted, transactional, and idempotent across vendor finalization, customer invoice payment, subscription excess payment, and Paystack top-up auto-settlement.
+- Apply `20260917120000_referral_attribution_foundation.sql`, `20260917130000_referral_campaign_reward_ledger.sql`, and `20260917140000_promotional_wallet_rewards.sql` before live referral testing.
+- Remaining referral finance work is reporting promotional credits issued, consumed, expired, and reversed; no cash withdrawal or vendor settlement is allowed.
+
 ### Customer portal continuation checkpoint
 
 - One-time top-ups and subscription purchases share Paystack initialization but remain separate payment types.
