@@ -92,7 +92,7 @@ export default function Login() {
           </p>
         </div>
 
-        <div className="w-full max-w-[430px] rounded-[36px] bg-white/95 p-5 shadow-[0_30px_80px_rgba(0,0,0,0.28)] backdrop-blur-sm sm:p-7" style={{ fontFamily: 'Inter, sans-serif' }}>
+        <div className="mx-auto w-full max-w-[430px] rounded-[36px] bg-white/95 p-5 shadow-[0_30px_80px_rgba(0,0,0,0.28)] backdrop-blur-sm sm:p-7" style={{ fontFamily: 'Inter, sans-serif' }}>
           <div className="mb-7 text-center">
             <h2 className="text-[2.7rem] font-semibold text-slate-900">
               Login

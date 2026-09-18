@@ -1,10 +1,41 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router'
+import type { Route } from './+types/CreateAccount'
 import QaffyLogo from '../../../components/QaffyLogo'
 import RouteLoadingScreen from '../../../components/RouteLoadingScreen'
 import { isSupabaseConfigured, supabase } from '../../../lib/supabase.client'
 import { captureReferralCodeFromUrl } from '../../../lib/referral.client'
+
+export const meta: Route.MetaFunction = ({ location }) => {
+  const hasReferral = new URLSearchParams(location.search).has('ref')
+  const title = hasReferral ? 'Join Qaffy with a referral' : 'Create your Qaffy account'
+  const description = hasReferral
+    ? 'Join Qaffy for fresh laundry, easy pickup, and reliable delivery.'
+    : 'Create your Qaffy account for convenient laundry pickup and delivery.'
+  const siteOrigin = import.meta.env.VITE_SITE_URL?.trim().replace(/\/$/, '') || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5173')
+  const pageUrl = new URL(`${location.pathname}${location.search}`, siteOrigin).toString()
+  const imageUrl = new URL('/qaffy-logo.png', siteOrigin).toString()
+
+  return [
+    { title },
+    { name: 'description', content: description },
+    { name: 'keywords', content: 'laundry service, laundry pickup, laundry delivery, Qaffy' },
+    { name: 'robots', content: 'index, follow' },
+    { property: 'og:type', content: 'website' },
+    { property: 'og:site_name', content: 'Qaffy' },
+    { property: 'og:title', content: title },
+    { property: 'og:description', content: description },
+    { property: 'og:url', content: pageUrl },
+    { property: 'og:image', content: imageUrl },
+    { property: 'og:image:alt', content: 'Join Qaffy Laundry Service' },
+    { name: 'twitter:card', content: 'summary_large_image' },
+    { name: 'twitter:title', content: title },
+    { name: 'twitter:description', content: description },
+    { name: 'twitter:image', content: imageUrl },
+    { tagName: 'link', rel: 'canonical', href: pageUrl },
+  ]
+}
 
 export default function CreateAccount() {
   const navigate = useNavigate()

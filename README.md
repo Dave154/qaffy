@@ -2,9 +2,11 @@
 
 ## Supabase Email OTP
 
-The customer signup and sign-in flows use Supabase email OTP. In the Supabase dashboard, open **Authentication > Email Templates** and update the relevant email template to display `{{ .Token }}`. The default `{{ .ConfirmationURL }}` template sends a magic link instead of a six-digit code, which will not work with the OTP input screen.
+The customer signup and sign-in flows use Supabase email OTP. In the Supabase dashboard, open **Authentication > Email Templates** and paste the HTML from `supabase/email-templates/otp.html` into the relevant template. It uses `{{ .Token }}` and matches the app's 8-digit OTP input. The default `{{ .ConfirmationURL }}` template sends a magic link instead of a code, which will not work with the OTP input screen.
 
 Configure the project URL and allowed redirect URLs for the application origin. The app expects the public `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` variables plus the server-side `SUPABASE_URL` and `SUPABASE_ANON_KEY` variables.
+
+Set `VITE_SITE_URL` to the canonical public origin in production so canonical links and social preview URLs use the deployed domain instead of the incoming request host.
 
 ## Customer Web Push Notifications
 
