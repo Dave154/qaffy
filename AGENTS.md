@@ -680,6 +680,15 @@ The first enables Realtime for wallets, wallet transactions, and subscriptions. 
 - Vendor Settings keeps its page heading mobile-only because the desktop shared layout already renders the Settings title.
 - Admin referral campaign dates default to the current local datetime and one month later while remaining editable.
 
+### Customer Web Push Notifications (2026-09-18)
+
+- Customer Web Push is implemented with `public/push-sw.js`, `src/lib/push.client.ts`, `src/lib/push.server.ts`, and the `/api/push-subscriptions` route.
+- Customers can enable notifications from the Overview prompt or toggle them in Settings. Subscriptions are scoped to the signed-in customer and stored in `push_subscriptions`.
+- `notification_events` records an idempotent event before delivery on the wrapped notification path and tracks `pending`, `sent`, or `failed` status. Expired subscriptions are removed after Web Push returns HTTP 404 or 410. Logistics pickup and delivery currently use the direct push sender and are not recorded in this ledger.
+- Notifications currently cover logistics pickup and delivery, vendor ready-for-delivery dispatch, vendor mismatch confirmation, payment required/confirmed, wallet top-up confirmation, subscription activation, and scheduled renewal/expiry reminders.
+- Required migrations are `supabase/migrations/20260918100000_push_subscriptions.sql` and `supabase/migrations/20260918110000_notification_events.sql`.
+- Required configuration is `VITE_VAPID_PUBLIC_KEY` in the browser build, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and `VAPID_SUBJECT` on the server, and `CRON_SECRET` for the protected subscription reminder route. Web Push is unavailable in the VS Code embedded browser; use Chrome or Edge.
+
 ### Suggested Continuation Workflow
 
 - Start by checking `git status --short` so existing user work is not overwritten.

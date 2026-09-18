@@ -99,6 +99,15 @@ Approved operational billing model as of 2026-09-14.
 - Pickup/Delivery was moved out of the header and placed beside the date filter. The controls stay horizontal and compact on small screens. The header has padded spacing, a smaller Logistics label, and a red logout icon.
 - Remaining logistics audit work: delivery exceptions, public order number search, event-history visibility, and permission boundaries, then run live OTP/order smoke tests after applying migrations.
 
+## Customer notification checkpoint (2026-09-18)
+
+- Customer Web Push is implemented through `public/push-sw.js` and `src/lib/push.client.ts`. Customers can enable or disable notifications from the Overview prompt or Settings; subscriptions are stored per customer in `push_subscriptions` through `/api/push-subscriptions`.
+- Server delivery uses `web-push` and VAPID credentials from `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and `VAPID_SUBJECT`. The browser uses `VITE_VAPID_PUBLIC_KEY`.
+- `notification_events` is an idempotency and delivery-status ledger for the wrapped notification path. An event key is inserted before delivery, duplicate keys are ignored, successful sends are marked `sent`, failures are marked `failed`, and stale subscriptions returning HTTP 404/410 are removed. Logistics pickup and delivery currently use the direct push sender, so those handoff sends are not recorded in this ledger.
+- Notifications are emitted for pickup, delivery, ready-for-delivery, vendor mismatch confirmation, payment required/confirmed, wallet top-up confirmation, subscription activation, and scheduled subscription renewal/expiry.
+- Paystack webhook processing, vendor confirmation/dispatch, logistics handoff, invoice payment, and the protected subscription-notification job are the trusted event sources. Push delivery is best-effort and does not replace the in-app order, invoice, or notification state.
+- Apply `supabase/migrations/20260918100000_push_subscriptions.sql` and `supabase/migrations/20260918110000_notification_events.sql` before live testing. The scheduled subscription route requires `CRON_SECRET`; the VS Code embedded browser does not support this setup, so use Chrome or Edge.
+
 ## Business model
 
 This platform uses a post-paid model.

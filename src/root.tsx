@@ -13,6 +13,7 @@ import RouteLoadingScreen from './components/RouteLoadingScreen'
 
 export const links: Route.LinksFunction = () => [
   { rel: 'stylesheet', href: stylesheetUrl },
+  { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' },
   { rel: 'manifest', href: '/manifest.webmanifest' },
 ]
 
