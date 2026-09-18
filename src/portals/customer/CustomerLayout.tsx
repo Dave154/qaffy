@@ -192,13 +192,13 @@ export async function loader({ request }: Route.LoaderArgs) {
   }, { headers })
 }
 
-function PlanSummary() {
+function PlanSummary({ onNavigate }: { onNavigate?: () => void }) {
   const { activePlan, subscription, subscriptionBalance, subscriptionUsedUnits } = useCustomerStore()
   const displayedUsedUnits = activePlan ? Math.min(subscriptionUsedUnits, activePlan.weekly_limit) : subscriptionUsedUnits
   const usagePercent = activePlan ? Math.min(100, Math.round((displayedUsedUnits / activePlan.weekly_limit) * 100)) : 0
 
   return (
-    <div className="mt-auto rounded-2xl border border-[#a7d7d2] bg-[#eef9f7] p-3.5">
+    <NavLink to="/plans" aria-label="View plans" onClick={onNavigate} className="mt-auto block rounded-2xl border border-[#a7d7d2] bg-[#eef9f7] p-3.5 transition hover:border-[#78beb7] hover:bg-[#e4f5f2] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#00b7d4]">
       <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#418d87]">Current plan</p>
       <p className="mt-2 text-sm font-semibold capitalize text-slate-800">{activePlan && subscription ? `${subscription.name} ${subscription.billingPeriod}` : 'No active plan'}</p>
       {subscriptionBalance < 0 && <p className="mt-1 text-xs text-brand-primary">Subscription debt: ₦{Math.abs(subscriptionBalance).toLocaleString()}</p>}
@@ -206,7 +206,7 @@ function PlanSummary() {
       <div className="mt-3 h-1.5 overflow-hidden bg-[#d3ebe8]" aria-label={`${usagePercent}% of weekly plan allowance used`}>
         <div className="h-full bg-[#55aaa3] transition-[width] duration-500" style={{ width: `${usagePercent}%` }} />
       </div>
-    </div>
+    </NavLink>
   )
 }
 
@@ -427,7 +427,7 @@ export default function CustomerLayout() {
                 })}
               </nav>
 
-              <PlanSummary />
+              <PlanSummary onNavigate={closeMobileMenu} />
               <button type="button" onClick={() => { closeMobileMenu(); setLogoutConfirmationOpen(true) }} className="mt-3 flex h-10 w-full items-center gap-3 rounded-[10px] px-3 text-sm font-medium text-red-600 hover:bg-red-50 hover:text-red-700">
                 <LogOut className="h-4 w-4 text-red-600" />
                 <span>Log out</span>
