@@ -4,6 +4,7 @@ import type { Route } from './+types/Invoice'
 import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
 import { useCustomerStore } from '../customer-store-hook'
 import { InsufficientBalanceError, payFromWallet } from '../../../lib/wallet.server'
+import { sendCustomerNotification } from '../../../lib/notifications.server'
 
 // eslint-disable-next-line react-refresh/only-export-components
 export async function action({ request }: Route.ActionArgs) {
@@ -19,6 +20,18 @@ export async function action({ request }: Route.ActionArgs) {
 
   try {
     const result = await payFromWallet(userData.user.id, invoiceId, 'one_off')
+    await sendCustomerNotification({
+      eventKey: `invoice:${result.invoiceId}:paid`,
+      customerId: userData.user.id,
+      notificationType: 'payment_confirmed',
+      orderId: result.orderId,
+      payload: {
+        title: 'Payment confirmed',
+        body: `Your invoice for ${result.publicOrderNumber} has been paid.`,
+        url: `/orders?order=${encodeURIComponent(result.publicOrderNumber)}`,
+        tag: `order:${result.orderId}:payment`,
+      },
+    })
     return data({ ok: true, deliveryOtp: result.deliveryOtp }, { headers })
   } catch (error) {
     if (error instanceof InsufficientBalanceError) return data({ ok: false, message: 'Your wallet balance is too low for this invoice.' }, { status: 402, headers })
@@ -82,8 +95,8 @@ export default function Invoice() {
         </div>
       </section>
 
-      <section className="grid gap-4 lg:grid-cols-[1fr_0.8fr]">
-        <div className="rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-100 sm:p-5">
+      <section className="grid min-w-0 gap-4 lg:grid-cols-[1fr_0.8fr]">
+        <div className="min-w-0 rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-100 sm:p-5">
           <div className="flex items-center justify-between gap-3">
             <div>
               <h3 className="text-lg font-bold text-slate-900">Laundry summary</h3>
@@ -114,13 +127,13 @@ export default function Invoice() {
                 <span>Vendor confirmed</span>
                 <strong className="text-slate-900">{invoice.finalCount} items</strong>
               </div>
-              {invoice.mismatch && <div className="mt-3 border-t border-slate-200 pt-3 text-sm text-amber-700"><strong>{invoice.mismatch.direction === 'over' ? 'Extra billing due to over-count' : 'Under-count adjustment'}</strong><p className="mt-1">{invoice.mismatch.detail}</p>{Array.isArray(invoice.mismatch.lines) && invoice.mismatch.lines.length > 0 && <div className="mt-3 overflow-x-auto rounded-xl border border-amber-200 bg-white"><table className="w-full min-w-[620px] text-left text-xs"><thead className="border-b border-amber-100 bg-amber-50 text-[10px] uppercase tracking-[0.08em] text-amber-700"><tr><th className="px-3 py-2 font-semibold">Item</th><th className="px-3 py-2 font-semibold">Service</th><th className="px-3 py-2 text-right font-semibold">Declared</th><th className="px-3 py-2 text-right font-semibold">Confirmed</th><th className="px-3 py-2 text-right font-semibold">Difference</th><th className="px-3 py-2 text-right font-semibold">Unit price</th><th className="px-3 py-2 text-right font-semibold">Extra</th></tr></thead><tbody>{invoice.mismatch.lines.map((line, index) => <tr key={`${line.category}-${line.service}-${index}`} className="border-b border-amber-50 last:border-0"><td className="px-3 py-2.5 font-semibold text-slate-800">{line.category}</td><td className="px-3 py-2.5 text-slate-600">{line.service === 'wash_iron' ? 'Wash + Iron' : line.service === 'wash' ? 'Wash' : 'Iron'}</td><td className="px-3 py-2.5 text-right text-slate-600">{line.originalQuantity}</td><td className="px-3 py-2.5 text-right text-slate-600">{line.confirmedQuantity}</td><td className="px-3 py-2.5 text-right font-semibold text-amber-700">{line.difference > 0 ? '+' : ''}{line.difference}</td><td className="px-3 py-2.5 text-right text-slate-600">₦{line.unitPrice.toLocaleString()}</td><td className="px-3 py-2.5 text-right font-semibold text-amber-700">₦{line.extraAmount.toLocaleString()}</td></tr>)}</tbody></table></div>}</div>}
+              {invoice.mismatch && <div className="mt-3 min-w-0 border-t border-slate-200 pt-3 text-sm text-amber-700"><strong>{invoice.mismatch.direction === 'over' ? 'Extra billing due to over-count' : 'Under-count adjustment'}</strong><p className="mt-1 min-w-0 [overflow-wrap:anywhere]">{invoice.mismatch.detail}</p>{Array.isArray(invoice.mismatch.lines) && invoice.mismatch.lines.length > 0 && <div className="mt-3 overflow-x-auto rounded-xl border border-amber-200 bg-white"><table className="w-full min-w-[620px] text-left text-xs"><thead className="border-b border-amber-100 bg-amber-50 text-[10px] uppercase tracking-[0.08em] text-amber-700"><tr><th className="px-3 py-2 font-semibold">Item</th><th className="px-3 py-2 font-semibold">Service</th><th className="px-3 py-2 text-right font-semibold">Declared</th><th className="px-3 py-2 text-right font-semibold">Confirmed</th><th className="px-3 py-2 text-right font-semibold">Difference</th><th className="px-3 py-2 text-right font-semibold">Unit price</th><th className="px-3 py-2 text-right font-semibold">Extra</th></tr></thead><tbody>{invoice.mismatch.lines.map((line, index) => <tr key={`${line.category}-${line.service}-${index}`} className="border-b border-amber-50 last:border-0"><td className="px-3 py-2.5 font-semibold text-slate-800">{line.category}</td><td className="px-3 py-2.5 text-slate-600">{line.service === 'wash_iron' ? 'Wash + Iron' : line.service === 'wash' ? 'Wash' : 'Iron'}</td><td className="px-3 py-2.5 text-right text-slate-600">{line.originalQuantity}</td><td className="px-3 py-2.5 text-right text-slate-600">{line.confirmedQuantity}</td><td className="px-3 py-2.5 text-right font-semibold text-amber-700">{line.difference > 0 ? '+' : ''}{line.difference}</td><td className="px-3 py-2.5 text-right text-slate-600">₦{line.unitPrice.toLocaleString()}</td><td className="px-3 py-2.5 text-right font-semibold text-amber-700">₦{line.extraAmount.toLocaleString()}</td></tr>)}</tbody></table></div>}</div>}
               {invoice.extraAmount > 0 && <div className="mt-3 flex items-center justify-between border-t border-slate-200 pt-3 text-sm text-amber-700"><span>Extra confirmed items charge</span><strong>₦{invoice.extraAmount.toLocaleString()}</strong></div>}
             </div>
           )}
         </div>
 
-        <div className="rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-100 sm:p-5">
+        <div className="min-w-0 rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-100 sm:p-5">
           <h3 className="text-lg font-bold text-slate-900">Payment breakdown</h3>
 
           <div className="mt-4 space-y-3">
@@ -151,12 +164,6 @@ export default function Invoice() {
         </div>
       </section>
 
-      <section className="rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-100 sm:p-5">
-        <h3 className="text-lg font-bold text-slate-900">Pickup instructions</h3>
-        <p className="mt-3 text-sm text-slate-600">
-          Please drop off the bag at the nearest pickup point. Keep whites separate and note any silk items before handover.
-        </p>
-      </section>
     </div>
   )
 }

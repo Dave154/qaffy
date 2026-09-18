@@ -17,8 +17,10 @@ export default function TopUpModal({ currentBalance, subscriptionBalance, pendin
 
   const suggestedAmount = useMemo(() => {
     const minimum = 1000
-    return Math.max(pendingPaymentTotal, debt, minimum)
-  }, [debt, pendingPaymentTotal])
+    const outstanding = Math.max(pendingPaymentTotal, debt)
+    const remaining = Math.max(0, outstanding - currentBalance)
+    return remaining > 0 ? remaining + minimum : minimum
+  }, [currentBalance, debt, pendingPaymentTotal])
 
   const [amount, setAmount] = useState<number>(suggestedAmount)
   const appliedToDebt = Math.min(Math.max(amount, 0), negativeBalance)

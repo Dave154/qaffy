@@ -233,7 +233,7 @@ async function issueReferralRewards(tx: TransactionSql, customerId: string, orde
 export async function payFromWallet(customerId: string, invoiceId: string, balanceType: WalletBalanceType) {
   return sql.begin(async (tx) => {
     const [invoice] = await tx`
-      select i.*, o.customer_id, o.id as order_id
+      select i.*, o.customer_id, o.id as order_id, o.public_order_number
       from invoices i
       join orders o on o.id = i.order_id
       where i.id = ${invoiceId}
@@ -252,7 +252,7 @@ export async function payFromWallet(customerId: string, invoiceId: string, balan
     await tx`update orders set status = 'paid', delivery_otp = ${deliveryOtp} where id = ${invoice.order_id}`
     await issueReferralRewards(tx, customerId, invoice.order_id, Number(invoice.amount))
 
-    return { invoiceId, deliveryOtp, newBalance }
+    return { invoiceId, orderId: invoice.order_id, publicOrderNumber: invoice.public_order_number, deliveryOtp, newBalance }
   })
 }
 
@@ -447,7 +447,16 @@ export async function finalizeVendorOrder(
       )
     `
 
-    return { invoiceId: invoice.id, amount: Number(invoice.amount), finalCount: billingCount, mismatchDirection }
+    return {
+      invoiceId: invoice.id,
+      amount: Number(invoice.amount),
+      finalCount: billingCount,
+      mismatchDirection,
+      mismatchDetail: mismatchDirection ? mismatchDetail : null,
+      invoiceStatus: finalInvoice.status as 'paid' | 'unpaid',
+      customerId: order.customer_id,
+      publicOrderNumber: order.public_order_number,
+    }
   })
 }
 
@@ -467,7 +476,7 @@ export async function creditWallet(customerId: string, balanceType: WalletBalanc
     const [existingPayment] = await tx`select id, status from payments where reference = ${paymentReference} and customer_id = ${customerId}`
     if (existingPayment?.status === 'success') {
       const [wallet] = await tx`select one_off_balance, subscription_balance from wallets where customer_id = ${customerId}`
-      return { newBalance: balanceType === 'subscription' ? Number(wallet.subscription_balance) : Number(wallet.one_off_balance), alreadyCredited: true }
+      return { newBalance: balanceType === 'subscription' ? Number(wallet.subscription_balance) : Number(wallet.one_off_balance), alreadyCredited: true, settledInvoices: [] }
     }
 
     const [wallet] = await tx`select * from wallets where customer_id = ${customerId} for update`
@@ -497,9 +506,10 @@ export async function creditWallet(customerId: string, balanceType: WalletBalanc
     }
 
     let settledBalance = oneOffBalance
+    const settledInvoices: Array<{ invoiceId: string; orderId: string; publicOrderNumber: string; amount: number }> = []
     if (oneOffCredit > 0) {
       const pendingInvoices = await tx`
-        select i.id, i.amount, o.id as order_id
+        select i.id, i.amount, o.id as order_id, o.public_order_number
         from invoices i
         join orders o on o.id = i.order_id
         where o.customer_id = ${customerId}
@@ -525,10 +535,11 @@ export async function creditWallet(customerId: string, balanceType: WalletBalanc
           `
         }
         await issueReferralRewards(tx, customerId, invoice.order_id, invoiceAmount)
+        settledInvoices.push({ invoiceId: invoice.id, orderId: invoice.order_id, publicOrderNumber: invoice.public_order_number, amount: invoiceAmount })
       }
     }
 
-    return { newBalance: balanceType === 'subscription' ? subscriptionBalance : settledBalance }
+    return { newBalance: balanceType === 'subscription' ? subscriptionBalance : settledBalance, settledInvoices, alreadyCredited: false }
   })
 }
 
@@ -562,11 +573,12 @@ export async function activateSubscriptionFromPayment(customerId: string, paymen
       ? settings?.semester_end_date ?? payment.semester_end_date ?? new Date(startDate.getFullYear(), startDate.getMonth() + 6, startDate.getDate()).toISOString().slice(0, 10)
       : new Date(startDate.getFullYear(), startDate.getMonth() + 1, startDate.getDate()).toISOString().slice(0, 10)
 
-    await tx`
+    const [subscription] = await tx`
       insert into subscriptions (customer_id, plan_id, status, start_date, end_date)
       values (${customerId}, ${payment.plan_id}, 'active', ${startDate.toISOString().slice(0, 10)}, ${endDate})
+      returning id
     `
-    return { alreadyActivated: false, planName: payment.name, endDate }
+    return { alreadyActivated: false, subscriptionId: subscription.id, planName: payment.name, endDate }
   })
 }
 
@@ -576,7 +588,7 @@ export async function debitOneOffInvoice(customerId: string, invoiceId: string) 
     await tx`insert into wallets (customer_id) values (${customerId}) on conflict (customer_id) do nothing`
 
     const [invoice] = await tx`
-      select i.id, i.amount, i.status, o.customer_id, o.is_subscription_order
+      select i.id, i.amount, i.status, o.customer_id, o.is_subscription_order, o.id as order_id, o.public_order_number
       from invoices i
       join orders o on o.id = i.order_id
       where i.id = ${invoiceId}
@@ -584,7 +596,7 @@ export async function debitOneOffInvoice(customerId: string, invoiceId: string) 
     `
 
     if (!invoice || invoice.customer_id !== customerId || invoice.is_subscription_order) throw new Error('Invoice not found')
-    if (invoice.status === 'paid') return { invoiceId, alreadyPaid: true }
+    if (invoice.status === 'paid') return { invoiceId, alreadyPaid: true, orderId: invoice.order_id, publicOrderNumber: invoice.public_order_number }
 
     const [wallet] = await tx`select one_off_balance from wallets where customer_id = ${customerId} for update`
     const newBalance = Number(wallet.one_off_balance) - Number(invoice.amount)
@@ -594,7 +606,7 @@ export async function debitOneOffInvoice(customerId: string, invoiceId: string) 
       values (${customerId}, 'one_off', 'debit', ${invoice.amount}, ${newBalance}, ${invoiceId})
     `
 
-    return { invoiceId, newBalance, alreadyPaid: false }
+    return { invoiceId, newBalance, alreadyPaid: false, orderId: invoice.order_id, publicOrderNumber: invoice.public_order_number }
   })
 }
 
@@ -624,7 +636,7 @@ export async function chargeSubscriptionInvoice(customerId: string, invoiceId: s
     await tx`insert into wallets (customer_id) values (${customerId}) on conflict (customer_id) do nothing`
 
     const [invoice] = await tx`
-      select i.*, o.customer_id, o.is_subscription_order
+      select i.*, o.customer_id, o.is_subscription_order, o.id as order_id, o.public_order_number
       from invoices i
       join orders o on o.id = i.order_id
       where i.id = ${invoiceId}
@@ -632,7 +644,7 @@ export async function chargeSubscriptionInvoice(customerId: string, invoiceId: s
     `
 
     if (!invoice || invoice.customer_id !== customerId || !invoice.is_subscription_order) throw new Error('Invoice not found')
-    if (invoice.status === 'paid') return { amount: Number(invoice.amount), alreadyPaid: true }
+    if (invoice.status === 'paid') return { amount: Number(invoice.amount), alreadyPaid: true, orderId: invoice.order_id, publicOrderNumber: invoice.public_order_number }
 
     const amount = Number(invoice.amount)
     const { newBalance } = await debitWalletForInvoice(tx, customerId, invoiceId, amount, 'one_off')
@@ -641,7 +653,7 @@ export async function chargeSubscriptionInvoice(customerId: string, invoiceId: s
     await tx`update orders set status = 'paid', delivery_otp = ${deliveryOtp} where id = ${invoice.order_id}`
     await issueReferralRewards(tx, customerId, invoice.order_id, amount)
 
-    return { amount, newBalance, deliveryOtp, alreadyPaid: false }
+    return { amount, newBalance, deliveryOtp, alreadyPaid: false, orderId: invoice.order_id, publicOrderNumber: invoice.public_order_number }
   })
 }
 

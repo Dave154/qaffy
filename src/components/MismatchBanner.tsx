@@ -22,7 +22,7 @@ export default function MismatchBanner({ orders }: MismatchBannerProps) {
         <p className="text-sm font-bold text-amber-900">
           {mismatches.length === 1 ? 'Your order count was updated' : `${mismatches.length} order counts were updated`}
         </p>
-        <p className="mt-1 text-sm text-amber-800">{latestMismatch.detail}</p>
+        <p className="mt-1 min-w-0 truncate text-sm text-amber-800" title={latestMismatch.detail}>{latestMismatch.detail}</p>
         <a href="/orders?filter=Needs%20attention" className="mt-3 inline-flex items-center gap-1 text-sm font-semibold text-amber-900 hover:text-amber-950">
           Review affected orders <ArrowRight className="h-4 w-4" />
         </a>

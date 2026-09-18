@@ -9,6 +9,7 @@ import { data, useSearchParams } from 'react-router'
 import type { Route } from './+types/Orders'
 import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
 import { chargeSubscriptionInvoice, debitOneOffInvoice, InsufficientBalanceError } from '../../../lib/wallet.server'
+import { sendCustomerNotification } from '../../../lib/notifications.server'
 
 // Charges subscription overflow from the authenticated customer's subscription balance.
 // eslint-disable-next-line react-refresh/only-export-components
@@ -29,7 +30,10 @@ export async function action({ request }: Route.ActionArgs) {
       await debitOneOffInvoice(userData.user.id, invoiceId)
       return data({ ok: true }, { headers })
     }
-    await chargeSubscriptionInvoice(userData.user.id, invoiceId)
+    const result = await chargeSubscriptionInvoice(userData.user.id, invoiceId)
+    if (!result.alreadyPaid) {
+      await sendCustomerNotification({ eventKey: `invoice:${invoiceId}:paid`, customerId: userData.user.id, notificationType: 'payment_confirmed', orderId: result.orderId, payload: { title: 'Payment confirmed', body: `Your invoice for ${result.publicOrderNumber} has been paid.`, url: `/orders?order=${encodeURIComponent(result.publicOrderNumber)}`, tag: `order:${result.orderId}:payment` } })
+    }
     return data({ ok: true }, { headers })
   } catch (error) {
     if (error instanceof InsufficientBalanceError) return data({ ok: false, message: 'Your subscription balance is too low for the extra units.' }, { status: 402, headers })
@@ -141,7 +145,7 @@ export default function Orders() {
                   </div>
                   <p className="mt-2 text-sm font-medium text-slate-700">{order.title}</p>
                   <p className="mt-1 text-xs text-slate-500">{order.date}</p>
-                  {order.mismatch && <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-left"><p className="text-xs font-semibold text-amber-800">{order.mismatch.direction === 'over' ? 'Extra items confirmed' : 'Fewer items confirmed'}</p><p className="mt-1 text-xs text-amber-700">{order.mismatch.detail}</p></div>}
+                  {order.mismatch && <div className="mt-3 min-w-0 overflow-hidden rounded-xl border border-amber-200 bg-amber-50 p-3 text-left"><p className="text-xs font-semibold text-amber-800">{order.mismatch.direction === 'over' ? 'Extra items confirmed' : 'Fewer items confirmed'}</p><p className="mt-1 min-w-0 truncate text-xs text-amber-700" title={order.mismatch.detail}>{order.mismatch.detail}</p></div>}
                 </div>
 
                 <div className="shrink-0 sm:ml-2">

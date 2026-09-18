@@ -4,6 +4,7 @@ import { Search } from 'lucide-react'
 import { requireRole } from '../../../lib/auth.server'
 import { sql } from '../../../lib/db.server'
 import { useRef } from 'react'
+import { sendCustomerNotification } from '../../../lib/notifications.server'
 
 // eslint-disable-next-line react-refresh/only-export-components
 export async function action({ request }: { request: Request }) {
@@ -40,9 +41,21 @@ export async function action({ request }: { request: Request }) {
         where id in ${sql(orderIds)}
           and vendor_id = ${vendor.id}
           and status = 'paid'
-        returning id
+        returning id, customer_id, public_order_number
       `
       if (dispatchedOrders.length === 0) return data({ ok: false, message: 'No selected orders are ready for dispatch.' }, { status: 409, headers: auth.headers })
+      await Promise.all(dispatchedOrders.map((order) => sendCustomerNotification({
+        eventKey: `order:${order.id}:ready-for-delivery`,
+        customerId: order.customer_id,
+        notificationType: 'order_ready_for_delivery',
+        orderId: order.id,
+        payload: {
+          title: 'Your order is ready for delivery',
+          body: `Your clean laundry is on the way for ${order.public_order_number}.`,
+          url: `/orders?order=${encodeURIComponent(order.public_order_number)}`,
+          tag: `order:${order.id}:delivery`,
+        },
+      })))
     }
   } catch (error) {
     return data({ ok: false, message: error instanceof Error ? error.message : intent === 'dispatch' ? 'Orders could not be moved to delivery.' : 'Order claim failed.' }, { status: 400, headers: auth.headers })

@@ -101,6 +101,17 @@ export interface AppSettings {
   updated_at: string
 }
 
+export interface PushSubscription {
+  id: string
+  customer_id: string
+  endpoint: string
+  p256dh: string
+  auth: string
+  user_agent: string | null
+  created_at: string
+  last_used_at: string
+}
+
 export interface Plan {
   id: string
   name: string
@@ -334,6 +345,7 @@ export interface Database {
       referral_rewards: TableDef<ReferralReward>
       order_logistics_events: TableDef<OrderLogisticsEvent>
       admin_audit_events: TableDef<AdminAuditEvent>
+      push_subscriptions: TableDef<PushSubscription>
     }
     Views: Record<string, never>
     Functions: {

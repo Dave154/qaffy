@@ -3,5 +3,8 @@
     { "source": "/:path*", "has": [{ "type": "host", "value": "logistics.qaffy.com" }], "destination": "/logistics/:path*" },
     { "source": "/:path*", "has": [{ "type": "host", "value": "vendor.qaffy.com" }], "destination": "/vendor/:path*" },
     { "source": "/:path*", "has": [{ "type": "host", "value": "admin.qaffy.com" }], "destination": "/admin/:path*" }
+  ],
+  "crons": [
+    { "path": "/api/notifications/subscriptions", "schedule": "0 8 * * *" }
   ]
 }

@@ -13,6 +13,7 @@ import RouteLoadingScreen from './components/RouteLoadingScreen'
 
 export const links: Route.LinksFunction = () => [
   { rel: 'stylesheet', href: stylesheetUrl },
+  { rel: 'manifest', href: '/manifest.webmanifest' },
 ]
 
 export function Layout({ children }: { children: React.ReactNode }) {
@@ -21,6 +22,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="theme-color" content="#00b7d4" />
         <Meta />
         <Links />
       </head>

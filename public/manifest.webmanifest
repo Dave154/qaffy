@@ -1,0 +1,17 @@
+{
+  "name": "Qaffy",
+  "short_name": "Qaffy",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fafafa",
+  "theme_color": "#00b7d4",
+  "description": "Laundry pickup, care, and delivery by Qaffy",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

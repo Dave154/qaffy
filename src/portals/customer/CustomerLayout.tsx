@@ -9,6 +9,7 @@ import { CustomerStoreProvider } from './customer-store'
 import type { CustomerReferral, MismatchLine, PersistedOrderItem, PickupLocationOption } from './customer-store'
 import { useCustomerStore } from './customer-store-hook'
 import type { Invoice, Order, Payment, Plan, Subscription, Wallet, WalletTransaction } from '../../types/database.types'
+import { ensurePushSubscription, savePushSubscription } from '../../lib/push.client'
 
 const navItems = [
   { to: '/', label: 'Overview', icon: Home, end: true },
@@ -258,6 +259,29 @@ export default function CustomerLayout() {
     }
   }, [loaderData?.profile?.id, revalidator])
 
+  useEffect(() => {
+    if (!loaderData?.profile?.id || typeof window === 'undefined') return
+    if (/Electron|\bCode\//i.test(navigator.userAgent)) return
+    const promptKey = `qaffy-push-prompted:${loaderData.profile.id}`
+    if (window.sessionStorage.getItem(promptKey)) return
+
+    const setupFromInteraction = () => {
+      window.removeEventListener('pointerdown', setupFromInteraction)
+      window.removeEventListener('keydown', setupFromInteraction)
+      void ensurePushSubscription()
+        .then((subscription) => savePushSubscription(subscription))
+        .then(() => window.sessionStorage.setItem(promptKey, '1'))
+        .catch((error) => console.info('Push notification setup skipped:', error))
+    }
+
+    window.addEventListener('pointerdown', setupFromInteraction, { once: true })
+    window.addEventListener('keydown', setupFromInteraction, { once: true })
+    return () => {
+      window.removeEventListener('pointerdown', setupFromInteraction)
+      window.removeEventListener('keydown', setupFromInteraction)
+    }
+  }, [loaderData?.profile?.id])
+
   return (
     <CustomerStoreProvider
       key={`${loaderData?.profile?.id ?? 'customer'}:${loaderData?.profile?.name ?? ''}:${loaderData?.profile?.phone ?? ''}:${loaderData?.profile?.referral_code ?? ''}:${loaderData?.wallet?.updated_at ?? 'no-wallet'}:${loaderData?.subscription?.id ?? 'no-subscription'}:${loaderData?.subscription?.end_date ?? ''}:${(loaderData?.orders ?? []).map((order) => `${order.id}-${order.status}-${order.pickup_otp ?? ''}-${order.delivery_otp ?? ''}-${order.clothes_count_vendor ?? ''}`).join('|')}:${(loaderData?.payments ?? []).map((payment) => `${payment.id}-${payment.status}`).join('|')}:${(loaderData?.persistedReferrals ?? []).map((referral) => `${referral.id}-${referral.status}-${referral.rewardStatus ?? ''}`).join('|')}`}
@@ -337,14 +361,23 @@ export default function CustomerLayout() {
 
             <QaffyLogo className="scale-[0.82]" />
 
-            <NavLink
-              to="/settings"
-              type="button"
-              aria-label="Open profile"
-              className="flex h-9 w-9 items-center justify-center rounded-lg border border-[#e7e7e7] bg-white text-slate-600"
-            >
-              <UserCircle2 className="h-5 w-5" />
-            </NavLink>
+            <div className="flex items-center gap-2">
+              <NavLink
+                to="/orders?filter=Needs%20attention"
+                aria-label="Open notifications"
+                className="relative flex h-9 w-9 items-center justify-center rounded-lg border border-[#e7e7e7] bg-white text-slate-600"
+              >
+                <Bell className="h-4 w-4" />
+                {mismatchCount > 0 && <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full border-2 border-white bg-[#f59e0b] px-0.5 text-[9px] font-bold text-white">{mismatchCount}</span>}
+              </NavLink>
+              <NavLink
+                to="/settings"
+                aria-label="Open profile"
+                className="flex h-9 w-9 items-center justify-center rounded-lg border border-[#e7e7e7] bg-white text-slate-600"
+              >
+                <UserCircle2 className="h-5 w-5" />
+              </NavLink>
+            </div>
           </div>
         </header>
 
@@ -395,6 +428,10 @@ export default function CustomerLayout() {
               </nav>
 
               <PlanSummary />
+              <button type="button" onClick={() => { closeMobileMenu(); setLogoutConfirmationOpen(true) }} className="mt-3 flex h-10 w-full items-center gap-3 rounded-[10px] px-3 text-sm font-medium text-red-600 hover:bg-red-50 hover:text-red-700">
+                <LogOut className="h-4 w-4 text-red-600" />
+                <span>Log out</span>
+              </button>
             </aside>
           </div>
         )}

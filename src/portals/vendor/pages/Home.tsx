@@ -7,6 +7,7 @@ import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../li
 import { requireRole } from '../../../lib/auth.server'
 import { finalizeVendorOrder } from '../../../lib/wallet.server'
 import { toast } from '../../../lib/toast'
+import { sendCustomerNotification } from '../../../lib/notifications.server'
 
 // eslint-disable-next-line react-refresh/only-export-components
 export async function action({ request }: Route.ActionArgs) {
@@ -61,6 +62,48 @@ export async function action({ request }: Route.ActionArgs) {
 
   try {
     const result = await finalizeVendorOrder(orderId, vendorAuth.profile.id, receivedItems, addedItems, mismatchDetail)
+    if (result.mismatchDirection) {
+      await sendCustomerNotification({
+        eventKey: `mismatch:${orderId}:confirmed`,
+        customerId: result.customerId,
+        notificationType: 'mismatch_confirmed',
+        orderId,
+        payload: {
+          title: 'Order count updated',
+          body: `A different item count was confirmed for ${result.publicOrderNumber}. Review the updated invoice.`,
+          url: `/orders?order=${encodeURIComponent(result.publicOrderNumber)}`,
+          tag: `order:${orderId}:mismatch`,
+        },
+      })
+    }
+    if (result.invoiceStatus === 'unpaid') {
+      await sendCustomerNotification({
+        eventKey: `invoice:${result.invoiceId}:payment-required`,
+        customerId: result.customerId,
+        notificationType: 'payment_required',
+        orderId,
+        payload: {
+          title: 'Payment required',
+          body: `Payment is needed before ${result.publicOrderNumber} can be delivered.`,
+          url: `/invoice?order=${encodeURIComponent(result.publicOrderNumber)}`,
+          tag: `order:${orderId}:payment`,
+        },
+      })
+    }
+    if (result.invoiceStatus === 'paid') {
+      await sendCustomerNotification({
+        eventKey: `invoice:${result.invoiceId}:paid`,
+        customerId: result.customerId,
+        notificationType: 'payment_confirmed',
+        orderId,
+        payload: {
+          title: 'Payment confirmed',
+          body: `Your invoice for ${result.publicOrderNumber} has been paid.`,
+          url: `/orders?order=${encodeURIComponent(result.publicOrderNumber)}`,
+          tag: `order:${orderId}:payment`,
+        },
+      })
+    }
     return data({ ok: true, amount: result.amount }, { headers })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Order review could not be submitted.'
@@ -227,7 +270,7 @@ function OrderReviewDialog({ order, received, receivedTotal, hasMismatch, notes,
 
       <section className="mt-6 rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5"><div className="flex items-center justify-between gap-3"><div><div className="flex items-center gap-2"><PackageCheck className="h-4 w-4 text-brand-primary" /><h4 className="font-bold text-slate-900">Items and service</h4></div><p className="mt-1 text-sm text-slate-500">Customer declared {customerItemCount} {customerItemCount === 1 ? 'item' : 'items'}{isPreClaim ? '' : `; vendor received ${receivedTotal} ${receivedTotal === 1 ? 'item' : 'items'}` }.</p></div><span className="rounded-full bg-brand-soft px-2.5 py-1 text-xs font-semibold text-brand-primary">{order.items.length} item types</span></div><div className="mt-4 overflow-x-auto"><table className="w-full min-w-155 text-left"><thead><tr className="border-b border-slate-200 text-[10px] uppercase tracking-[0.14em] text-slate-500"><th className="pb-3 font-semibold">Category</th><th className="pb-3 font-semibold">Service</th><th className="pb-3 font-semibold">Customer qty</th>{!isPreClaim && <th className="pb-3 font-semibold">Received</th>}<th className="pb-3 text-right font-semibold">Unit price</th><th className="pb-3 text-right font-semibold">Line total</th></tr></thead><tbody>{order.items.map((item) => <tr key={item.id} className="border-b border-slate-100 last:border-0"><td className="py-3 text-sm font-semibold text-slate-800">{item.name}</td><td className="py-3 text-sm text-slate-600">{serviceLabels[item.service]}</td><td className="py-3 text-sm text-slate-600">{item.quantity}</td>{!isPreClaim && <td className="py-3"><input type="number" min="0" value={received[item.id] ?? item.quantity} disabled={!canEdit} onChange={(event) => onReceivedChange(item.id, Math.max(0, Number(event.target.value) || 0))} className="h-9 w-20 rounded-lg border border-slate-200 px-2 text-sm font-semibold outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus disabled:bg-slate-100 disabled:text-slate-500" aria-label={`Received ${item.name}`} /></td>}<td className="py-3 text-right text-sm text-slate-600">₦{item.unitPrice.toLocaleString()}</td><td className="py-3 text-right text-sm font-semibold text-brand-primary">₦{(item.quantity * item.unitPrice).toLocaleString()}</td></tr>)}</tbody></table></div>{!isPreClaim && <div className="mt-4 grid gap-3 sm:grid-cols-3"><Detail label="Customer items" value={customerItemCount} /><Detail label="Received items" value={receivedTotal} /><Detail label="Item types" value={order.items.length + addedItems.length} /></div>}</section>
 
-      <section className="mt-6 rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5"><h4 className="font-bold text-slate-900">Notes and verification</h4><Detail label="Customer notes" value={order.notes || 'No notes added'} />{!isPreClaim && canEdit && hasMismatch && <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 shadow-sm"><p className="font-semibold text-amber-800">Mismatch detected</p><p className="mt-1.5 text-sm text-amber-700">Add itemized details for Admin review.</p><textarea value={notes} onChange={(event) => onNotesChange(event.target.value)} placeholder="e.g. 1 red shirt missing" className="mt-3 min-h-24 w-full rounded-xl border border-amber-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" /></div>}{order.mismatches.length > 0 && <div className="mt-4 space-y-2">{order.mismatches.map((mismatch) => <div key={mismatch.id} className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm"><strong className="text-amber-800">{mismatch.direction === 'over' ? 'Overage' : 'Shortage'}</strong><span className="ml-2 text-amber-700">{mismatch.detail}</span><p className="mt-1 text-xs text-amber-600">{formattedDate(mismatch.createdAt)}</p></div>)}</div>}</section>
+      <section className="mt-6 rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5"><h4 className="font-bold text-slate-900">Notes and verification</h4><Detail label="Customer notes" value={order.notes || 'No notes added'} />{!isPreClaim && canEdit && hasMismatch && <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 shadow-sm"><p className="font-semibold text-amber-800">Mismatch detected</p><p className="mt-1.5 text-sm text-amber-700">Describe what changed so the customer can understand the updated count.</p><textarea value={notes} onChange={(event) => onNotesChange(event.target.value)} placeholder="e.g. 1 red shirt missing" className="mt-3 min-h-24 w-full rounded-xl border border-amber-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" /></div>}{order.mismatches.length > 0 && <div className="mt-4 space-y-2">{order.mismatches.map((mismatch) => <div key={mismatch.id} className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm"><strong className="text-amber-800">{mismatch.direction === 'over' ? 'Overage' : 'Shortage'}</strong><span className="ml-2 text-amber-700">{mismatch.detail}</span><p className="mt-1 text-xs text-amber-600">{formattedDate(mismatch.createdAt)}</p></div>)}</div>}</section>
 
       {(isPreClaim || canEdit) && <button type="button" onClick={isPreClaim ? onClaim : onSave} disabled={saving || (!isPreClaim && hasMismatch && !notes.trim())} className="mt-6 w-full rounded-2xl bg-brand-primary px-4 py-3 font-semibold text-white shadow-sm transition hover:bg-brand-primary-hover hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50">{saving ? (isPreClaim ? 'Claiming...' : 'Confirming count...') : isPreClaim ? 'Claim order' : 'Confirm final count'}</button>}
     </div>
