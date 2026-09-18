@@ -19,7 +19,6 @@ type CustomerPlan = {
   weeklyLimit: number
   service: string
   description: string
-  benefits: string[]
   featured: boolean
 }
 
@@ -45,7 +44,6 @@ export async function loader({ request }: Route.LoaderArgs) {
       weeklyLimit: plan.weekly_limit,
       service: 'Laundry care',
       description: `${plan.weekly_limit} clothes per week on a ${plan.type} plan.`,
-      benefits: ['Professional laundry care', 'Scheduled pickup', 'Qaffy order tracking'],
       featured: index === 1,
     })),
   }, { headers, status: 200 })
@@ -122,7 +120,6 @@ export default function Plans() {
         weeklyLimit: activePlan.weekly_limit,
         service: 'Laundry care',
         description: 'Your active Qaffy subscription.',
-        benefits: [],
         featured: false,
       }
     : null
@@ -199,8 +196,7 @@ export default function Plans() {
             {plan.featured && <span className="absolute right-5 top-5 rounded-full bg-brand-strong px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-white">Popular</span>}
             <div className="pr-16"><p className="text-sm font-semibold text-brand-strong">{plan.name}</p><div className="mt-3 flex items-baseline gap-1.5"><span className="text-3xl font-bold text-[#121212]">{formatPrice(plan.price)}</span><span className="text-sm text-slate-500">/{plan.billingPeriod}</span></div></div>
             <p className="mt-4 min-h-10 text-sm leading-5 text-slate-600">{plan.description}</p>
-            <div className="mt-5 grid gap-2 border-y border-[#eeeeee] py-4 text-sm"><div className="flex items-center justify-between"><span className="text-slate-500">Weekly limit</span><span className="font-semibold text-slate-900">{plan.weeklyLimit} clothes</span></div><div className="flex items-center justify-between"><span className="text-slate-500">Service</span><span className="font-semibold text-slate-900">{plan.service}</span></div></div>
-            <ul className="mt-5 flex-1 space-y-3">{plan.benefits.map((benefit) => <li key={benefit} className="flex items-start gap-2 text-sm text-slate-700"><span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#d8f3e9] text-[#418d87]"><Check className="h-3 w-3" /></span><span>{benefit}</span></li>)}</ul>
+            <div className="mt-5 grid gap-2 border-y border-[#eeeeee] py-4 text-sm"><div className="flex items-center justify-between"><span className="text-slate-500">Weekly limit</span><span className="font-semibold text-slate-900">{plan.weeklyLimit} clothes</span></div></div>
             <button type="button" disabled={Boolean(activePlan) || isSubscribing} onClick={() => { fetcher.submit({ planId: plan.id }, { method: 'post' }); }} className={`mt-6 flex w-full items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold transition ${isCurrent ? 'cursor-default bg-[#eef9f7] text-[#418d87]' : activePlan ? 'cursor-not-allowed border border-slate-200 bg-slate-50 text-slate-400' : plan.featured ? 'bg-brand-strong text-white hover:bg-brand-strong-hover' : 'border border-brand-border bg-white text-brand-strong hover:bg-brand-soft'}`}>{isCurrent ? <>Current plan <Check className="h-4 w-4" /></> : activePlan ? 'Current subscription active' : isSubscribing ? 'Opening secure checkout...' : <>Choose plan <ChevronRight className="h-4 w-4" /></>}</button>
           </article>
         })}

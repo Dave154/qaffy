@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { data, NavLink, Outlet, redirect, useLoaderData, useLocation, useNavigate, useRevalidator } from 'react-router'
+import { data, Form, NavLink, Outlet, redirect, useLoaderData, useLocation, useNavigate, useRevalidator } from 'react-router'
 import type { Route } from './+types/CustomerLayout'
 import { Home, LayoutGrid, ReceiptText, FileText, Sparkles, Settings, Menu, X, UserCircle2, Search, Bell, ClipboardList, LogOut } from 'lucide-react'
 import QaffyLogo from '../../components/QaffyLogo'
@@ -439,10 +439,10 @@ export default function CustomerLayout() {
         <div className="hidden h-[70px] items-center justify-between gap-4 px-7 pt-[22px] lg:flex">
           <h2 className="text-2xl font-bold tracking-tight text-[#121212]">{pageTitle}</h2>
           <div className="flex items-center gap-4">
-          <NavLink to="/orders" className="flex h-12 w-[288px] items-center gap-2 rounded-full border border-[#f2f3f3] bg-white px-4 text-sm text-[#505959]">
+          <Form method="get" action="/orders" className="flex h-12 w-[288px] items-center gap-2 rounded-full border border-[#f2f3f3] bg-white px-4 text-sm text-[#505959]">
             <Search className="h-3.5 w-3.5 text-[#8e9a9a]" />
-            <span>Search orders</span>
-          </NavLink>
+            <input name="search" type="search" placeholder="Search orders" aria-label="Search orders" className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-[#8e9a9a]" />
+          </Form>
           <NavLink to="/orders?filter=Needs%20attention" aria-label="Open notifications" className="relative flex h-10 w-10 items-center justify-center rounded-full border border-[#f2f3f3] bg-white text-[#121212]">
             <Bell className="h-4 w-4" />
             {mismatchCount > 0 && <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full border-2 border-white bg-[#f59e0b] px-1 text-[10px] font-bold text-white">{mismatchCount}</span>}

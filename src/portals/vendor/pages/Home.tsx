@@ -412,7 +412,7 @@ export default function Home() {
       </section>
 
       <section className="rounded-[10px] border border-[#e9e9e9] bg-white">
-        <div className="flex flex-col gap-3 border-b border-[#ededed] p-4 md:flex-row md:items-center md:justify-between md:p-5">
+        <div className="flex items-center justify-between gap-3 border-b border-[#ededed] p-4 md:p-5">
           <div>
             <h3 className="text-lg font-bold text-slate-900">Orders needing attention</h3>
           </div>
@@ -426,7 +426,30 @@ export default function Home() {
             </Link>
           </div>
         </div>
-        <div className="overflow-x-auto p-4 md:p-5">
+        <div className="space-y-3 p-4 md:hidden">
+          {visibleOrders.map((order) => (
+            <article key={order.id} className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-bold text-slate-900">{order.customer}</p>
+                  <p className="mt-1 truncate text-xs text-slate-400">{order.publicOrderNumber}</p>
+                </div>
+                <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold ${statusStyles[order.status]}`}>{order.status}</span>
+              </div>
+              <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 border-y border-slate-100 py-3 text-xs min-[520px]:grid-cols-4">
+                <div><dt className="text-slate-400">Order type</dt><dd className="mt-0.5 truncate font-medium text-slate-700">{orderTypeLabels[order.orderType]}</dd></div>
+                <div><dt className="text-slate-400">Items</dt><dd className="mt-0.5 font-medium text-slate-700">{order.clothesCountCustomer}</dd></div>
+                <div className="col-span-2 min-[520px]:col-span-1"><dt className="text-slate-400">Pickup location</dt><dd className="mt-0.5 truncate font-medium text-slate-700">{order.location}</dd></div>
+                <div className="col-span-2 min-[520px]:col-span-1"><dt className="text-slate-400">Picked up</dt><dd className="mt-0.5 truncate font-medium text-slate-700">{order.collectedAt}</dd></div>
+              </dl>
+              <div className="mt-3 flex justify-end">
+                <button type="button" onClick={() => order.orderStatus === 'picked_up' ? claimOrder(order.id) : openOrderDetails(order)} disabled={fetcher.state !== 'idle'} className="rounded-[7px] border border-[#dedede] px-3 py-2 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary disabled:cursor-wait disabled:opacity-60">{order.orderStatus === 'picked_up' ? fetcher.state !== 'idle' ? 'Claiming...' : 'Claim' : 'View details'}</button>
+              </div>
+            </article>
+          ))}
+          {visibleOrders.length === 0 && <p className="py-8 text-center text-sm text-slate-500">{dateRange === 'Today' ? 'No orders today.' : 'No orders in this date range.'}</p>}
+        </div>
+        <div className="hidden overflow-x-auto p-4 md:block md:p-5">
           <table className="w-full min-w-[1240px] table-fixed text-left">
             <thead>
               <tr className="border-b border-[#ededed] text-[10px] uppercase tracking-[0.16em] text-slate-400">

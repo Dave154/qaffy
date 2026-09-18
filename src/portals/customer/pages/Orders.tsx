@@ -48,6 +48,7 @@ export default function Orders() {
   const [selectedOrder, setSelectedOrder] = useState<CustomerOrder | null>(null)
   const [searchParams, setSearchParams] = useSearchParams()
   const [activeFilter, setActiveFilter] = useState(() => searchParams.get('filter') ?? 'All orders')
+  const searchQuery = (searchParams.get('search') ?? '').trim().toLowerCase()
   const requestedOrderId = searchParams.get('order')
   const requestedOrder = requestedOrderId ? orders.find((order) => order.publicOrderNumber === requestedOrderId || order.id === requestedOrderId) ?? null : null
   const orderDetails = requestedOrder ?? selectedOrder
@@ -62,11 +63,18 @@ export default function Orders() {
   }
 
   const filteredOrders = orders.filter((order) => {
-    if (activeFilter === 'Active') return order.status !== 'Delivered'
-    if (activeFilter === 'Delivered') return order.status === 'Delivered'
-    if (activeFilter === 'Pending payment') return order.paymentStatus === 'Pending'
-    if (activeFilter === 'Needs attention') return Boolean(order.mismatch) && order.paymentStatus === 'Pending'
-    return true
+    const matchesFilter = activeFilter === 'Active'
+      ? order.status !== 'Delivered'
+      : activeFilter === 'Delivered'
+        ? order.status === 'Delivered'
+        : activeFilter === 'Pending payment'
+          ? order.paymentStatus === 'Pending'
+          : activeFilter === 'Needs attention'
+            ? Boolean(order.mismatch) && order.paymentStatus === 'Pending'
+            : true
+    if (!matchesFilter) return false
+    if (!searchQuery) return true
+    return [order.publicOrderNumber, order.title, order.pickup, order.status].some((value) => value.toLowerCase().includes(searchQuery))
   })
 
   const stats = [

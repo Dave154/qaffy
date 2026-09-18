@@ -220,7 +220,35 @@ export default function Orders() {
           </div>
         </div>
 
-        <div className="overflow-x-auto p-4 md:p-5">
+        <div className="p-4 md:hidden">
+          {fetcher.data && !fetcher.data.ok && 'message' in fetcher.data && <p role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm font-medium text-red-700">{String(fetcher.data.message)}</p>}
+          {fetcher.data?.ok && <p role="status" className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm font-medium text-emerald-700">Selected orders dispatched successfully.</p>}
+          <div className="space-y-3">
+            {filteredOrders.map((order) => (
+              <article key={order.id} className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-bold text-slate-900">{order.publicOrderNumber}</p>
+                    <p className="mt-1 truncate text-sm text-slate-600">{order.customer}</p>
+                  </div>
+                  <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold ${statusStyle[order.label]}`}>{order.label}</span>
+                </div>
+                <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
+                  <div><dt className="text-slate-400">Service</dt><dd className="mt-0.5 truncate font-medium text-slate-700">{orderTypeLabels[order.order_type]}</dd></div>
+                  <div><dt className="text-slate-400">Items</dt><dd className="mt-0.5 font-medium text-slate-700">{order.clothes_count_customer}</dd></div>
+                  <div className="col-span-2"><dt className="text-slate-400">Pickup location</dt><dd className="mt-0.5 truncate font-medium text-slate-700">{order.location}</dd></div>
+                  <div className="col-span-2"><dt className="text-slate-400">Picked up</dt><dd className="mt-0.5 truncate font-medium text-slate-700">{formatDate(order.picked_up_date)}</dd></div>
+                </dl>
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3">
+                  {order.status === 'paid' ? <label className="flex items-center gap-2 text-xs font-semibold text-slate-600"><input type="checkbox" checked={selectedOrderIds.includes(order.id)} onChange={() => toggleOrderSelection(order.id)} aria-label={`Select ${order.publicOrderNumber}`} className="h-4 w-4 accent-brand-primary" />Select for dispatch</label> : <span />}
+                  {order.status === 'picked_up' ? <button type="button" onClick={() => fetcher.submit({ intent: 'claim', orderId: order.id }, { method: 'post' })} disabled={fetcher.state !== 'idle'} className="rounded-[7px] border border-[#dedede] px-3 py-2 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary disabled:cursor-wait disabled:opacity-60">{fetcher.state !== 'idle' ? 'Claiming...' : 'Claim'}</button> : <Link to={`/vendor?orderId=${encodeURIComponent(order.id)}&returnTo=orders`} className="rounded-[7px] border border-[#dedede] px-3 py-2 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary">View details</Link>}
+                </div>
+              </article>
+            ))}
+            {filteredOrders.length === 0 && <p className="py-8 text-center text-sm text-slate-500">No matching orders.</p>}
+          </div>
+        </div>
+        <div className="hidden overflow-x-auto p-4 md:block md:p-5">
           {fetcher.data && !fetcher.data.ok && 'message' in fetcher.data && <p role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm font-medium text-red-700">{String(fetcher.data.message)}</p>}
           {fetcher.data?.ok && <p role="status" className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm font-medium text-emerald-700">Selected orders dispatched successfully.</p>}
           {selectableOrders.length > 0 && <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-brand-border bg-brand-soft px-3 py-2.5">
