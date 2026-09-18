@@ -12,7 +12,7 @@ import { Toaster } from 'sonner'
 import RouteLoadingScreen from './components/RouteLoadingScreen'
 
 const defaultTitle = 'Qaffy | Fresh laundry, zero hassle'
-const defaultDescription = 'Qaffy picks up, washes, and delivers your laundry with dependable care.'
+const defaultDescription = 'Reliable semester laundry for Nile University students, with free campus pickup and delivery.'
 
 function getSiteOrigin() {
   const configuredOrigin = import.meta.env.VITE_SITE_URL?.trim()
