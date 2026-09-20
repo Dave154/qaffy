@@ -689,6 +689,14 @@ The first enables Realtime for wallets, wallet transactions, and subscriptions. 
 - Required migrations are `supabase/migrations/20260918100000_push_subscriptions.sql` and `supabase/migrations/20260918110000_notification_events.sql`.
 - Required configuration is `VITE_VAPID_PUBLIC_KEY` in the browser build, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and `VAPID_SUBJECT` on the server, and `CRON_SECRET` for the protected subscription reminder route. Web Push is unavailable in the VS Code embedded browser; use Chrome or Edge.
 
+### Customer PWA installation (2026-09-20)
+
+- Customer PWA installation is implemented only in the customer portal. `src/components/PwaInstallLink.tsx` renders a compact install action above the mobile sidebar's Current plan section and in the desktop customer sidebar.
+- `src/lib/pwa-install.client.ts` captures `beforeinstallprompt` at client startup, retains the deferred prompt for the sidebar, registers `public/push-sw.js`, and tracks the real `appinstalled` event. A missing browser prompt must not be treated as proof that the app is installed.
+- `public/manifest.webmanifest` now declares the root `id` and `scope` plus square 192px and 512px Qaffy icon assets. The push service worker has a pass-through GET fetch handler and continues to own Web Push behavior.
+- The install action uses a brief pressed/loading state and disappears only in standalone mode or after installation. Do not add manual-install instructions to the customer UI; browser prompt availability remains browser-controlled.
+- To test after manifest or service-worker changes, unregister the old worker, clear site data for the origin, close existing Qaffy tabs, reopen in Chrome or Edge, and hard-refresh. The VS Code embedded browser is not a reliable PWA install target.
+
 ### Suggested Continuation Workflow
 
 - Start by checking `git status --short` so existing user work is not overwritten.

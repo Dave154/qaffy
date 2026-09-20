@@ -1,5 +1,6 @@
 import { ArrowRight, ShieldCheck } from 'lucide-react'
 import { useMemo, useState } from 'react'
+import { calculatePaystackCharge, calculatePaystackFee } from '../../../lib/paystack'
 
 type TopUpModalProps = {
   currentBalance: number
@@ -25,6 +26,8 @@ export default function TopUpModal({ currentBalance, subscriptionBalance, pendin
   const [amount, setAmount] = useState<number>(suggestedAmount)
   const appliedToDebt = Math.min(Math.max(amount, 0), negativeBalance)
   const walletCredit = Math.max(0, amount - negativeBalance)
+  const fee = calculatePaystackFee(Math.max(0, amount))
+  const totalToPay = calculatePaystackCharge(Math.max(0, amount))
 
   const handleTopUp = async () => {
     if (amount < 1000) return
@@ -85,7 +88,9 @@ export default function TopUpModal({ currentBalance, subscriptionBalance, pendin
           </div>
 
           <div className="mt-4 grid gap-2 rounded-2xl border border-slate-200 bg-white p-3 text-sm">
-            <div className="flex items-center justify-between text-slate-600"><span>Amount to pay</span><span className="font-semibold text-slate-900">₦{Math.max(0, amount).toLocaleString()}</span></div>
+            <div className="flex items-center justify-between text-slate-600"><span>Wallet credit</span><span className="font-semibold text-slate-900">₦{Math.max(0, amount).toLocaleString()}</span></div>
+            <div className="flex items-center justify-between text-slate-600"><span>Transaction fee</span><span className="font-semibold text-slate-900">₦{fee.toLocaleString()}</span></div>
+            <div className="flex items-center justify-between border-t border-slate-100 pt-2 text-slate-600"><span>Total to pay</span><span className="font-semibold text-slate-900">₦{totalToPay.toLocaleString()}</span></div>
             {negativeBalance > 0 && <div className="flex items-center justify-between text-slate-600"><span>Clears subscription debt</span><span className="font-semibold text-slate-900">₦{appliedToDebt.toLocaleString()}</span></div>}
             <div className="flex items-center justify-between border-t border-slate-100 pt-2 text-slate-600"><span>Added to wallet</span><span className="font-semibold text-emerald-700">₦{walletCredit.toLocaleString()}</span></div>
           </div>

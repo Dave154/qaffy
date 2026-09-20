@@ -14,6 +14,7 @@ import BubblyBackground from '../../../components/BubblyBackground'
 import PlanEndingBanner from '../../../components/PlanEndingBanner'
 import MismatchBanner from '../../../components/MismatchBanner'
 import { toast } from '../../../lib/toast'
+import { calculatePaystackCharge, calculatePaystackFee } from '../../../lib/paystack'
 
 // Initializes Paystack top-ups and credits the wallet only after server-side verification.
 // eslint-disable-next-line react-refresh/only-export-components
@@ -34,8 +35,10 @@ export async function action({ request }: Route.ActionArgs) {
 
   const secretKey = process.env.PAYSTACK_SECRET_KEY
   if (!secretKey) return data({ ok: false, message: 'Paystack is not configured.' }, { status: 503, headers })
+  const feeAmount = calculatePaystackFee(amount)
+  const chargedAmount = calculatePaystackCharge(amount)
   const paymentReference = `topup_${crypto.randomUUID()}`
-  const { error: paymentError } = await serverSupabase.from('payments').insert({ customer_id: userData.user.id, provider: 'paystack', reference: paymentReference, amount, balance_type: 'one_off', status: 'pending' })
+  const { error: paymentError } = await serverSupabase.from('payments').insert({ customer_id: userData.user.id, provider: 'paystack', reference: paymentReference, amount, charged_amount: chargedAmount, fee_amount: feeAmount, balance_type: 'one_off', status: 'pending' })
   if (paymentError) {
     console.error('Paystack pending payment insert failed:', paymentError)
     return data({ ok: false, message: 'The payment could not be recorded. Please check that the latest database migrations are applied.' }, { status: 500, headers })
@@ -44,7 +47,7 @@ export async function action({ request }: Route.ActionArgs) {
   const initializationResponse = await fetch('https://api.paystack.co/transaction/initialize', {
     method: 'POST',
     headers: { Authorization: `Bearer ${secretKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: userData.user.email, amount: Math.round(amount * 100), reference: paymentReference, callback_url: new URL('/', request.url).toString() }),
+    body: JSON.stringify({ email: userData.user.email, amount: Math.round(chargedAmount * 100), reference: paymentReference, callback_url: new URL('/', request.url).toString() }),
   })
   const initialization = await initializationResponse.json() as { status?: boolean; message?: string; data?: { authorization_url?: string; reference?: string } }
   if (!initializationResponse.ok || !initialization.status || !initialization.data?.authorization_url) {
@@ -55,7 +58,7 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function Home() {
-  const { balance, promotionalBalance, subscriptionBalance, customerName, customerId, referralCode, orders, subscription, subscriptionEndDate, pendingTopUp } = useCustomerStore()
+  const { balance, subscriptionBalance, customerName, customerId, referralCode, orders, subscription, subscriptionEndDate, pendingTopUp } = useCustomerStore()
   const [searchParams, setSearchParams] = useSearchParams()
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false)
   const [isTopUpModalOpen, setIsTopUpModalOpen] = useState(() => searchParams.get('topup') === '1')
@@ -191,7 +194,6 @@ export default function Home() {
           </div>
 
           {subscriptionBalance < 0 && <p className="mt-2 text-sm font-medium text-brand-primary">Subscription debt: ₦{Math.abs(subscriptionBalance).toLocaleString()}</p>}
-          {promotionalBalance > 0 && <p className="mt-2 text-sm font-medium text-emerald-700">Referral credit: ₦{promotionalBalance.toLocaleString()}</p>}
 
           <div className="mt-6 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-slate-500">
             <span>Active orders <strong className="ml-1 text-slate-800">{activeOrderCount}</strong></span>

@@ -1,6 +1,7 @@
 import { sql } from '@/lib/db.server'
 import type { WalletBalanceType } from '@/types/database.types'
 import type { TransactionSql } from 'postgres'
+import { sendCustomerNotification } from './notifications.server'
 
 class InsufficientBalanceError extends Error {
   constructor() {
@@ -147,7 +148,9 @@ async function debitWalletForInvoice(tx: TransactionSql, customerId: string, inv
   return { newBalance, promotionalBalance }
 }
 
-async function issueReferralRewards(tx: TransactionSql, customerId: string, orderId: string, invoiceAmount: number) {
+type ReferralRewardRecipient = { profileId: string; rewardId: string; amount: number }
+
+async function issueReferralRewards(tx: TransactionSql, customerId: string, orderId: string, invoiceAmount: number): Promise<ReferralRewardRecipient[]> {
   const [referral] = await tx`
     select r.id, r.referrer_id
     from referrals r
@@ -156,7 +159,7 @@ async function issueReferralRewards(tx: TransactionSql, customerId: string, orde
     limit 1
     for update
   `
-  if (!referral) return false
+  if (!referral) return []
 
   const [campaign] = await tx`
     select *
@@ -167,7 +170,7 @@ async function issueReferralRewards(tx: TransactionSql, customerId: string, orde
     order by starts_at desc nulls last, created_at desc
     limit 1
   `
-  if (!campaign || invoiceAmount < Number(campaign.minimum_order_amount)) return false
+  if (!campaign || invoiceAmount < Number(campaign.minimum_order_amount)) return []
 
   if (campaign.max_rewards_per_referrer !== null) {
     const [rewardCount] = await tx`
@@ -184,7 +187,7 @@ async function issueReferralRewards(tx: TransactionSql, customerId: string, orde
         set status = 'rejected', rejection_reason = 'Referrer reward limit reached', updated_at = now()
         where id = ${referral.id}
       `
-      return false
+      return []
     }
   }
 
@@ -200,6 +203,7 @@ async function issueReferralRewards(tx: TransactionSql, customerId: string, orde
   ].sort((left, right) => left.profileId.localeCompare(right.profileId))
   const expiresAt = new Date(Date.now() + Number(campaign.reward_expiry_days) * 24 * 60 * 60 * 1000).toISOString()
 
+  const rewardedRecipients: ReferralRewardRecipient[] = []
   for (const recipient of recipients) {
     await tx`insert into wallets (customer_id) values (${recipient.profileId}) on conflict (customer_id) do nothing`
     const [wallet] = await tx`select promotional_balance from wallets where customer_id = ${recipient.profileId} for update`
@@ -223,15 +227,30 @@ async function issueReferralRewards(tx: TransactionSql, customerId: string, orde
       set status = 'issued', wallet_transaction_id = ${transaction.id}, issued_at = now(), updated_at = now()
       where id = ${reward.id}
     `
+    rewardedRecipients.push({ profileId: recipient.profileId, rewardId: reward.id, amount: recipient.amount })
   }
 
   await tx`update referrals set status = 'rewarded', updated_at = now() where id = ${referral.id}`
-  return true
+  return rewardedRecipients
+}
+
+async function sendReferralRewardNotifications(recipients: ReferralRewardRecipient[]) {
+  await Promise.all(recipients.map((recipient) => sendCustomerNotification({
+    eventKey: `referral-reward:${recipient.rewardId}:issued`,
+    customerId: recipient.profileId,
+    notificationType: 'referral_reward_issued',
+    payload: {
+      title: 'Referral reward added',
+      body: `You earned ₦${recipient.amount.toLocaleString()} in referral credit.`,
+      url: '/settings#referrals',
+      tag: `referral-reward:${recipient.rewardId}`,
+    },
+  })))
 }
 
 /** Debits the customer's wallet, marks the invoice paid, and issues the delivery OTP — all in one transaction. */
 export async function payFromWallet(customerId: string, invoiceId: string, balanceType: WalletBalanceType) {
-  return sql.begin(async (tx) => {
+  const result = await sql.begin(async (tx) => {
     const [invoice] = await tx`
       select i.*, o.customer_id, o.id as order_id, o.public_order_number
       from invoices i
@@ -250,10 +269,12 @@ export async function payFromWallet(customerId: string, invoiceId: string, balan
 
     await tx`update invoices set status = 'paid', paid_at = now() where id = ${invoiceId}`
     await tx`update orders set status = 'paid', delivery_otp = ${deliveryOtp} where id = ${invoice.order_id}`
-    await issueReferralRewards(tx, customerId, invoice.order_id, Number(invoice.amount))
+    const referralRewardRecipients = await issueReferralRewards(tx, customerId, invoice.order_id, Number(invoice.amount))
 
-    return { invoiceId, orderId: invoice.order_id, publicOrderNumber: invoice.public_order_number, deliveryOtp, newBalance }
+    return { invoiceId, orderId: invoice.order_id, publicOrderNumber: invoice.public_order_number, deliveryOtp, newBalance, referralRewardRecipients }
   })
+  await sendReferralRewardNotifications(result.referralRewardRecipients ?? [])
+  return result
 }
 
 export async function finalizeVendorOrder(
@@ -263,7 +284,7 @@ export async function finalizeVendorOrder(
   addedItems: Array<{ categoryName: string; service: 'wash' | 'iron' | 'wash_iron'; quantity: number }>,
   mismatchDetail: string,
 ) {
-  return sql.begin(async (tx) => {
+  const result = await sql.begin(async (tx) => {
     const [order] = await tx`
       select o.*, v.id as vendor_id
       from orders o
@@ -345,6 +366,8 @@ export async function finalizeVendorOrder(
     const mismatchDirection = finalCount > Number(order.clothes_count_customer) ? 'over' : finalCount < Number(order.clothes_count_customer) ? 'under' : null
     if (mismatchDirection && !mismatchDetail.trim()) throw new Error('Mismatch details are required when the final count changes')
 
+    const referralRewardRecipients: ReferralRewardRecipient[] = []
+
     let invoiceAmount = Math.round(finalAmount * 100) / 100
     if (order.is_subscription_order) {
       const weekStart = new Date()
@@ -420,7 +443,7 @@ export async function finalizeVendorOrder(
       const deliveryOtp = generateFourDigitOtp()
       await tx`update invoices set status = 'paid', paid_at = now() where id = ${invoice.id}`
       await tx`update orders set status = 'paid', delivery_otp = ${deliveryOtp} where id = ${orderId}`
-      await issueReferralRewards(tx, order.customer_id, orderId, invoiceAmount)
+      referralRewardRecipients.push(...await issueReferralRewards(tx, order.customer_id, orderId, invoiceAmount))
     }
 
     const [finalInvoice] = await tx`select status from invoices where id = ${invoice.id}`
@@ -456,8 +479,11 @@ export async function finalizeVendorOrder(
       invoiceStatus: finalInvoice.status as 'paid' | 'unpaid',
       customerId: order.customer_id,
       publicOrderNumber: order.public_order_number,
+      referralRewardRecipients,
     }
   })
+  await sendReferralRewardNotifications(result.referralRewardRecipients ?? [])
+  return result
 }
 
 /** Credits the customer's wallet after a Paystack top-up payment is verified server-side. */
@@ -465,11 +491,11 @@ export async function creditWallet(customerId: string, balanceType: WalletBalanc
   if (amount <= 0) throw new Error('Amount must be positive')
   if (balanceType === 'promotional') throw new Error('Promotional balances are issued only by the referral reward service')
 
-  return sql.begin(async (tx) => {
+  const result = await sql.begin(async (tx) => {
     await tx`insert into wallets (customer_id) values (${customerId}) on conflict (customer_id) do nothing`
     await tx`
-      insert into payments (customer_id, reference, amount, balance_type, status)
-      values (${customerId}, ${paymentReference}, ${amount}, ${balanceType}, 'pending')
+      insert into payments (customer_id, reference, amount, charged_amount, fee_amount, balance_type, status)
+      values (${customerId}, ${paymentReference}, ${amount}, ${amount}, 0, ${balanceType}, 'pending')
       on conflict (reference) do nothing
     `
 
@@ -506,6 +532,7 @@ export async function creditWallet(customerId: string, balanceType: WalletBalanc
     }
 
     let settledBalance = oneOffBalance
+    const referralRewardRecipients: ReferralRewardRecipient[] = []
     const settledInvoices: Array<{ invoiceId: string; orderId: string; publicOrderNumber: string; amount: number }> = []
     if (oneOffCredit > 0) {
       const pendingInvoices = await tx`
@@ -534,13 +561,15 @@ export async function creditWallet(customerId: string, balanceType: WalletBalanc
             values (${customerId}, 'one_off', 'debit', ${invoiceAmount}, ${settledBalance}, ${invoice.id})
           `
         }
-        await issueReferralRewards(tx, customerId, invoice.order_id, invoiceAmount)
+        referralRewardRecipients.push(...await issueReferralRewards(tx, customerId, invoice.order_id, invoiceAmount))
         settledInvoices.push({ invoiceId: invoice.id, orderId: invoice.order_id, publicOrderNumber: invoice.public_order_number, amount: invoiceAmount })
       }
     }
 
-    return { newBalance: balanceType === 'subscription' ? subscriptionBalance : settledBalance, settledInvoices, alreadyCredited: false }
+    return { newBalance: balanceType === 'subscription' ? subscriptionBalance : settledBalance, settledInvoices, alreadyCredited: false, referralRewardRecipients }
   })
+  await sendReferralRewardNotifications(result.referralRewardRecipients ?? [])
+  return result
 }
 
 /** Completes a paid subscription transaction without changing either wallet balance. */
@@ -632,7 +661,7 @@ export async function adjustWallet(customerId: string, balanceType: WalletBalanc
 
 /** Charges an unpaid subscription-order excess from the customer's general wallet. */
 export async function chargeSubscriptionInvoice(customerId: string, invoiceId: string) {
-  return sql.begin(async (tx) => {
+  const result = await sql.begin(async (tx) => {
     await tx`insert into wallets (customer_id) values (${customerId}) on conflict (customer_id) do nothing`
 
     const [invoice] = await tx`
@@ -651,10 +680,12 @@ export async function chargeSubscriptionInvoice(customerId: string, invoiceId: s
     const deliveryOtp = generateFourDigitOtp()
     await tx`update invoices set status = 'paid', paid_at = now() where id = ${invoiceId}`
     await tx`update orders set status = 'paid', delivery_otp = ${deliveryOtp} where id = ${invoice.order_id}`
-    await issueReferralRewards(tx, customerId, invoice.order_id, amount)
+    const referralRewardRecipients = await issueReferralRewards(tx, customerId, invoice.order_id, amount)
 
-    return { amount, newBalance, deliveryOtp, alreadyPaid: false, orderId: invoice.order_id, publicOrderNumber: invoice.public_order_number }
+    return { amount, newBalance, deliveryOtp, alreadyPaid: false, orderId: invoice.order_id, publicOrderNumber: invoice.public_order_number, referralRewardRecipients }
   })
+  await sendReferralRewardNotifications(result.referralRewardRecipients ?? [])
+  return result
 }
 
 export { InsufficientBalanceError }

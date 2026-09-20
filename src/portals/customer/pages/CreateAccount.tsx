@@ -135,7 +135,7 @@ export default function CreateAccount() {
 
         <div className="w-full max-w-[430px] rounded-[36px] bg-white/95 p-5 shadow-[0_30px_80px_rgba(0,0,0,0.28)] backdrop-blur-sm sm:p-7" style={{ fontFamily: 'Inter, sans-serif' }}>
           <div className="mb-7 text-center">
-            <h2 className="text-[2.7rem] font-semibold text-slate-900">
+            <h2 className="text-[2rem] font-semibold leading-tight text-slate-900 sm:text-[2.7rem]">
               Create account
             </h2>
             <p className="mt-2 text-sm text-slate-500">Start with your email and phone number</p>
@@ -191,7 +191,7 @@ export default function CreateAccount() {
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
                 placeholder="Enter your email"
-                className="h-14 w-full rounded-lg border border-field-border bg-white px-4 text-[14px] font-semibold text-black shadow-sm outline-none transition placeholder:text-field-placeholder focus:border-field-focus focus:ring-2 focus:ring-field-focus-soft"
+                className="h-14 w-full rounded-lg border border-brand-border bg-white px-4 text-[14px] font-semibold text-black shadow-sm outline-none transition placeholder:text-field-placeholder focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
               />
             </label>
 
@@ -202,7 +202,7 @@ export default function CreateAccount() {
                 value={phone}
                 onChange={(event) => setPhone(event.target.value)}
                 placeholder="0803 123 4567"
-                className="h-14 w-full rounded-lg border border-field-border bg-white px-4 text-[14px] font-semibold text-black shadow-sm outline-none transition placeholder:text-field-placeholder focus:border-field-focus focus:ring-2 focus:ring-field-focus-soft"
+                className="h-14 w-full rounded-lg border border-brand-border bg-white px-4 text-[14px] font-semibold text-black shadow-sm outline-none transition placeholder:text-field-placeholder focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
               />
             </label>
           </div>}

@@ -10,6 +10,8 @@ import type { Route } from './+types/root'
 import stylesheetUrl from './index.css?url'
 import { Toaster } from 'sonner'
 import RouteLoadingScreen from './components/RouteLoadingScreen'
+import { useEffect } from 'react'
+import { initializePwaInstall } from './lib/pwa-install.client'
 
 const defaultTitle = 'Qaffy | Fresh laundry, zero hassle'
 const defaultDescription = 'Reliable semester laundry for Nile University students, with free campus pickup and delivery.'
@@ -73,6 +75,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
+  useEffect(() => {
+    initializePwaInstall()
+  }, [])
+
   return (
     <>
       <Outlet />

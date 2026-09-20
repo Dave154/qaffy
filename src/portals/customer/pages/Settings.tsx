@@ -178,7 +178,7 @@ export default function Settings() {
           </profileFetcher.Form>
         </div>
 
-        <div id="notifications" className="rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-100 sm:p-5">
+        <div id="referrals" className="scroll-mt-6 rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-100 sm:p-5">
           <h3 className="text-lg font-bold text-slate-900">Referral program</h3>
           <div className="mt-4 space-y-3">
             <div className="flex w-full items-center justify-between rounded-2xl bg-slate-50 px-3.5 py-3 text-left text-sm font-medium text-slate-700"><span>Referral code</span><span>{referralCode ?? 'Not assigned'}</span></div>

@@ -1,6 +1,7 @@
 import { useLocation, useNavigate } from 'react-router'
 import { useState } from 'react'
 import QaffyLogo from '../../../components/QaffyLogo'
+import OtpInput from '../../../components/OtpInput'
 import { isSupabaseConfigured, supabase } from '../../../lib/supabase.client'
 
 export default function VerifyOtp() {
@@ -13,26 +14,6 @@ export default function VerifyOtp() {
   const [secondsRemaining, setSecondsRemaining] = useState(30)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState('')
-
-  const updateCode = (index: number, value: string) => {
-    const sanitized = value.replace(/\D/g, '').slice(0, 1)
-    const next = [...code]
-    next[index] = sanitized
-    setCode(next)
-
-    if (sanitized && index < code.length - 1) {
-      const nextInput = document.getElementById(`logistics-otp-${index + 1}`) as HTMLInputElement | null
-      nextInput?.focus()
-    }
-  }
-
-  const pasteCode = (event: React.ClipboardEvent<HTMLInputElement>) => {
-    event.preventDefault()
-    const pasted = event.clipboardData.getData('text').replace(/\D/g, '').slice(0, codeLength)
-    if (!pasted) return
-    setCode(Array.from({ length: codeLength }, (_, index) => pasted[index] ?? ''))
-    document.getElementById(`logistics-otp-${Math.min(pasted.length, codeLength) - 1}`)?.focus()
-  }
 
   const handleVerify = async () => {
     setError('')
@@ -139,21 +120,7 @@ export default function VerifyOtp() {
 
           {error && <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
 
-          <div className="grid grid-cols-8 gap-2 pt-3 sm:gap-3">
-            {code.map((digit, index) => (
-              <input
-                key={index}
-                id={`logistics-otp-${index}`}
-                type="text"
-                inputMode="numeric"
-                maxLength={1}
-                value={digit}
-                onChange={(event) => updateCode(index, event.target.value)}
-                onPaste={pasteCode}
-                className="aspect-square min-w-0 w-full rounded-lg border border-brand-border bg-white p-0 text-center text-lg font-semibold leading-none text-slate-900 shadow-sm outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus sm:text-xl"
-              />
-            ))}
-          </div>
+          <OtpInput value={code} onChange={setCode} idPrefix="logistics-otp" length={codeLength} inputClassName="aspect-square min-w-0 w-full rounded-lg border border-brand-border bg-white p-0 text-center text-lg font-semibold leading-none text-slate-900 shadow-sm outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus sm:text-xl" />
 
           <p className="text-center text-sm text-[#3d3d3d]">
             Didn&apos;t get the code?{' '}

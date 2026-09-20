@@ -25,6 +25,14 @@ Configure these environment variables on the server and client deployment:
 
 The wrapped notification service records an idempotent event before sending, removes expired browser subscriptions, and records sent/failed status. Notifications currently cover pickup, delivery, ready-for-delivery, mismatch confirmation, payment required/confirmed, wallet top-up confirmation, subscription activation, and subscription renewal/expiry. The feature requires a browser with Web Push support; the VS Code embedded browser is intentionally rejected, so use Chrome or Edge over HTTPS for deployment or a supported local origin.
 
+## Customer PWA Installation
+
+Qaffy is installable as a customer PWA. The customer sidebar includes a compact **Install Qaffy** action that uses the browser's native `beforeinstallprompt` flow when the browser exposes it. The prompt is captured at client startup so it is not lost before the sidebar mounts, and the action disappears after the `appinstalled` event or when the app is already running in standalone mode.
+
+PWA metadata is defined in `public/manifest.webmanifest`, with square Qaffy icons in `public/qaffy-icon-192.svg` and `public/qaffy-icon-512.svg`. The existing `public/push-sw.js` is registered at app startup and continues to handle Web Push notifications while also satisfying the service-worker requirement for installation.
+
+Native install prompts are browser-controlled and may be suppressed after a previous dismissal, on unsupported browsers, or when the origin is not considered installable. Test in Chrome or Edge over a supported origin; the VS Code embedded browser is not a reliable PWA installation environment. When testing after manifest or service-worker changes, unregister the old worker and clear site data before reloading.
+
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
 Currently, two official plugins are available:

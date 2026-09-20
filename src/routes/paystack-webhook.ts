@@ -29,7 +29,7 @@ export async function action({ request }: { request: Request }) {
   const reference = payload.data.reference
   const amountInKobo = Number(payload.data.amount ?? 0)
   const [payment] = await sql`
-    select customer_id, amount, status, plan_id
+    select customer_id, amount, charged_amount, status, plan_id
     from payments
     where reference = ${reference}
       and provider = 'paystack'
@@ -37,7 +37,7 @@ export async function action({ request }: { request: Request }) {
   `
 
   if (!payment) return data({ ok: false, message: 'Payment reference was not found.' }, { status: 404 })
-  if (Number(payment.amount) * 100 !== amountInKobo) return data({ ok: false, message: 'Payment amount does not match.' }, { status: 409 })
+  if (Number(payment.charged_amount ?? payment.amount) * 100 !== amountInKobo) return data({ ok: false, message: 'Payment amount does not match.' }, { status: 409 })
   if (payment.status === 'success') {
     if (payment.plan_id) {
       const activation = await activateSubscriptionFromPayment(payment.customer_id, reference)

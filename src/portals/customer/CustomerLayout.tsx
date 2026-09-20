@@ -3,6 +3,7 @@ import { data, Form, NavLink, Outlet, redirect, useLoaderData, useLocation, useN
 import type { Route } from './+types/CustomerLayout'
 import { Home, LayoutGrid, ReceiptText, FileText, Sparkles, Settings, Menu, X, UserCircle2, Search, Bell, ClipboardList, LogOut } from 'lucide-react'
 import QaffyLogo from '../../components/QaffyLogo'
+import PwaInstallLink from '../../components/PwaInstallLink'
 import { isSupabaseServerConfigured, getSupabaseServerClient } from '../../lib/supabase.server'
 import { supabase } from '../../lib/supabase.client'
 import { CustomerStoreProvider } from './customer-store'
@@ -335,6 +336,7 @@ export default function CustomerLayout() {
         </nav>
 
         <div className="mt-auto space-y-1">
+          <PwaInstallLink />
           <NavLink to="/transactions" className="flex h-10 w-full items-center gap-3 rounded-[10px] px-4 text-sm font-medium text-[#121212] hover:bg-[#fafafa]">
             <ClipboardList className="h-4 w-4" />
             <span>Activity log</span>
@@ -427,7 +429,10 @@ export default function CustomerLayout() {
                 })}
               </nav>
 
-              <PlanSummary onNavigate={closeMobileMenu} />
+              <div className="mt-auto">
+                <PwaInstallLink />
+                <PlanSummary onNavigate={closeMobileMenu} />
+              </div>
               <button type="button" onClick={() => { closeMobileMenu(); setLogoutConfirmationOpen(true) }} className="mt-3 flex h-10 w-full items-center gap-3 rounded-[10px] px-3 text-sm font-medium text-red-600 hover:bg-red-50 hover:text-red-700">
                 <LogOut className="h-4 w-4 text-red-600" />
                 <span>Log out</span>

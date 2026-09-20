@@ -7,6 +7,7 @@ import { useCustomerStore } from '../customer-store-hook'
 import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
 import { toast } from '../../../lib/toast'
 import type { Plan } from '../../../types/database.types'
+import { calculatePaystackCharge, calculatePaystackFee } from '../../../lib/paystack'
 
 type BillingPeriod = 'monthly' | 'semester'
 
@@ -82,8 +83,10 @@ export async function action({ request }: Route.ActionArgs) {
   }
 
   const amount = Number(plan.price)
+  const feeAmount = calculatePaystackFee(amount)
+  const chargedAmount = calculatePaystackCharge(amount)
   const reference = `subscription_${crypto.randomUUID()}`
-  const { error: paymentError } = await serverSupabase.from('payments').insert({ customer_id: userData.user.id, provider: 'paystack', reference, amount, balance_type: 'subscription', plan_id: plan.id, status: 'pending' })
+  const { error: paymentError } = await serverSupabase.from('payments').insert({ customer_id: userData.user.id, provider: 'paystack', reference, amount, charged_amount: chargedAmount, fee_amount: feeAmount, balance_type: 'subscription', plan_id: plan.id, status: 'pending' })
   if (paymentError) return data({ ok: false, message: 'The subscription payment could not be recorded.' }, { status: 500, headers })
 
   const secretKey = process.env.PAYSTACK_SECRET_KEY
@@ -91,7 +94,7 @@ export async function action({ request }: Route.ActionArgs) {
   const initializationResponse = await fetch('https://api.paystack.co/transaction/initialize', {
     method: 'POST',
     headers: { Authorization: `Bearer ${secretKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: userData.user.email, amount: Math.round(amount * 100), reference, callback_url: new URL('/plans?payment=pending', request.url).toString() }),
+    body: JSON.stringify({ email: userData.user.email, amount: Math.round(chargedAmount * 100), reference, callback_url: new URL('/plans?payment=pending', request.url).toString() }),
   })
   const initialization = await initializationResponse.json() as { status?: boolean; message?: string; data?: { authorization_url?: string } }
   if (!initializationResponse.ok || !initialization.status || !initialization.data?.authorization_url) return data({ ok: false, message: initialization.message ?? 'Paystack could not start this subscription payment.' }, { status: 502, headers })
@@ -194,7 +197,7 @@ export default function Plans() {
           const isCurrent = plan.id === activePlan?.id
           return <article key={plan.id} className={`relative flex flex-col rounded-2xl border p-5 shadow-sm ${plan.featured ? 'border-brand-strong bg-brand-surface' : 'border-[#e7e7e7] bg-white'}`}>
             {plan.featured && <span className="absolute right-5 top-5 rounded-full bg-brand-strong px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-white">Popular</span>}
-            <div className="pr-16"><p className="text-sm font-semibold text-brand-strong">{plan.name}</p><div className="mt-3 flex items-baseline gap-1.5"><span className="text-3xl font-bold text-[#121212]">{formatPrice(plan.price)}</span><span className="text-sm text-slate-500">/{plan.billingPeriod}</span></div></div>
+            <div className="pr-16"><p className="text-sm font-semibold text-brand-strong">{plan.name}</p><div className="mt-3 flex items-baseline gap-1.5"><span className="text-3xl font-bold text-[#121212]">{formatPrice(plan.price)}</span><span className="text-sm text-slate-500">/{plan.billingPeriod}</span></div><p className="mt-1 text-xs text-slate-500">₦{calculatePaystackFee(plan.price).toLocaleString()} transaction fee · ₦{calculatePaystackCharge(plan.price).toLocaleString()} total</p></div>
             <p className="mt-4 min-h-10 text-sm leading-5 text-slate-600">{plan.description}</p>
             <div className="mt-5 grid gap-2 border-y border-[#eeeeee] py-4 text-sm"><div className="flex items-center justify-between"><span className="text-slate-500">Weekly limit</span><span className="font-semibold text-slate-900">{plan.weeklyLimit} clothes</span></div></div>
             <button type="button" disabled={Boolean(activePlan) || isSubscribing} onClick={() => { fetcher.submit({ planId: plan.id }, { method: 'post' }); }} className={`mt-6 flex w-full items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold transition ${isCurrent ? 'cursor-default bg-[#eef9f7] text-[#418d87]' : activePlan ? 'cursor-not-allowed border border-slate-200 bg-slate-50 text-slate-400' : plan.featured ? 'bg-brand-strong text-white hover:bg-brand-strong-hover' : 'border border-brand-border bg-white text-brand-strong hover:bg-brand-soft'}`}>{isCurrent ? <>Current plan <Check className="h-4 w-4" /></> : activePlan ? 'Current subscription active' : isSubscribing ? 'Opening secure checkout...' : <>Choose plan <ChevronRight className="h-4 w-4" /></>}</button>

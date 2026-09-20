@@ -220,6 +220,8 @@ export interface Payment {
   provider: string
   reference: string
   amount: number
+  charged_amount: number
+  fee_amount: number
   balance_type: WalletBalanceType
   plan_id: string | null
   status: PaymentStatus
