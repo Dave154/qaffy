@@ -16,6 +16,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       : url.pathname.startsWith('/admin/')
         ? 'admin'
         : null
+        const portalLoginPath = callbackRole ? `/${callbackRole}/login` : '/login'
   const nextPath = callbackRole ? `/${callbackRole}` : requestedNext.startsWith('/') ? requestedNext : '/'
   const expectedRole = nextPath === '/vendor'
     ? 'vendor'
@@ -26,19 +27,19 @@ export async function loader({ request }: Route.LoaderArgs) {
         : 'customer'
 
   if (!isSupabaseServerConfigured || !code) {
-    throw redirect('/login')
+    throw redirect(portalLoginPath)
   }
 
   const { supabase, headers } = getSupabaseServerClient(request)
   const { error } = await supabase.auth.exchangeCodeForSession(code)
 
   if (error) {
-    throw redirect(`/login?error=${encodeURIComponent(error.message)}`, { headers })
+    throw redirect(`${portalLoginPath}?error=${encodeURIComponent(error.message)}`, { headers })
   }
 
   const { data: userData } = await supabase.auth.getUser()
   if (!userData.user) {
-    throw redirect('/login', { headers })
+    throw redirect(portalLoginPath, { headers })
   }
 
   const { data: profile } = await supabase
@@ -50,13 +51,21 @@ export async function loader({ request }: Route.LoaderArgs) {
   const { data: roleAssignment } = expectedRole !== 'customer'
     ? await supabase.from('profile_roles').select('role').eq('profile_id', userData.user.id).eq('role', expectedRole).eq('status', 'approved').maybeSingle()
     : { data: null }
+  const { data: vendorAccount } = expectedRole === 'vendor'
+    ? await supabase.from('vendors').select('id').eq('profile_id', userData.user.id).eq('status', 'approved').maybeSingle()
+    : { data: null }
   const hasPortalAccess = expectedRole === 'customer'
     ? true
-    : Boolean(roleAssignment) || expectedRole === 'admin' && profile?.role === 'admin'
+    : expectedRole === 'vendor'
+      ? Boolean(roleAssignment) && Boolean(vendorAccount)
+      : Boolean(roleAssignment) || expectedRole === 'admin' && profile?.role === 'admin'
 
   if (!hasPortalAccess) {
-    const loginPath = expectedRole === 'customer' ? '/login' : `/${expectedRole}/login`
-    throw redirect(`${loginPath}?error=${encodeURIComponent('This account is not provisioned for this portal.')}`, { headers })
+    await supabase.auth.signOut()
+    const message = expectedRole === 'vendor'
+      ? 'This email is not registered to an approved vendor account.'
+      : 'This account is not provisioned for this portal.'
+    throw redirect(`${portalLoginPath}?error=${encodeURIComponent(message)}`, { headers })
   }
 
   let customerProfile: {

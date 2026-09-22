@@ -1,15 +1,20 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
-import { Link, useNavigate } from 'react-router'
+import { useLocation, useNavigate } from 'react-router'
 import QaffyLogo from '../../../components/QaffyLogo'
 import RouteLoadingScreen from '../../../components/RouteLoadingScreen'
 import { isSupabaseConfigured, supabase } from '../../../lib/supabase.client'
 
+const getVendorOtpError = (message: string) => message.toLowerCase().includes('signups not allowed for otp')
+  ? 'This email is not registered to an approved vendor account.'
+  : message
+
 export default function Login() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [email, setEmail] = useState('')
   const [showEmailAuth, setShowEmailAuth] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setError] = useState(() => new URLSearchParams(location.search).get('error') ?? '')
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   useEffect(() => {
@@ -36,7 +41,7 @@ export default function Login() {
     setIsSubmitting(true)
     const { error: authError } = await supabase.auth.signInWithOtp({ email: trimmedEmail, options: { shouldCreateUser: false } })
     setIsSubmitting(false)
-    if (authError) return setError(authError.message)
+    if (authError) return setError(getVendorOtpError(authError.message))
     navigate(`/verify-otp?email=${encodeURIComponent(trimmedEmail)}&mode=login&portal=vendor&next=/vendor`)
   }
 
@@ -79,7 +84,6 @@ export default function Login() {
           <div className="my-5 flex items-center gap-3 text-xs text-slate-400"><span className="h-px flex-1 bg-slate-200" /><span>or</span><span className="h-px flex-1 bg-slate-200" /></div>
           {!showEmailAuth && <button type="button" onClick={() => setShowEmailAuth(true)} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-sm font-semibold text-slate-700 transition hover:border-brand-border hover:bg-brand-soft">Continue with email</button>}
           {showEmailAuth && <form onSubmit={submit} className="space-y-4"><input type="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Enter your approved email" aria-label="Vendor email address" className="h-14 w-full rounded-lg border border-brand-border bg-white px-4 text-sm font-semibold text-black shadow-sm outline-none transition placeholder:text-field-placeholder focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" />{error && <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}<button type="submit" disabled={isSubmitting} className="w-full rounded-2xl bg-slate-900 px-4 py-3.5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50">{isSubmitting ? 'Sending code...' : 'Send email code'}</button></form>}
-          <p className="mt-6 text-center text-sm text-slate-500">Need customer access? <Link to="/login" className="font-semibold text-brand-primary hover:text-brand-primary-hover">Go to customer login</Link></p>
         </div>
       </div>
     </main>

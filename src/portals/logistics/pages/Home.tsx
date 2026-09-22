@@ -92,6 +92,8 @@ type OrderRecord = {
   status: 'picked_up' | 'delivered' | 'pending_pickup' | 'at_vendor' | 'invoiced' | 'paid' | 'out_for_delivery' | 'cancelled'
   pickup_otp: string | null
   delivery_otp: string | null
+  pickup_location_id: string | null
+  pickup_location_name?: string | null
   customer_id: string
   created_at: string
   notes: string | null
@@ -128,10 +130,21 @@ export default function Home() {
   const fetcher = useFetcher<typeof action>()
   const revalidator = useRevalidator()
   const [selectedRange, setSelectedRange] = useState<(typeof filters)[number]>('Today')
+  const [selectedLocation, setSelectedLocation] = useState('All locations')
   const [otp, setOtp] = useState(['', '', '', ''])
   const [message, setMessage] = useState('')
   const [isSearching, setIsSearching] = useState(false)
   const inputRefs = useRef<Array<HTMLInputElement | null>>([])
+
+  const locationOptions = useMemo(
+    () => ['All locations', ...new Set(orders.map((order) => order.pickup_location_name).filter((name): name is string => Boolean(name)))],
+    [orders],
+  )
+
+  const matchesSelectedLocation = (order: OrderRecord) => {
+    if (selectedLocation === 'All locations') return true
+    return order.pickup_location_name === selectedLocation
+  }
 
   const isPickingUp = fetcher.state !== 'idle'
   const completedOrderId = fetcher.data && fetcher.data.ok && 'orderId' in fetcher.data ? fetcher.data.orderId : null
@@ -164,19 +177,36 @@ export default function Home() {
   }, [enteredOtp, orders])
 
   const pickedUpOrders = useMemo(
-    () => orders.filter((order) => order.picked && isWithinRange(order.picked_up_date ?? order.created_at, selectedRange)),
-    [orders, selectedRange],
+    () => orders.filter((order) => order.picked && matchesSelectedLocation(order) && isWithinRange(order.picked_up_date ?? order.created_at, selectedRange)),
+    [orders, selectedLocation, selectedRange],
   )
 
   const pendingOrders = useMemo(
-    () => orders.filter((order) => !order.picked && isWithinRange(order.created_at, selectedRange)),
-    [orders, selectedRange],
+    () => orders.filter((order) => !order.picked && matchesSelectedLocation(order) && isWithinRange(order.created_at, selectedRange)),
+    [orders, selectedLocation, selectedRange],
   )
-  const pickedUpEvents = logisticsEvents.filter((event) => event.event_type === 'picked_up')
-  const deliveredEvents = logisticsEvents.filter((event) => event.event_type === 'delivered')
+
+  const pickedUpEvents = useMemo(
+    () => logisticsEvents.filter((event) => {
+      if (event.event_type !== 'picked_up') return false
+      const order = orders.find((item) => item.id === event.order_id)
+      return order ? matchesSelectedLocation(order) && isWithinRange(event.created_at, selectedRange) : false
+    }),
+    [logisticsEvents, orders, selectedLocation, selectedRange],
+  )
+
+  const deliveredEvents = useMemo(
+    () => logisticsEvents.filter((event) => {
+      if (event.event_type !== 'delivered') return false
+      const order = orders.find((item) => item.id === event.order_id)
+      return order ? matchesSelectedLocation(order) && isWithinRange(event.created_at, selectedRange) : false
+    }),
+    [logisticsEvents, orders, selectedLocation, selectedRange],
+  )
+
   const pendingDeliveryOrders = useMemo(
-    () => orders.filter((order) => order.status === 'out_for_delivery' && isWithinRange(order.created_at, selectedRange)),
-    [orders, selectedRange],
+    () => orders.filter((order) => order.status === 'out_for_delivery' && matchesSelectedLocation(order) && isWithinRange(order.created_at, selectedRange)),
+    [orders, selectedLocation, selectedRange],
   )
   const deliveryEnteredOtp = otp.join('').trim()
   const deliveryMatchedOrder = useMemo(() => {
@@ -316,28 +346,46 @@ export default function Home() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-row items-center justify-between gap-2 px-1">
+      <div className="flex flex-col items-center gap-2 px-1 sm:flex-row sm:items-center sm:justify-between">
         <div className="shrink-0 rounded-full border border-brand-border bg-brand-soft p-1 shadow-sm">
           <div className="flex gap-1">
             <button type="button" onClick={() => setActiveTab('pickup')} className={`rounded-full px-2.5 py-1 text-xs font-medium transition sm:px-3 sm:py-1.5 sm:text-sm ${activeTab === 'pickup' ? 'bg-brand-primary text-white shadow-sm' : 'text-slate-600 hover:text-brand-primary'}`}>Pickup</button>
             <button type="button" onClick={() => setActiveTab('delivery')} className={`rounded-full px-2.5 py-1 text-xs font-medium transition sm:px-3 sm:py-1.5 sm:text-sm ${activeTab === 'delivery' ? 'bg-brand-primary text-white shadow-sm' : 'text-slate-600 hover:text-brand-primary'}`}>Delivery</button>
           </div>
         </div>
-        <label className="flex min-w-0 items-center gap-1 rounded-full border border-[#e7e7e7] bg-white px-2 py-1.5 text-xs text-slate-700 shadow-sm sm:gap-2 sm:px-3 sm:py-2 sm:text-sm">
-          <span className="whitespace-nowrap font-medium">{activeTab === 'delivery' ? 'Delivery' : 'Pickup'}</span>
-          <select
-            value={selectedRange}
-            onChange={(event) => setSelectedRange(event.target.value as (typeof filters)[number])}
-            className="min-w-0 rounded-full border border-slate-200 bg-transparent px-1.5 py-0.5 text-xs font-medium text-slate-700 outline-none focus:border-brand-primary sm:px-2 sm:py-1 sm:text-sm"
-            aria-label="Picked up date range"
-          >
-            {filters.map((filter) => (
-              <option key={filter} value={filter}>
-                {presetLabels[filter]}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="flex min-w-0 flex-wrap items-center justify-center gap-2 sm:justify-end">
+          <label className="flex min-w-0 items-center gap-1 rounded-full border border-[#e7e7e7] bg-white px-2 py-1.5 text-xs text-slate-700 shadow-sm sm:gap-2 sm:px-3 sm:py-2 sm:text-sm">
+            <span className="whitespace-nowrap font-medium">{activeTab === 'delivery' ? 'Delivery' : 'Pickup'}</span>
+            <select
+              value={selectedRange}
+              onChange={(event) => setSelectedRange(event.target.value as (typeof filters)[number])}
+              className="min-w-0 rounded-full border border-slate-200 bg-transparent px-1.5 py-0.5 text-xs font-medium text-slate-700 outline-none focus:border-brand-primary sm:px-2 sm:py-1 sm:text-sm"
+              aria-label="Picked up date range"
+            >
+              {filters.map((filter) => (
+                <option key={filter} value={filter}>
+                  {presetLabels[filter]}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="flex min-w-0 items-center gap-1 rounded-full border border-[#e7e7e7] bg-white px-2 py-1.5 text-xs text-slate-700 shadow-sm sm:gap-2 sm:px-3 sm:py-2 sm:text-sm">
+            <span className="whitespace-nowrap font-medium">Location</span>
+            <select
+              value={selectedLocation}
+              onChange={(event) => setSelectedLocation(event.target.value)}
+              className="min-w-0 rounded-full border border-slate-200 bg-transparent px-1.5 py-0.5 text-xs font-medium text-slate-700 outline-none focus:border-brand-primary sm:px-2 sm:py-1 sm:text-sm"
+              aria-label="Pickup location filter"
+            >
+              {locationOptions.map((location) => (
+                <option key={location} value={location}>
+                  {location}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
 
       <div className="grid gap-3 md:grid-cols-2">
@@ -405,6 +453,8 @@ export default function Home() {
                 <div>
                   <p className="text-sm font-semibold text-slate-800">{matchedOrder.public_order_number}</p>
                   <p className="mt-1 text-xs font-medium text-slate-600">{matchedOrder.customer_name ?? 'Customer'}</p>
+                  <p className="mt-1 text-[11px] font-medium text-slate-500">Pickup: {matchedOrder.pickup_location_name ?? 'Location pending'}</p>
+                  <p className="mt-1 text-[11px] font-medium text-slate-500">Pickup: {matchedOrder.pickup_location_name ?? 'Location pending'}</p>
                   <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
                     <span>UID:</span>
                     {matchedOrder.customer_uid ? <CopyableOrderId id={matchedOrder.customer_uid} label="Customer UID" /> : <span>Not available</span>}
@@ -431,7 +481,7 @@ export default function Home() {
             {completedOrderId ? 'Pickup confirmed successfully.' : fetcher.data && !fetcher.data.ok && 'message' in fetcher.data ? fetcher.data.message : message}
           </p>
         )}
-        <section className="mt-5"><h2 className="text-xl font-bold text-slate-900">Picked up orders</h2><div className="mt-4 space-y-2">{pickedUpEvents.length === 0 ? <p className="text-sm text-slate-500">No pickup events recorded yet.</p> : pickedUpEvents.slice(0, 10).map((event) => { const pickedOrder = orders.find((item) => item.id === event.order_id); return <div key={event.order_id + event.created_at} className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-3 text-sm"><div><p className="font-semibold text-slate-800">{pickedOrder?.public_order_number ?? 'Order unavailable'}</p><p className="mt-1 text-xs text-slate-500">{pickedOrder?.customer_name ?? 'Customer'}</p></div><span className="text-xs text-slate-500">{new Date(event.created_at).toLocaleString()}</span></div> })}</div></section>
+        <section className="mt-5"><h2 className="text-xl font-bold text-slate-900">Picked up orders</h2><div className="mt-4 space-y-2">{pickedUpEvents.length === 0 ? <p className="text-sm text-slate-500">No pickup events recorded yet.</p> : pickedUpEvents.slice(0, 10).map((event) => { const pickedOrder = orders.find((item) => item.id === event.order_id); return <div key={event.order_id + event.created_at} className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-3 text-sm"><div><p className="font-semibold text-slate-800">{pickedOrder?.public_order_number ?? 'Order unavailable'}</p><p className="mt-1 text-xs text-slate-500">{pickedOrder?.customer_name ?? 'Customer'}</p><p className="mt-1 text-[11px] text-slate-500">Pickup: {pickedOrder?.pickup_location_name ?? 'Location pending'}</p></div><span className="text-xs text-slate-500">{new Date(event.created_at).toLocaleString()}</span></div> })}</div></section>
         </>
         )}
       </div>

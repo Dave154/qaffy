@@ -320,6 +320,7 @@ export default function CustomerLayout() {
                 key={item.to}
                 to={item.to}
                 end={item.end}
+                prefetch="intent"
                 className={({ isActive }) =>
                     `flex h-10 items-center gap-3 rounded-[10px] px-4 text-sm font-medium transition ${
                     isActive ? 'bg-brand-surface text-brand-strong' : 'text-[#121212] hover:bg-[#fafafa]'
@@ -337,7 +338,7 @@ export default function CustomerLayout() {
 
         <div className="mt-auto space-y-1">
           <PwaInstallLink />
-          <NavLink to="/transactions" className="flex h-10 w-full items-center gap-3 rounded-[10px] px-4 text-sm font-medium text-[#121212] hover:bg-[#fafafa]">
+          <NavLink to="/transactions" prefetch="intent" className="flex h-10 w-full items-center gap-3 rounded-[10px] px-4 text-sm font-medium text-[#121212] hover:bg-[#fafafa]">
             <ClipboardList className="h-4 w-4" />
             <span>Activity log</span>
           </NavLink>
@@ -366,6 +367,7 @@ export default function CustomerLayout() {
             <div className="flex items-center gap-2">
               <NavLink
                 to="/orders?filter=Needs%20attention"
+                prefetch="intent"
                 aria-label="Open notifications"
                 className="relative flex h-9 w-9 items-center justify-center rounded-lg border border-[#e7e7e7] bg-white text-slate-600"
               >
@@ -374,6 +376,7 @@ export default function CustomerLayout() {
               </NavLink>
               <NavLink
                 to="/settings"
+                prefetch="intent"
                 aria-label="Open profile"
                 className="flex h-9 w-9 items-center justify-center rounded-lg border border-[#e7e7e7] bg-white text-slate-600"
               >
@@ -409,6 +412,7 @@ export default function CustomerLayout() {
                       key={item.to}
                       to={item.to}
                       end={item.end}
+                      prefetch="intent"
                       onClick={closeMobileMenu}
                       className={({ isActive }) =>
                           `flex items-center gap-3 rounded-[10px] px-3 py-2.5 text-sm font-medium transition ${
@@ -448,7 +452,7 @@ export default function CustomerLayout() {
             <Search className="h-3.5 w-3.5 text-[#8e9a9a]" />
             <input name="search" type="search" placeholder="Search orders" aria-label="Search orders" className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-[#8e9a9a]" />
           </Form>
-          <NavLink to="/orders?filter=Needs%20attention" aria-label="Open notifications" className="relative flex h-10 w-10 items-center justify-center rounded-full border border-[#f2f3f3] bg-white text-[#121212]">
+          <NavLink to="/orders?filter=Needs%20attention" prefetch="intent" aria-label="Open notifications" className="relative flex h-10 w-10 items-center justify-center rounded-full border border-[#f2f3f3] bg-white text-[#121212]">
             <Bell className="h-4 w-4" />
             {mismatchCount > 0 && <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full border-2 border-white bg-[#f59e0b] px-1 text-[10px] font-bold text-white">{mismatchCount}</span>}
           </NavLink>

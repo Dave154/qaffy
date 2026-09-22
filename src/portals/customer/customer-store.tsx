@@ -134,6 +134,19 @@ export type CustomerStore = {
 
 const initialOrders: CustomerOrder[] = []
 
+function formatOrderDateTime(value: string) {
+  const formatted = new Intl.DateTimeFormat('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  }).format(new Date(value))
+
+  return formatted.replace(/am|pm/i, (match) => match.toUpperCase())
+}
+
 function createOtp(_prefix: string, number: number) {
   return String(1000 + (Math.abs(number) % 9000))
 }
@@ -227,7 +240,7 @@ function mapDatabaseOrder(order: Order, persistedItems: PersistedOrderItem[] = [
     title: serviceMap[order.order_type],
     status: statusMap[order.status],
     statusTone: statusToneMap[order.status],
-    date: new Date(order.created_at).toLocaleDateString(),
+    date: formatOrderDateTime(order.created_at),
     pickup: order.status === 'pending_pickup' ? 'Pickup pending' : 'Pickup confirmed',
     total: invoiceAmountsByOrderId?.[order.id] ?? order.billed_extra_amount ?? 0,
     items: order.clothes_count_customer,

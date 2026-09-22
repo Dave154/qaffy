@@ -39,10 +39,31 @@ export async function loader({ request }: Route.LoaderArgs) {
     }
   }
 
+  const locationIds = [...new Set(
+    (orders ?? [])
+      .map((order) => order.pickup_location_id)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0),
+  )]
+  const locationMap = new Map<string, string>()
+
+  if (locationIds.length > 0) {
+    const { data: locations } = await serverSupabase
+      .from('pickup_locations')
+      .select('id, name')
+      .in('id', locationIds)
+
+    for (const location of locations ?? []) {
+      if (location.id && location.name) {
+        locationMap.set(location.id, location.name)
+      }
+    }
+  }
+
   const expandedOrders = (orders ?? []).map((order) => ({
     ...order,
     customer_name: profileMap.get(order.customer_id)?.name ?? 'Customer',
     customer_uid: profileMap.get(order.customer_id)?.uid ?? null,
+    pickup_location_name: order.pickup_location_id ? locationMap.get(order.pickup_location_id) ?? null : null,
   }))
 
   return data({ orders: expandedOrders, logisticsEvents: logisticsEvents ?? [] }, { headers, status: 200 })

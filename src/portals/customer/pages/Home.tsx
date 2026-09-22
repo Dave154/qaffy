@@ -14,7 +14,6 @@ import BubblyBackground from '../../../components/BubblyBackground'
 import PlanEndingBanner from '../../../components/PlanEndingBanner'
 import MismatchBanner from '../../../components/MismatchBanner'
 import { toast } from '../../../lib/toast'
-import { calculatePaystackCharge, calculatePaystackFee } from '../../../lib/paystack'
 
 // Initializes Paystack top-ups and credits the wallet only after server-side verification.
 // eslint-disable-next-line react-refresh/only-export-components
@@ -35,10 +34,8 @@ export async function action({ request }: Route.ActionArgs) {
 
   const secretKey = process.env.PAYSTACK_SECRET_KEY
   if (!secretKey) return data({ ok: false, message: 'Paystack is not configured.' }, { status: 503, headers })
-  const feeAmount = calculatePaystackFee(amount)
-  const chargedAmount = calculatePaystackCharge(amount)
   const paymentReference = `topup_${crypto.randomUUID()}`
-  const { error: paymentError } = await serverSupabase.from('payments').insert({ customer_id: userData.user.id, provider: 'paystack', reference: paymentReference, amount, charged_amount: chargedAmount, fee_amount: feeAmount, balance_type: 'one_off', status: 'pending' })
+  const { error: paymentError } = await serverSupabase.from('payments').insert({ customer_id: userData.user.id, provider: 'paystack', reference: paymentReference, amount, balance_type: 'one_off', status: 'pending' })
   if (paymentError) {
     console.error('Paystack pending payment insert failed:', paymentError)
     return data({ ok: false, message: 'The payment could not be recorded. Please check that the latest database migrations are applied.' }, { status: 500, headers })
@@ -47,7 +44,7 @@ export async function action({ request }: Route.ActionArgs) {
   const initializationResponse = await fetch('https://api.paystack.co/transaction/initialize', {
     method: 'POST',
     headers: { Authorization: `Bearer ${secretKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: userData.user.email, amount: Math.round(chargedAmount * 100), reference: paymentReference, callback_url: new URL('/', request.url).toString() }),
+    body: JSON.stringify({ email: userData.user.email, amount: Math.round(amount * 100), reference: paymentReference, callback_url: new URL('/', request.url).toString() }),
   })
   const initialization = await initializationResponse.json() as { status?: boolean; message?: string; data?: { authorization_url?: string; reference?: string } }
   if (!initializationResponse.ok || !initialization.status || !initialization.data?.authorization_url) {
@@ -70,9 +67,10 @@ export default function Home() {
   const pendingPaymentTotal = orders.filter((order) => order.status === 'Pending payment').reduce((total, order) => total + order.total, 0)
   const getVisibleOtp = (order: typeof orders[number]) => {
     if (order.status === 'Awaiting pickup') return order.pickupOtp
-    if (order.status === 'In progress') return order.deliveryOtp ?? ''
+    if (order.deliveryOtp) return order.deliveryOtp
     return ''
   }
+  const getVisibleOtpLabel = (order: typeof orders[number]) => order.status === 'Awaiting pickup' ? 'Pickup OTP' : 'Delivery OTP'
   const recentOrders = [...orders].sort((firstOrder, secondOrder) => Number(Boolean(getVisibleOtp(secondOrder))) - Number(Boolean(getVisibleOtp(firstOrder))))
   const getAmountLabel = (order: typeof orders[number]) => {
     if (order.total > 0) return `₦${order.total.toLocaleString()}`
@@ -216,7 +214,7 @@ export default function Home() {
               <h3 className="text-lg font-bold text-slate-900">Recent orders</h3>
               <p className="mt-1 text-xs text-slate-500">Track pickup, delivery, and payment</p>
             </div>
-            <Link to="/orders" className="shrink-0 whitespace-nowrap pt-1 text-sm font-medium text-brand-primary">View all</Link>
+            <Link to="/orders" prefetch="intent" className="shrink-0 whitespace-nowrap pt-1 text-sm font-medium text-brand-primary">View all</Link>
           </div>
 
           <div className="space-y-3">
@@ -240,7 +238,7 @@ export default function Home() {
                     {getVisibleOtp(order) ? (
                       <div className="flex items-start gap-3 sm:flex-col sm:items-end">
                         <div className="min-w-0">
-                          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-primary">{order.status === 'Awaiting pickup' ? 'Pickup OTP' : 'Delivery OTP'}</p>
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-primary">{getVisibleOtpLabel(order)}</p>
                           <div className="mt-2">
                             <ProtectedOtp value={getVisibleOtp(order)} digitClassName="h-10 w-10 text-base" />
                           </div>
@@ -257,7 +255,7 @@ export default function Home() {
 
                 <div className="mt-4 flex flex-col gap-3 border-t border-slate-200 pt-3 sm:flex-row sm:items-center sm:justify-between">
                   <p className="text-sm text-slate-600">{order.pickup}</p>
-                  <Link to={`/orders?order=${encodeURIComponent(order.publicOrderNumber)}`} className="rounded-lg border border-brand-border bg-white px-3.5 py-2 text-center text-sm font-semibold text-brand-primary hover:bg-brand-soft">View order</Link>
+                  <Link to={`/orders?order=${encodeURIComponent(order.publicOrderNumber)}&returnTo=${encodeURIComponent('/')}`} prefetch="intent" className="rounded-lg border border-brand-border bg-white px-3.5 py-2 text-center text-sm font-semibold text-brand-primary hover:bg-brand-soft">View order</Link>
                 </div>
               </article>
             ))}

@@ -5,7 +5,7 @@ import CopyableOrderId from '../../../components/CopyableOrderId'
 import ProtectedOtp from '../../../components/ProtectedOtp'
 import { type CustomerOrder } from '../customer-store'
 import { useCustomerStore } from '../customer-store-hook'
-import { data, useSearchParams } from 'react-router'
+import { data, useNavigate, useSearchParams } from 'react-router'
 import type { Route } from './+types/Orders'
 import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
 import { chargeSubscriptionInvoice, debitOneOffInvoice, InsufficientBalanceError } from '../../../lib/wallet.server'
@@ -46,18 +46,37 @@ export default function Orders() {
   const { orders } = useCustomerStore()
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false)
   const [selectedOrder, setSelectedOrder] = useState<CustomerOrder | null>(null)
+  const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const [activeFilter, setActiveFilter] = useState(() => searchParams.get('filter') ?? 'All orders')
   const searchQuery = (searchParams.get('search') ?? '').trim().toLowerCase()
   const requestedOrderId = searchParams.get('order')
+  const returnTo = searchParams.get('returnTo') ?? '/orders'
   const requestedOrder = requestedOrderId ? orders.find((order) => order.publicOrderNumber === requestedOrderId || order.id === requestedOrderId) ?? null : null
   const orderDetails = requestedOrder ?? selectedOrder
 
   const closeOrderDetails = () => {
     setSelectedOrder(null)
+
+    if (searchParams.has('returnTo')) {
+      const target = returnTo
+      const nextParams = new URLSearchParams(searchParams)
+      nextParams.delete('order')
+      nextParams.delete('returnTo')
+
+      if (target === '/') {
+        navigate(target, { replace: true })
+        return
+      }
+
+      navigate({ pathname: target, search: nextParams.toString() ? `?${nextParams.toString()}` : '' }, { replace: true })
+      return
+    }
+
     if (searchParams.has('order')) {
       const nextParams = new URLSearchParams(searchParams)
       nextParams.delete('order')
+      nextParams.delete('returnTo')
       setSearchParams(nextParams, { replace: true })
     }
   }

@@ -494,8 +494,8 @@ export async function creditWallet(customerId: string, balanceType: WalletBalanc
   const result = await sql.begin(async (tx) => {
     await tx`insert into wallets (customer_id) values (${customerId}) on conflict (customer_id) do nothing`
     await tx`
-      insert into payments (customer_id, reference, amount, charged_amount, fee_amount, balance_type, status)
-      values (${customerId}, ${paymentReference}, ${amount}, ${amount}, 0, ${balanceType}, 'pending')
+      insert into payments (customer_id, reference, amount, balance_type, status)
+      values (${customerId}, ${paymentReference}, ${amount}, ${balanceType}, 'pending')
       on conflict (reference) do nothing
     `
 

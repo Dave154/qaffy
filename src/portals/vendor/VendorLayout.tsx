@@ -120,7 +120,7 @@ export default function VendorLayout() {
           </div>
           <nav className="mx-auto mt-12 w-[194px] space-y-1">
             {navigation.map(({ to, label, icon: Icon, end }) => (
-                <NavLink key={to} to={to} end={end} onClick={() => setMenuOpen(false)} className={({ isActive }) => `flex h-10 items-center gap-3 rounded-[8px] px-4 text-sm font-medium transition ${isActive ? 'bg-brand-surface text-brand-strong' : 'text-[#121212] hover:bg-[#f8f8f8]'}`}>
+                <NavLink key={to} to={to} end={end} prefetch="intent" onClick={() => setMenuOpen(false)} className={({ isActive }) => `flex h-10 items-center gap-3 rounded-[8px] px-4 text-sm font-medium transition ${isActive ? 'bg-brand-surface text-brand-strong' : 'text-[#121212] hover:bg-[#f8f8f8]'}`}>
                 <span className="flex h-5 w-5 items-center justify-center rounded-[5px]"><Icon size={16} /></span>
                 {label}
               </NavLink>

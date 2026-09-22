@@ -156,6 +156,7 @@ export default function Invoice() {
 
           <Link
             to="/otp"
+            prefetch="intent"
             className={`mt-3 block w-full rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3 text-center text-sm font-semibold text-violet-700 transition hover:bg-violet-100 ${invoice.status !== 'Paid' ? 'pointer-events-none opacity-50' : ''}`}
             aria-disabled={invoice.status !== 'Paid'}
           >

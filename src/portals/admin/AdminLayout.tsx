@@ -86,6 +86,7 @@ export default function AdminLayout() {
             </button> : <NavLink
               to={item.to}
               end={item.end}
+              prefetch="intent"
               className={({ isActive }) => `group relative flex h-11 items-center rounded-xl text-sm font-medium transition ${isCollapsed ? 'justify-center px-0' : 'gap-3 px-4'} ${isActive ? 'bg-brand-soft text-brand-primary' : 'text-[#121212] hover:bg-brand-soft hover:text-brand-primary'}`}
             >
               <item.icon size={17} strokeWidth={1.8} aria-hidden="true" />
