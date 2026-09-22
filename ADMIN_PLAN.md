@@ -2,10 +2,24 @@
 
 Referral product rules and implementation sequencing are documented in [REFERRAL_PLAN.md](REFERRAL_PLAN.md). Treat that document as the source of truth before building referral attribution, campaigns, or rewards.
 
-**Status:** Approved planning baseline
-**Updated:** 2026-09-17
+**Status:** Approved planning baseline + current execution snapshot
+**Updated:** 2026-09-22
 
 Read this before implementing the admin portal. Confirmed product decisions are binding unless the user changes them.
+
+## Current execution snapshot
+
+The admin work is now substantially implemented and aligned with the live platform state. This includes:
+
+- Responsive admin navigation and mobile drawer behavior
+- Live overview metrics, charts, and date filters across day/week/month/all-time ranges
+- Live admin orders with search, filter, and read-only detail views
+- Vendor/logistics partner management, category and rate management, and mismatch review
+- Finance summary pages with admin withdrawal ledger and settlement snapshots
+- Notification center and referral-aware customer UI updates outside the admin portal
+- Customer-facing correctness fixes such as timestamp-based recent-order sorting and pending referral reward wording
+
+The highest-priority remaining admin gap is still the trusted settlement payout release flow through verified Paystack Transfers, including transfer metadata, dedupe protection, and audit persistence.
 
 ## Product Rules
 
@@ -30,6 +44,10 @@ Read this before implementing the admin portal. Confirmed product decisions are 
 - The codebase includes working data tables and screens for profiles, profile_roles, vendors, logistics_agents, orders, order_items, mismatches, invoices, payments, wallet tooling, plans, subscriptions, cloth_categories, cloth_category_rates, pickup_locations, vendor_settlements, vendor_settlement_orders, referrals, and order_logistics_events.
 - Admin functionality already implemented in code includes overview, partner management, categories/rates, mismatch review, finance summaries, and plan configuration.
 - Admin provisioning is implemented at `/admin/admins` under Settings. An existing or new email can receive approved Admin access through `profile_roles`; the action is server-side and audited.
+- Admin mobile navigation is implemented with a responsive drawer covering the full admin route tree, nested Partners/Settings links, backdrop dismissal, and mobile logout.
+- Admin Overview supports `Today`, weekly, monthly, custom, and all-time filters. The Today chart uses hourly points through the current hour; other ranges retain daily points.
+- Admin Overview trend, revenue, workload, and subscriber bars expose exact values through hover, focus, and tap-friendly tooltips.
+- Customer notification center work is implemented separately from Admin reporting: persisted notification events, unread state, realtime updates, safe internal links, and concise title/body rendering are available at `/notifications`.
 
 ## Outstanding Admin Work
 
@@ -40,8 +58,11 @@ These items are **not complete yet**:
 - **Admin Orders date filter:** filter orders by date range. **Implemented 2026-09-16** using created date.
 - **Admin Orders CSV export:** export only the currently filtered order results. **Implemented 2026-09-16** with search, status, and date filters applied.
 - **Admin Overview date filter:** implemented 2026-09-16 with independent general and chart date ranges using All time, This month, Last month, and Custom options.
+- **Admin Overview date filter:** implemented with All time, Today, This week, Last week, This month, Last month, and Custom options. Today uses hourly chart buckets; other ranges use daily buckets.
 - **Admin Overview service metrics:** implemented 2026-09-16 with live Wash, Iron, and Wash + Iron clothes counts from order items.
 - **Admin Overview chart metrics:** implemented 2026-09-16 with Orders, Revenue, and New customers chart options.
+- **Admin Overview chart values:** implemented 2026-09-22 with hover/focus/tap values for trend points, revenue bars, workload bars, and plan subscriber bars.
+- **Admin mobile navigation:** implemented 2026-09-22 with a full-screen drawer below the desktop breakpoint and no desktop sidebar space on mobile.
 - **Settlement payout release:** execute trusted Admin payout transfers after verifying the vendor payout account. The current Admin Finance page records internal withdrawals and settlement batches, but does not initiate bank transfers yet.
 
 ### Medium Priority

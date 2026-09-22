@@ -4,6 +4,18 @@
 
 This document outlines the content structure, features, and requirements for the Qaffy laundry service platform based on analysis of the legacy system and product specifications.
 
+## Current status snapshot (2026-09-22)
+
+The repository is now in a product-validated implementation phase across all major portals. Recent work includes:
+
+- Customer portal completion pass: live Paystack wallet top-up and subscription flows, realtime wallet updates, active plan loading, notification center, global referral modal, invoice history, and customer OTP order selection fixes
+- Admin portal completion: overview analytics, live admin screens, responsive mobile navigation, compact finance views, and payout-ledger tracking
+- Logistics portal fixups: agent-scoped dashboards, pickup/delivery workflow accuracy, and identity-aware event history for the signed-in operator
+- Vendor portal polish: consistent branded header spacing, responsive layout, and settlement/finance state handling
+- Product-level correctness: recent orders now sort strictly by timestamp, referral messaging now explains pending reward status, and portal branding is aligned across customer, vendor, logistics, and admin shells
+
+These updates are active in the repo and should be treated as the current operating baseline unless a more recent change is explicitly documented.
+
 ---
 
 ## Part 1: Old Qaffy System Content Analysis
@@ -462,6 +474,17 @@ Before updating UI components, verify:
 - Admin Orders: date filtering and CSV export based on the current filters **implemented 2026-09-16**. Date filtering currently uses created date.
 - Admin Overview: date filtering for the order graph and related statistics, plus live Wash, Iron, and Wash + Iron clothes metrics.
 - Admin User Details: the Cancelled metric is hidden for now; subscription dates should derive automatically from the selected plan and semester settings.
+
+#### Admin UX and reporting continuation update (2026-09-22)
+
+- Admin mobile navigation is implemented in `src/portals/admin/AdminLayout.tsx`. The mobile drawer includes Overview, Partners, Orders, Mismatches, Finance, Users, Plans, Referrals, Settings subroutes, and logout. The desktop sidebar remains separate, and mobile content no longer reserves sidebar width.
+- Admin Overview date filters now include Today, This week, Last week, This month, Last month, Custom, and All time. Today uses hourly chart buckets through the current hour; all other ranges continue using daily chart buckets.
+- Admin Overview charts now expose exact values through trend-point hover/focus/tap tooltips and workload, revenue, and plan subscriber bar tooltips.
+- The customer notification center is registered at `/notifications` and backed by `notification_events`. Migration `supabase/migrations/20260922100000_notification_center.sql` adds `read_at`, customer-scoped update RLS, Realtime publication, and `ON DELETE SET NULL` notification references. Apply it before relying on unread state or live notifications.
+- Notification payloads support title/body plus optional details, while the customer center intentionally displays only the title and body. Stringified JSON payloads are normalized before rendering.
+- Logistics pickup and delivery notifications now use the persisted notification sender, so they appear in both push delivery and the customer notification center.
+- Vendor, logistics, and admin auth flows now preserve portal-specific Google callback errors, sign out invalid sessions, and show clear access-denial messages. Admin denial uses `This email is not approved for admin access.`; vendor and logistics require both approved role and approved partner records.
+- Customer SSR date output uses an explicit `en-GB` locale for overview and notification timestamps to prevent server/client hydration mismatches.
 
 Outstanding Admin work is highlighted in `ADMIN_PLAN.md` under **Outstanding Admin Work**. The highest-priority unfinished item is trusted settlement payout release through Paystack Transfers, including transfer metadata, duplicate-transfer prevention, and paid-settlement audit records.
 
