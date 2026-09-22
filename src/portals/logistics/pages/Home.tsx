@@ -5,7 +5,7 @@ import { sql } from '../../../lib/db.server'
 import { requireRole } from '../../../lib/auth.server'
 import { isSupabaseServerConfigured } from '../../../lib/supabase.server'
 import CopyableOrderId from '../../../components/CopyableOrderId'
-import { sendCustomerPush } from '../../../lib/push.server'
+import { sendCustomerNotification } from '../../../lib/notifications.server'
 
 // Logistics currently runs in dev-friendly mode, so this action uses the trusted
 // server connection while still validating both the order and its pickup OTP.
@@ -37,12 +37,12 @@ export async function action({ request }: Route.ActionArgs) {
     where id = ${orderId}
       and status = 'out_for_delivery'
       and right(regexp_replace(coalesce(delivery_otp, ''), '[^0-9]', '', 'g'), 4) = ${otp}
-    returning id, customer_id, picked_up_date, status` : sql`update orders
+    returning id, customer_id, public_order_number, picked_up_date, status` : sql`update orders
     set status = 'picked_up', picked = true, picked_up_date = now(), pickup_otp = null
     where id = ${orderId}
       and status = 'pending_pickup'
       and right(regexp_replace(coalesce(pickup_otp, ''), '[^0-9]', '', 'g'), 4) = ${otp}
-    returning id, customer_id, picked_up_date, status`}
+    returning id, customer_id, public_order_number, picked_up_date, status`}
   `
 
   if (!order) {
@@ -65,11 +65,21 @@ export async function action({ request }: Route.ActionArgs) {
   }
 
   if (intent === 'pickup' || intent === 'final_delivery') {
-    const message = intent === 'pickup'
-      ? { title: 'Your order was picked up', body: 'Qaffy has collected your laundry.', url: `/orders?order=${encodeURIComponent(order.id)}` }
-      : { title: 'Your order was delivered', body: 'Your Qaffy laundry order has been delivered.', url: `/orders?order=${encodeURIComponent(order.id)}` }
     try {
-      await sendCustomerPush(order.customer_id, message)
+      const isPickup = intent === 'pickup'
+      await sendCustomerNotification({
+        eventKey: `${isPickup ? 'pickup' : 'delivery'}:${order.id}:confirmed`,
+        customerId: order.customer_id,
+        notificationType: isPickup ? 'order_picked_up' : 'order_delivered',
+        orderId: order.id,
+        payload: {
+          title: isPickup ? 'Your order was picked up' : 'Your order was delivered',
+          body: isPickup ? 'Qaffy has collected your laundry.' : 'Your Qaffy laundry order has been delivered.',
+          details: [`Order: ${order.public_order_number}`, isPickup ? 'Your laundry is now with Qaffy.' : 'Your laundry has been handed back to you.'],
+          url: `/orders?order=${encodeURIComponent(order.public_order_number)}`,
+          tag: `order:${order.id}:${isPickup ? 'pickup' : 'delivery'}`,
+        },
+      })
     } catch (error) {
       console.error('Customer notification dispatch failed:', error)
     }
@@ -453,7 +463,6 @@ export default function Home() {
                 <div>
                   <p className="text-sm font-semibold text-slate-800">{matchedOrder.public_order_number}</p>
                   <p className="mt-1 text-xs font-medium text-slate-600">{matchedOrder.customer_name ?? 'Customer'}</p>
-                  <p className="mt-1 text-[11px] font-medium text-slate-500">Pickup: {matchedOrder.pickup_location_name ?? 'Location pending'}</p>
                   <p className="mt-1 text-[11px] font-medium text-slate-500">Pickup: {matchedOrder.pickup_location_name ?? 'Location pending'}</p>
                   <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
                     <span>UID:</span>

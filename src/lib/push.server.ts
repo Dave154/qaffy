@@ -4,6 +4,7 @@ import { sql } from './db.server'
 export type PushPayload = {
   title: string
   body: string
+  details?: string[]
   url: string
   tag?: string
 }

@@ -32,7 +32,7 @@ export async function action({ request }: Route.ActionArgs) {
     }
     const result = await chargeSubscriptionInvoice(userData.user.id, invoiceId)
     if (!result.alreadyPaid) {
-      await sendCustomerNotification({ eventKey: `invoice:${invoiceId}:paid`, customerId: userData.user.id, notificationType: 'payment_confirmed', orderId: result.orderId, payload: { title: 'Payment confirmed', body: `Your invoice for ${result.publicOrderNumber} has been paid.`, url: `/orders?order=${encodeURIComponent(result.publicOrderNumber)}`, tag: `order:${result.orderId}:payment` } })
+      await sendCustomerNotification({ eventKey: `invoice:${invoiceId}:paid`, customerId: userData.user.id, notificationType: 'payment_confirmed', orderId: result.orderId, payload: { title: 'Payment confirmed', body: `Your invoice for ${result.publicOrderNumber} has been paid.`, details: [`Order: ${result.publicOrderNumber}`, 'The invoice is fully paid.', 'Your order can continue to delivery.'], url: `/orders?order=${encodeURIComponent(result.publicOrderNumber)}`, tag: `order:${result.orderId}:payment` } })
     }
     return data({ ok: true }, { headers })
   } catch (error) {

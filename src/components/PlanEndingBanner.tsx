@@ -4,6 +4,7 @@ import { Clock3, X } from 'lucide-react'
 type PlanEndingBannerProps = {
   planName: string
   endDate: string | null
+  onDismiss?: () => void
 }
 
 function getDaysRemaining(endDate: string) {
@@ -13,7 +14,16 @@ function getDaysRemaining(endDate: string) {
   return Math.ceil((end.getTime() - startOfToday.getTime()) / 86_400_000)
 }
 
-export default function PlanEndingBanner({ planName, endDate }: PlanEndingBannerProps) {
+export function shouldShowPlanEndingBanner(endDate: string | null) {
+  if (!endDate) return false
+  const daysRemaining = getDaysRemaining(endDate)
+  const storageKey = `qaffy-plan-ending-banner:${endDate}`
+  const storedDismissal = typeof window !== 'undefined' ? window.localStorage.getItem(storageKey) : null
+  const dismissalStage = storedDismissal ? Number(storedDismissal) : null
+  return daysRemaining >= 0 && daysRemaining <= 7 && (dismissalStage === null || (daysRemaining <= 3 && dismissalStage === 7))
+}
+
+export default function PlanEndingBanner({ planName, endDate, onDismiss }: PlanEndingBannerProps) {
   const [dismissedAt, setDismissedAt] = useState<number | null>(null)
   const daysRemaining = endDate ? getDaysRemaining(endDate) : null
   const storageKey = endDate ? `qaffy-plan-ending-banner:${endDate}` : null
@@ -27,6 +37,7 @@ export default function PlanEndingBanner({ planName, endDate }: PlanEndingBanner
     const dismissalStage = daysRemaining <= 3 ? 3 : 7
     if (storageKey) window.localStorage.setItem(storageKey, String(dismissalStage))
     setDismissedAt(dismissalStage)
+    onDismiss?.()
   }
 
   return (

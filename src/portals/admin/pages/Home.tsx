@@ -15,21 +15,29 @@ type DashboardData = {
   recentVendors: RecentVendor[]
   recentCustomers: RecentCustomer[]
   trend: DailyPoint[]
+  hourlyTrend: DailyPoint[]
   activity: Activity[]
 }
 
-const emptyData: DashboardData = { metrics: { totalOrders: 0, ordersToday: 0, customers: 0, vendors: 0, logistics: 0, activeSubscriptions: 0, unpaidInvoices: 0, unpaidAmount: 0, revenue: 0, clothes: 0, washClothes: 0, ironClothes: 0, washIronClothes: 0, vendorPayouts: 0, platformProfit: 0, subscriptionRevenue: 0, oneTimeRevenue: 0, oneTimeOrders: 0 }, pipeline: [], plans: [], recentVendors: [], recentCustomers: [], trend: [], activity: [] }
+const emptyData: DashboardData = { metrics: { totalOrders: 0, ordersToday: 0, customers: 0, vendors: 0, logistics: 0, activeSubscriptions: 0, unpaidInvoices: 0, unpaidAmount: 0, revenue: 0, clothes: 0, washClothes: 0, ironClothes: 0, washIronClothes: 0, vendorPayouts: 0, platformProfit: 0, subscriptionRevenue: 0, oneTimeRevenue: 0, oneTimeOrders: 0 }, pipeline: [], plans: [], recentVendors: [], recentCustomers: [], trend: [], hourlyTrend: [], activity: [] }
 
 function money(value: number) { return `₦${value.toLocaleString()}` }
 function formatTime(value: string) { return new Date(value).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) }
 function dayKey(date: Date) { return date.toISOString().slice(0, 10) }
-type DateMode = 'all' | 'this_week' | 'last_week' | 'this_month' | 'last_month' | 'custom'
+function localDayKey(date: Date) { return dateInput(date) }
+function hourKey(date: Date) { return `${localDayKey(date)}T${String(date.getHours()).padStart(2, '0')}` }
+function hourLabel(hour: number) { return new Date(2000, 0, 1, hour).toLocaleTimeString('en-GB', { hour: 'numeric' }) }
+type DateMode = 'all' | 'today' | 'this_week' | 'last_week' | 'this_month' | 'last_month' | 'custom'
 type ChartMetric = 'orders' | 'revenue' | 'customers'
 function dateInput(date: Date) { return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}` }
 function rangeForMode(mode: DateMode, start: string, end: string) {
   if (mode === 'custom') return { start, end }
   if (mode === 'all') return { start: '', end: '' }
   const today = new Date()
+  if (mode === 'today') {
+    const todayInput = dateInput(today)
+    return { start: todayInput, end: todayInput }
+  }
   if (mode === 'this_week' || mode === 'last_week') {
     const mondayOffset = (today.getDay() + 6) % 7
     const weekStart = new Date(today.getFullYear(), today.getMonth(), today.getDate() - mondayOffset + (mode === 'last_week' ? -7 : 0))
@@ -108,6 +116,39 @@ export async function loader({ request }: Route.LoaderArgs) {
   }
   for (const customer of customerGrowthRows ?? []) getDailyPoint(dayKey(new Date(customer.created_at))).customers += 1
   const trend = [...dailyMetrics.values()].sort((left, right) => left.date.localeCompare(right.date))
+  const hourlyMetrics = new Map<string, DailyPoint>()
+  const getHourlyPoint = (date: Date) => {
+    const key = hourKey(date)
+    const existing = hourlyMetrics.get(key)
+    if (existing) return existing
+    const point: DailyPoint = { date: localDayKey(date), label: hourLabel(date.getHours()), orders: 0, revenue: 0, customers: 0, clothes: 0, washClothes: 0, ironClothes: 0, washIronClothes: 0, oneTimeOrders: 0, oneTimeRevenue: 0, subscriptionRevenue: 0 }
+    hourlyMetrics.set(key, point)
+    return point
+  }
+  const localToday = new Date()
+  for (let hour = 0; hour <= localToday.getHours(); hour += 1) getHourlyPoint(new Date(localToday.getFullYear(), localToday.getMonth(), localToday.getDate(), hour))
+  for (const order of allOrders) {
+    const createdAt = new Date(order.created_at)
+    if (localDayKey(createdAt) !== localDayKey(localToday)) continue
+    const point = getHourlyPoint(createdAt)
+    point.orders += 1
+    point.clothes += order.clothes_count_customer
+    if (!order.is_subscription_order && order.status !== 'cancelled') point.oneTimeOrders += 1
+  }
+  for (const invoice of paidInvoices) {
+    const createdAt = new Date(invoice.created_at)
+    if (localDayKey(createdAt) !== localDayKey(localToday)) continue
+    const point = getHourlyPoint(createdAt)
+    const amount = Number(invoice.amount)
+    point.revenue += amount
+    if (orderById.get(invoice.order_id)?.is_subscription_order) point.subscriptionRevenue += amount
+    else point.oneTimeRevenue += amount
+  }
+  for (const customer of customerGrowthRows ?? []) {
+    const createdAt = new Date(customer.created_at)
+    if (localDayKey(createdAt) === localDayKey(localToday)) getHourlyPoint(createdAt).customers += 1
+  }
+  const hourlyTrend = [...hourlyMetrics.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([, point]) => point)
   const pipelineStatuses = [['Pending pickup', 'pending_pickup'], ['Picked up', 'picked_up'], ['At vendor', 'at_vendor'], ['Awaiting review', 'invoiced'], ['Paid', 'paid'], ['Out for delivery', 'out_for_delivery'], ['Delivered', 'delivered'], ['Cancelled', 'cancelled']] as const
   const pipeline = await Promise.all(pipelineStatuses.map(async ([label, status]) => { const { count } = await supabase.from('orders').select('id', { count: 'exact', head: true }).eq('status', status); return { label, status, count: count ?? 0 } }))
   const subscriberCounts = new Map<string, number>()
@@ -120,11 +161,14 @@ export async function loader({ request }: Route.LoaderArgs) {
     recentVendors: (vendorRows ?? []).map((vendor) => ({ id: vendor.id, name: vendor.business_name, status: vendor.status })),
     recentCustomers: (customerRows ?? []).map((customer) => ({ id: customer.id, name: customer.name ?? 'Unnamed customer', email: customer.email })),
     trend,
+    hourlyTrend,
     activity,
   }, { headers, status: 200 })
 }
 
 function TrendChart({ points, metric }: { points: DailyPoint[]; metric: ChartMetric }) {
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
+  const labelStep = points.length > 12 ? 3 : 1
   const metricValue = (point: DailyPoint) => metric === 'orders' ? point.orders : metric === 'revenue' ? point.revenue : point.customers
   const maxValue = Math.max(...points.map(metricValue), 1)
   const coordinates = points.map((point, index) => ({ x: index * 100 / Math.max(points.length - 1, 1), y: 100 - (metricValue(point) / maxValue) * 76 }))
@@ -135,17 +179,19 @@ function TrendChart({ points, metric }: { points: DailyPoint[]; metric: ChartMet
     return `${path} C ${midpoint} ${previous.y}, ${midpoint} ${point.y}, ${point.x} ${point.y}`
   }, '')
   const valueLabels = [maxValue, Math.ceil(maxValue / 2), 0]
-  return <div className="relative h-56 overflow-hidden rounded-xl bg-[#f8fcfc] p-4"><div className="absolute bottom-8 left-0 top-5 flex flex-col justify-between text-[10px] font-medium text-slate-400">{valueLabels.map((value, index) => <span key={`${value}-${index}`}>{metric === 'revenue' ? money(value) : value}</span>)}</div><div className="absolute inset-x-4 top-5 space-y-8 text-[10px] text-slate-300"><span className="block border-t border-dashed border-slate-200" /><span className="block border-t border-dashed border-slate-200" /><span className="block border-t border-dashed border-slate-200" /></div><svg viewBox="0 0 100 100" preserveAspectRatio="none" className="absolute inset-x-4 bottom-8 top-5 h-[calc(100%-52px)] w-[calc(100%-32px)] overflow-visible"><defs><linearGradient id="orders-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#51d3c1" stopOpacity=".38" /><stop offset="100%" stopColor="#51d3c1" stopOpacity=".03" /></linearGradient></defs><path d={`${linePath} L 100 100 L 0 100 Z`} fill="url(#orders-fill)" /><path d={linePath} fill="none" stroke="#51c9bb" strokeLinecap="round" strokeWidth="1.8" vectorEffect="non-scaling-stroke" /></svg><div className="absolute inset-x-4 bottom-2 flex justify-between text-[10px] font-medium text-slate-400">{points.map((point) => <span key={point.date}>{point.label}</span>)}</div></div>
+  const selectedPoint = selectedIndex === null ? null : points[selectedIndex]
+  const activeCoordinate = selectedIndex === null ? null : coordinates[selectedIndex]
+  return <div className="relative h-56 overflow-hidden rounded-xl bg-[#f8fcfc] p-4"><div className="absolute bottom-8 left-0 top-5 flex flex-col justify-between text-[10px] font-medium text-slate-400">{valueLabels.map((value, index) => <span key={`${value}-${index}`}>{metric === 'revenue' ? money(value) : value}</span>)}</div><div className="absolute inset-x-4 top-5 space-y-8 text-[10px] text-slate-300"><span className="block border-t border-dashed border-slate-200" /><span className="block border-t border-dashed border-slate-200" /><span className="block border-t border-dashed border-slate-200" /></div><svg viewBox="0 0 100 100" preserveAspectRatio="none" className="absolute inset-x-4 bottom-8 top-5 h-[calc(100%-52px)] w-[calc(100%-32px)] overflow-visible"><defs><linearGradient id="orders-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#51d3c1" stopOpacity=".38" /><stop offset="100%" stopColor="#51d3c1" stopOpacity=".03" /></linearGradient></defs><path d={`${linePath} L 100 100 L 0 100 Z`} fill="url(#orders-fill)" /><path d={linePath} fill="none" stroke="#51c9bb" strokeLinecap="round" strokeWidth="1.8" vectorEffect="non-scaling-stroke" />{coordinates.map((coordinate, index) => <circle key={`${points[index].date}-${points[index].label}`} cx={coordinate.x} cy={coordinate.y} r={selectedIndex === index ? 3 : 2} fill="#fff" stroke="#24ad9f" strokeWidth="1.5" vectorEffect="non-scaling-stroke" tabIndex={0} role="button" aria-label={`${points[index].label}: ${metric === 'revenue' ? money(metricValue(points[index])) : metricValue(points[index])}`} onMouseEnter={() => setSelectedIndex(index)} onFocus={() => setSelectedIndex(index)} onClick={() => setSelectedIndex(index)} />)}</svg>{selectedPoint && activeCoordinate && <div className="pointer-events-none absolute z-20 -translate-x-1/2 -translate-y-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[10px] font-semibold text-slate-700 shadow-lg" style={{ left: `${activeCoordinate.x}%`, top: `${activeCoordinate.y}%` }}><div className="flex items-center gap-2"><span className="text-slate-500">{selectedPoint.label}</span><span className="text-slate-900">{metric === 'revenue' ? money(metricValue(selectedPoint)) : metricValue(selectedPoint)}</span></div></div>}<div className="absolute inset-x-4 bottom-2 flex justify-between text-[10px] font-medium text-slate-400">{points.map((point, index) => <span key={`${point.date}-${point.label}`} className={index % labelStep === 0 || index === points.length - 1 ? '' : 'invisible'}>{point.label}</span>)}</div>{selectedPoint && <div className="pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs shadow-lg"><p className="font-semibold text-slate-900">{selectedPoint.label}</p><p className="mt-0.5 text-slate-600">{metric === 'revenue' ? money(metricValue(selectedPoint)) : `${metricValue(selectedPoint)} ${metric === 'orders' ? 'orders' : 'customers'}`}</p></div>}</div>
 }
 
 function PipelineChart({ pipeline }: { pipeline: DashboardData['pipeline'] }) {
   const visible = pipeline.filter((item) => item.count > 0)
   const total = Math.max(pipeline.reduce((sum, item) => sum + item.count, 0), 1)
-  return <div className="space-y-3">{visible.length === 0 ? <p className="text-sm text-slate-500">No order activity yet.</p> : visible.slice(0, 5).map((item, index) => <Link key={item.status} to={`/admin/orders?status=${item.status}`} className="block"><div className="mb-1.5 flex items-center justify-between text-xs"><span className="font-medium text-slate-600">{item.label}</span><span className="font-bold text-slate-900">{item.count}</span></div><div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className={`h-full rounded-full ${index === 0 ? 'bg-[#00b7d4]' : index === 1 ? 'bg-[#ff6077]' : index === 2 ? 'bg-[#64c4ae]' : 'bg-[#a9dfe6]'}`} style={{ width: `${Math.max((item.count / total) * 100, 4)}%` }} /></div></Link>)}</div>
+  return <div className="space-y-3">{visible.length === 0 ? <p className="text-sm text-slate-500">No order activity yet.</p> : visible.slice(0, 5).map((item, index) => <Link key={item.status} to={`/admin/orders?status=${item.status}`} className="group relative block"><div className="mb-1.5 flex items-center justify-between text-xs"><span className="font-medium text-slate-600">{item.label}</span><span className="font-bold text-slate-900">{item.count}</span></div><div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className={`h-full rounded-full ${index === 0 ? 'bg-[#00b7d4]' : index === 1 ? 'bg-[#ff6077]' : index === 2 ? 'bg-[#64c4ae]' : 'bg-[#a9dfe6]'}`} style={{ width: `${Math.max((item.count / total) * 100, 4)}%` }} /></div><span className="pointer-events-none absolute -top-9 left-1/2 z-10 hidden -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-[10px] font-medium text-white shadow-lg group-hover:block group-focus-visible:block">{item.label}: {item.count} ({Math.round((item.count / total) * 100)}%)</span></Link>)}</div>
 }
 
 export default function Home() {
-  const { metrics, pipeline, plans, recentVendors, recentCustomers, trend, activity } = useLoaderData<typeof loader>()
+  const { metrics, pipeline, plans, recentVendors, recentCustomers, trend, hourlyTrend, activity } = useLoaderData<typeof loader>()
   const [overviewMode, setOverviewMode] = useState<DateMode>('all')
   const [overviewStart, setOverviewStart] = useState('')
   const [overviewEnd, setOverviewEnd] = useState('')
@@ -174,7 +220,7 @@ export default function Home() {
   const chartRange = rangeForMode(chartMode, chartStart, chartEnd)
   const inRange = (point: DailyPoint, range: { start: string; end: string }) => (!range.start || point.date >= range.start) && (!range.end || point.date <= range.end)
   const overviewPoints = useMemo(() => trend.filter((point) => inRange(point, overviewRange)), [overviewRange, trend])
-  const chartPoints = useMemo(() => trend.filter((point) => inRange(point, chartRange)), [chartRange, trend])
+  const chartPoints = useMemo(() => (chartMode === 'today' ? hourlyTrend : trend).filter((point) => inRange(point, chartRange)), [chartMode, chartRange, hourlyTrend, trend])
   const periodMetrics = overviewPoints.reduce((totals, point) => ({ orders: totals.orders + point.orders, revenue: totals.revenue + point.revenue, customers: totals.customers + point.customers, oneTimeOrders: totals.oneTimeOrders + point.oneTimeOrders, oneTimeRevenue: totals.oneTimeRevenue + point.oneTimeRevenue, subscriptionRevenue: totals.subscriptionRevenue + point.subscriptionRevenue, washClothes: totals.washClothes + point.washClothes, ironClothes: totals.ironClothes + point.ironClothes, washIronClothes: totals.washIronClothes + point.washIronClothes }), { orders: 0, revenue: 0, customers: 0, oneTimeOrders: 0, oneTimeRevenue: 0, subscriptionRevenue: 0, washClothes: 0, ironClothes: 0, washIronClothes: 0 })
   const revenueMax = Math.max(...chartPoints.map((point) => point.revenue), 1)
   const cards = [{ label: 'Gross revenue', value: money(periodMetrics.revenue), helper: 'Paid', icon: CircleDollarSign, href: '/admin/orders', tone: 'green' }, { label: 'Vendor payouts', value: money(metrics.vendorPayouts), helper: 'Settled', icon: Store, href: '/admin/partners/vendors', tone: 'pink' }, { label: 'Platform profit', value: money(metrics.platformProfit), helper: 'Net', icon: CircleDollarSign, href: '/admin/orders', tone: 'green' }, { label: 'Subscription revenue', value: money(periodMetrics.subscriptionRevenue), helper: 'Recurring', icon: CircleDollarSign, href: '/admin/orders', tone: 'green' }, { label: 'One-time revenue', value: money(periodMetrics.oneTimeRevenue), helper: 'One-off', icon: CircleDollarSign, href: '/admin/orders', tone: 'green' }, { label: 'One-time orders', value: periodMetrics.oneTimeOrders, helper: 'Orders', icon: Package, href: '/admin/orders', tone: 'pink' }, { label: 'Total vendors', value: metrics.vendors, helper: 'Active', icon: UsersRound, href: '/admin/partners/vendors', tone: 'pink' }, { label: 'Wash clothes', value: periodMetrics.washClothes, helper: 'Wash', icon: Package, href: '/admin/orders', tone: 'green' }, { label: 'Iron clothes', value: periodMetrics.ironClothes, helper: 'Iron', icon: Package, href: '/admin/orders', tone: 'pink' }, { label: 'Wash + Iron clothes', value: periodMetrics.washIronClothes, helper: 'Combo', icon: Package, href: '/admin/orders', tone: 'green' }]
@@ -183,14 +229,14 @@ export default function Home() {
       {metrics.unpaidInvoices > 0 && (
         <Link
           to="/admin/orders?payment=unpaid"
-          className="flex items-center justify-between gap-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-rose-900"
+          className="flex min-w-0 items-center justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-rose-900 sm:px-4 sm:py-3"
         >
-          <span className="flex items-center gap-2 text-sm font-semibold">
+          <span className="flex min-w-0 flex-1 items-center gap-2 truncate whitespace-nowrap text-xs font-semibold sm:text-sm">
             <AlertTriangle size={17} />
             {metrics.unpaidInvoices} unresolved payment issue
             {metrics.unpaidInvoices === 1 ? "" : "s"} requiring attention
           </span>
-          <span className="text-xs font-semibold">
+          <span className="shrink-0 whitespace-nowrap text-[11px] font-semibold sm:text-xs">
             {money(metrics.unpaidAmount)} unpaid
           </span>
         </Link>
@@ -213,6 +259,7 @@ export default function Home() {
               className="h-9 rounded-lg border border-[#eceeee] bg-white px-3 text-xs font-semibold text-[#505959]"
             >
               <option value="all">All time</option>
+              <option value="today">Today</option>
               <option value="this_week">This week</option>
               <option value="last_week">Last week</option>
               <option value="this_month">This month</option>
@@ -368,6 +415,7 @@ export default function Home() {
                   className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600"
                 >
                   <option value="all">All time</option>
+                  <option value="today">Today</option>
                   <option value="this_week">This week</option>
                   <option value="last_week">Last week</option>
                   <option value="this_month">This month</option>
@@ -474,18 +522,22 @@ export default function Home() {
             <div className="relative flex h-52 items-end gap-2 border-b border-[#b9ded8]">
               {chartPoints.map((point) => (
                 <div
-                  key={point.date}
-                  className="flex h-52 flex-1 flex-col items-center justify-end gap-2"
+                  key={`${point.date}-${point.label}`}
+                  className="group relative flex h-52 flex-1 flex-col items-center justify-end gap-2"
                 >
+                  <span className="pointer-events-none absolute bottom-12 z-10 hidden whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-[10px] font-medium text-white shadow-lg group-hover:block group-focus-within:block">{point.label}: {money(point.revenue)}</span>
                   <div className="flex h-44 w-full items-end rounded-md">
                     <div
+                      tabIndex={0}
+                      role="img"
+                      aria-label={`${point.label}: ${money(point.revenue)}`}
                       className="w-full shrink-0 rounded-md bg-[#64c4ae]"
                       style={{
                         height: `${(point.revenue / revenueMax) * 100}%`,
                       }}
                     />
                   </div>
-                  <span className="text-[10px] text-slate-400">
+                  <span className={`text-[10px] text-slate-400 ${chartPoints.length > 12 && chartPoints.indexOf(point) % 3 !== 0 && chartPoints.indexOf(point) !== chartPoints.length - 1 ? 'invisible' : ''}`}>
                     {point.label}
                   </span>
                 </div>
@@ -530,13 +582,9 @@ export default function Home() {
                         {plan.type}
                       </span>
                     </p>
-                    <div className="mt-1 h-1.5 w-32 overflow-hidden rounded-full bg-slate-100">
-                      <div
-                        className="h-full rounded-full bg-[#00b7d4]"
-                        style={{
-                          width: `${Math.min(plan.subscribers * 18 + 8, 100)}%`,
-                        }}
-                      />
+                    <div className="group relative mt-1 h-1.5 w-32 rounded-full bg-slate-100">
+                      <div className="h-full rounded-full bg-[#00b7d4]" style={{ width: `${Math.min(plan.subscribers * 18 + 8, 100)}%` }} />
+                      <span className="pointer-events-none absolute -top-8 left-1/2 z-10 hidden -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-[10px] font-medium text-white shadow-lg group-hover:block">{plan.name}: {plan.subscribers} subscribers</span>
                     </div>
                   </div>
                   <strong className="text-sm text-slate-900">

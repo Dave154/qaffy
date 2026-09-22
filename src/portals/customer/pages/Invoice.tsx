@@ -28,6 +28,7 @@ export async function action({ request }: Route.ActionArgs) {
       payload: {
         title: 'Payment confirmed',
         body: `Your invoice for ${result.publicOrderNumber} has been paid.`,
+        details: [`Order: ${result.publicOrderNumber}`, 'The invoice is fully paid.', 'Your order can continue to delivery.'],
         url: `/orders?order=${encodeURIComponent(result.publicOrderNumber)}`,
         tag: `order:${result.orderId}:payment`,
       },

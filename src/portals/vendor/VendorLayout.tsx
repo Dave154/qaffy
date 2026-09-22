@@ -103,7 +103,10 @@ export default function VendorLayout() {
     <div className="min-h-screen bg-[#f8f8f8] text-[#121212]">
       <header className="sticky top-0 z-20 border-b border-[#f2f3f3] bg-white lg:hidden">
         <div className="mx-auto flex max-w-3xl items-center justify-between px-4 py-3.5 sm:px-6">
-          <QaffyLogo className="inline-flex" />
+          <div className="flex flex-col items-center gap-3">
+            <QaffyLogo className="inline-flex" />
+            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-brand-primary">Vendor</p>
+          </div>
           <button type="button" onClick={() => setMenuOpen((open) => !open)} aria-label="Open vendor menu" className="flex h-9 w-9 items-center justify-center rounded-lg border border-[#e7e7e7] bg-white text-slate-600">
             {menuOpen ? <X size={22} /> : <Menu size={22} />}
           </button>
@@ -112,9 +115,10 @@ export default function VendorLayout() {
 
       <div className="min-h-screen">
         <aside className={`${menuOpen ? 'translate-x-0' : '-translate-x-full'} fixed inset-y-0 left-0 z-30 flex w-[221px] flex-col overflow-y-auto border-r border-[#ececec] bg-white px-[13px] py-7 transition-transform lg:translate-x-0`}>
-          <div className="flex items-center justify-between px-3">
+          <div className="flex flex-col items-center gap-3 px-3">
             <QaffyLogo className="inline-flex" />
-            <button type="button" onClick={() => setMenuOpen(false)} className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 lg:hidden" aria-label="Close vendor menu">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-brand-primary">Vendor</p>
+            <button type="button" onClick={() => setMenuOpen(false)} className="ml-auto flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 lg:hidden" aria-label="Close vendor menu">
               <X size={16} />
             </button>
           </div>

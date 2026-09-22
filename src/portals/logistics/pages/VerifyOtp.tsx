@@ -56,6 +56,12 @@ export default function VerifyOtp() {
       .eq('role', 'logistics')
       .eq('status', 'approved')
       .maybeSingle()
+    const { data: logisticsAccount } = await supabase
+      .from('logistics_agents')
+      .select('id')
+      .eq('profile_id', userData.user.id)
+      .eq('status', 'approved')
+      .maybeSingle()
 
     if (agentError) {
       setError(agentError.message)
@@ -63,9 +69,9 @@ export default function VerifyOtp() {
       return
     }
 
-    if (!agent) {
+    if (!agent || !logisticsAccount) {
       await supabase.auth.signOut()
-      setError('This email is not provisioned for logistics access.')
+      setError('This email is not registered to an approved logistics account.')
       setIsSubmitting(false)
       return
     }
@@ -82,7 +88,7 @@ export default function VerifyOtp() {
     })
 
     if (authError) {
-      setError(authError.message)
+      setError(authError.message.toLowerCase().includes('signups not allowed for otp') ? 'This email is not registered to an approved logistics account.' : authError.message)
       return
     }
 

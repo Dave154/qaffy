@@ -9,6 +9,7 @@ export default [
     index('portals/customer/pages/Home.tsx'),
     route('transactions', 'portals/customer/pages/Transactions.tsx'),
     route('orders', 'portals/customer/pages/Orders.tsx'),
+    route('notifications', 'portals/customer/pages/Notifications.tsx'),
     route('plans', 'portals/customer/pages/Plans.tsx'),
     route('settings', 'portals/customer/pages/Settings.tsx'),
     route('invoice', 'portals/customer/pages/Invoice.tsx'),

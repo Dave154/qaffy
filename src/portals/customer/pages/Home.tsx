@@ -11,7 +11,7 @@ import ProtectedOtp from '../../../components/ProtectedOtp'
 import { useCustomerStore } from '../customer-store-hook'
 import { ensurePushSubscription, getPushSubscription, savePushSubscription } from '../../../lib/push.client'
 import BubblyBackground from '../../../components/BubblyBackground'
-import PlanEndingBanner from '../../../components/PlanEndingBanner'
+import PlanEndingBanner, { shouldShowPlanEndingBanner } from '../../../components/PlanEndingBanner'
 import MismatchBanner from '../../../components/MismatchBanner'
 import { toast } from '../../../lib/toast'
 
@@ -60,6 +60,7 @@ export default function Home() {
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false)
   const [isTopUpModalOpen, setIsTopUpModalOpen] = useState(() => searchParams.get('topup') === '1')
   const [pushSetupVisible, setPushSetupVisible] = useState(false)
+  const [planBannerDismissed, setPlanBannerDismissed] = useState(false)
   const [pushSetupBusy, setPushSetupBusy] = useState(false)
   const [pushSetupMessage, setPushSetupMessage] = useState('')
   const topUpFetcher = useFetcher<typeof action>()
@@ -71,15 +72,17 @@ export default function Home() {
     return ''
   }
   const getVisibleOtpLabel = (order: typeof orders[number]) => order.status === 'Awaiting pickup' ? 'Pickup OTP' : 'Delivery OTP'
-  const recentOrders = [...orders].sort((firstOrder, secondOrder) => Number(Boolean(getVisibleOtp(secondOrder))) - Number(Boolean(getVisibleOtp(firstOrder))))
+  const recentOrders = [...orders].sort((firstOrder, secondOrder) => new Date(secondOrder.createdAt).getTime() - new Date(firstOrder.createdAt).getTime())
   const getAmountLabel = (order: typeof orders[number]) => {
     if (order.total > 0) return `₦${order.total.toLocaleString()}`
     if (order.status === 'In progress') return 'Final billing pending'
     if (order.isSubscriptionOrder && ['Ready for delivery', 'Delivered'].includes(order.status)) return 'Covered by plan'
     return 'No charge yet'
   }
-  const today = new Intl.DateTimeFormat(undefined, { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' }).format(new Date())
+  const today = new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' }).format(new Date())
   const referralPath = referralCode ? `/create-account?ref=${encodeURIComponent(referralCode)}` : ''
+  const hasMismatchBanner = orders.some((order) => order.mismatch && order.paymentStatus === 'Pending')
+  const hasPlanEndingBanner = !planBannerDismissed && shouldShowPlanEndingBanner(subscriptionEndDate)
 
   const handleTopUp = async (amount: number) => {
     topUpFetcher.submit({ amount: String(amount) }, { method: 'post', encType: 'application/x-www-form-urlencoded' })
@@ -156,10 +159,7 @@ export default function Home() {
         </div>
       </div>
 
-      {subscription && <PlanEndingBanner planName={`${subscription.name} ${subscription.billingPeriod}`} endDate={subscriptionEndDate} />}
-      <MismatchBanner orders={orders} />
-
-      {pushSetupVisible && <section className="flex min-w-0 items-center gap-2 overflow-hidden rounded-2xl border border-brand-border bg-brand-soft p-2.5 sm:gap-3 sm:p-3">
+      {hasMismatchBanner ? <MismatchBanner orders={orders} /> : hasPlanEndingBanner && subscription ? <PlanEndingBanner planName={`${subscription.name} ${subscription.billingPeriod}`} endDate={subscriptionEndDate} onDismiss={() => setPlanBannerDismissed(true)} /> : pushSetupVisible && <section className="flex min-w-0 items-center gap-2 overflow-hidden rounded-2xl border border-brand-border bg-brand-soft p-2.5 sm:gap-3 sm:p-3">
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-brand-primary"><Bell className="h-3.5 w-3.5" /></span>
         <p className="min-w-0 flex-1 truncate text-xs font-semibold text-slate-900">Stay updated <span className="font-normal text-slate-600">· Get alerts</span></p>
         <button type="button" onClick={() => void handleEnableNotifications()} disabled={pushSetupBusy} aria-label={pushSetupBusy ? 'Setting up notifications' : 'Enable notifications'} className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-brand-primary px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-60">{pushSetupBusy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : 'Enable'}</button>

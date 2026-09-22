@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { data, Form, NavLink, Outlet, redirect, useLoaderData, useLocation, useNavigate, useRevalidator } from 'react-router'
 import type { Route } from './+types/CustomerLayout'
-import { Home, LayoutGrid, ReceiptText, FileText, Sparkles, Settings, Menu, X, UserCircle2, Search, Bell, ClipboardList, LogOut } from 'lucide-react'
+import { Home, LayoutGrid, ReceiptText, FileText, Sparkles, Settings, Menu, X, UserCircle2, Search, Bell, ClipboardList, LogOut, Gift } from 'lucide-react'
 import QaffyLogo from '../../components/QaffyLogo'
 import PwaInstallLink from '../../components/PwaInstallLink'
 import { isSupabaseServerConfigured, getSupabaseServerClient } from '../../lib/supabase.server'
@@ -42,6 +42,12 @@ export async function loader({ request }: Route.LoaderArgs) {
   if (!profile) {
     throw redirect('/login', { headers })
   }
+
+  const { count: unreadNotificationCount } = await serverSupabase
+    .from('notification_events')
+    .select('id', { count: 'exact', head: true })
+    .eq('customer_id', userData.user.id)
+    .is('read_at', null)
 
   const { data: orders } = await serverSupabase
     .from('orders')
@@ -187,6 +193,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     transactionError: paymentsError?.message ?? null,
     invoices: invoicesWithDetails,
     orderMismatches,
+    unreadNotificationCount: unreadNotificationCount ?? 0,
     subscription,
     subscriptionPlan,
     persistedReferrals,
@@ -219,10 +226,27 @@ export default function CustomerLayout() {
   const navigate = useNavigate()
   const loaderData = useLoaderData<typeof loader>()
   const revalidator = useRevalidator()
-  const unpaidOrderIds = new Set(loaderData?.unpaidInvoiceOrderIds ?? [])
-  const mismatchCount = loaderData?.orderMismatches?.filter((mismatch) => unpaidOrderIds.has(mismatch.order_id)).length ?? 0
+  const referralCode = loaderData?.profile?.referral_code ?? null
+  const [showReferralModal, setShowReferralModal] = useState(false)
+  const unreadNotificationCount = loaderData?.unreadNotificationCount ?? 0
+  const dismissReferralModal = () => {
+    if (referralCode && typeof window !== 'undefined') {
+      window.localStorage.setItem(`qaffy-referral-modal:${referralCode}`, '1')
+    }
+    setShowReferralModal(false)
+  }
+
+  useEffect(() => {
+    if (!referralCode || typeof window === 'undefined') return
+    const key = `qaffy-referral-modal:${referralCode}`
+    if (window.localStorage.getItem(key)) return
+    setShowReferralModal(true)
+  }, [referralCode])
+
   const pageTitle = location.pathname === '/'
     ? 'Overview'
+    : location.pathname.startsWith('/notifications')
+      ? 'Notifications'
     : location.pathname.startsWith('/invoice')
       ? 'Invoice'
       : location.pathname.startsWith('/otp')
@@ -248,6 +272,7 @@ export default function CustomerLayout() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'subscriptions', filter: `customer_id=eq.${loaderData.profile.id}` }, () => revalidator.revalidate())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders', filter: `customer_id=eq.${loaderData.profile.id}` }, () => revalidator.revalidate())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'payments', filter: `customer_id=eq.${loaderData.profile.id}` }, () => revalidator.revalidate())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'notification_events', filter: `customer_id=eq.${loaderData.profile.id}` }, () => revalidator.revalidate())
       .subscribe()
 
     const refreshVisibleState = window.setInterval(() => {
@@ -304,6 +329,33 @@ export default function CustomerLayout() {
         ? { subscription: loaderData.subscription as Subscription, plan: loaderData.subscriptionPlan as Plan }
         : null}
     >
+      {showReferralModal && referralCode && (
+        <div className="referral-modal-backdrop fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/45 p-4 backdrop-blur-[2px]">
+          <div className="referral-modal-card w-full max-w-md rounded-[30px] border border-slate-200 bg-white p-5 text-center shadow-[0_30px_80px_rgba(15,23,42,0.18)]">
+            <div className="relative mx-auto flex h-16 w-16 items-center justify-center rounded-[22px] bg-gradient-to-br from-[#dff9fd] via-[#e8fbfd] to-[#d2f4fa] text-brand-primary ring-4 ring-white/60 referral-modal-badge">
+              <div className="referral-modal-dot absolute -right-1 -top-1 h-3.5 w-3.5 rounded-full bg-[#18c6d9] shadow-[0_0_0_4px_rgba(24,198,217,0.18)]" />
+              <Gift className="h-8 w-8" strokeWidth={2.1} />
+            </div>
+
+            <h3 className="mt-5 text-2xl font-bold tracking-[-0.03em] text-slate-900">Refer friends and earn rewards</h3>
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              When someone signs up with your referral link, we record it and keep the reward pending until they complete the qualifying action.
+            </p>
+
+            <ul className="mt-5 space-y-2.5 text-left text-sm text-slate-700">
+              <li className="flex items-start gap-2.5"><span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-brand-primary" />Share your referral link with friends.</li>
+              <li className="flex items-start gap-2.5"><span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-brand-primary" />Once they join, the referral is tracked.</li>
+              <li className="flex items-start gap-2.5"><span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-brand-primary" />Your reward stays pending until the qualifying action is completed.</li>
+              <li className="flex items-start gap-2.5"><span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-brand-primary" />After qualification, the reward is added to your promotional balance.</li>
+            </ul>
+
+            <button type="button" onClick={dismissReferralModal} className="mt-6 w-full rounded-2xl bg-brand-primary px-4 py-2.5 text-sm font-semibold text-white shadow-[0_12px_24px_rgba(0,183,212,0.24)] transition hover:bg-[#00a7c3]">
+              Got it
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="relative min-h-screen bg-[#fafafa] text-[#121212]">
       <div className="relative z-10 min-h-screen lg:flex">
       <aside className="sticky top-0 hidden h-screen max-h-screen w-[221px] shrink-0 overflow-y-auto border-r border-[#f2f3f3] bg-white px-[13px] py-8 shadow-[1px_0_8px_rgba(18,18,18,0.04)] lg:flex lg:flex-col">
@@ -366,13 +418,13 @@ export default function CustomerLayout() {
 
             <div className="flex items-center gap-2">
               <NavLink
-                to="/orders?filter=Needs%20attention"
+                to="/notifications"
                 prefetch="intent"
                 aria-label="Open notifications"
                 className="relative flex h-9 w-9 items-center justify-center rounded-lg border border-[#e7e7e7] bg-white text-slate-600"
               >
                 <Bell className="h-4 w-4" />
-                {mismatchCount > 0 && <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full border-2 border-white bg-[#f59e0b] px-0.5 text-[9px] font-bold text-white">{mismatchCount}</span>}
+                {unreadNotificationCount > 0 && <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full border-2 border-white bg-[#f59e0b] px-0.5 text-[9px] font-bold text-white">{unreadNotificationCount}</span>}
               </NavLink>
               <NavLink
                 to="/settings"
@@ -452,9 +504,9 @@ export default function CustomerLayout() {
             <Search className="h-3.5 w-3.5 text-[#8e9a9a]" />
             <input name="search" type="search" placeholder="Search orders" aria-label="Search orders" className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-[#8e9a9a]" />
           </Form>
-          <NavLink to="/orders?filter=Needs%20attention" prefetch="intent" aria-label="Open notifications" className="relative flex h-10 w-10 items-center justify-center rounded-full border border-[#f2f3f3] bg-white text-[#121212]">
+          <NavLink to="/notifications" prefetch="intent" aria-label="Open notifications" className="relative flex h-10 w-10 items-center justify-center rounded-full border border-[#f2f3f3] bg-white text-[#121212]">
             <Bell className="h-4 w-4" />
-            {mismatchCount > 0 && <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full border-2 border-white bg-[#f59e0b] px-1 text-[10px] font-bold text-white">{mismatchCount}</span>}
+            {unreadNotificationCount > 0 && <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full border-2 border-white bg-[#f59e0b] px-1 text-[10px] font-bold text-white">{unreadNotificationCount}</span>}
           </NavLink>
           </div>
         </div>

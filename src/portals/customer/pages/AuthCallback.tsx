@@ -3,11 +3,19 @@ import type { Route } from './+types/AuthCallback'
 import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
 import { attributeReferral, getReferralCodeFromRequest } from '../../../lib/referrals.server'
 
+function getCallbackErrorMessage(role: string | null, error: string | null, description: string | null) {
+  if (error === 'access_denied' || description?.toLowerCase().includes('cancel')) return 'Google sign-in was cancelled.'
+  if (description || error) return role ? `Google sign-in could not be completed. Please try again.` : description || error || 'Sign-in could not be completed. Please try again.'
+  return role ? 'Google sign-in did not complete. Please try again.' : 'Sign-in did not complete. Please try again.'
+}
+
 // React Router route modules require the loader and component to share this file.
 // eslint-disable-next-line react-refresh/only-export-components
 export async function loader({ request }: Route.LoaderArgs) {
   const url = new URL(request.url)
   const code = url.searchParams.get('code')
+  const callbackError = url.searchParams.get('error')
+  const callbackErrorDescription = url.searchParams.get('error_description')
   const requestedNext = url.searchParams.get('next') ?? '/'
   const callbackRole = url.pathname.startsWith('/vendor/')
     ? 'vendor'
@@ -27,14 +35,16 @@ export async function loader({ request }: Route.LoaderArgs) {
         : 'customer'
 
   if (!isSupabaseServerConfigured || !code) {
-    throw redirect(portalLoginPath)
+    const message = getCallbackErrorMessage(callbackRole, callbackError, callbackErrorDescription)
+    throw redirect(`${portalLoginPath}?error=${encodeURIComponent(message)}`)
   }
 
   const { supabase, headers } = getSupabaseServerClient(request)
   const { error } = await supabase.auth.exchangeCodeForSession(code)
 
   if (error) {
-    throw redirect(`${portalLoginPath}?error=${encodeURIComponent(error.message)}`, { headers })
+    const message = getCallbackErrorMessage(callbackRole, 'exchange_failed', error.message)
+    throw redirect(`${portalLoginPath}?error=${encodeURIComponent(message)}`, { headers })
   }
 
   const { data: userData } = await supabase.auth.getUser()
@@ -54,17 +64,26 @@ export async function loader({ request }: Route.LoaderArgs) {
   const { data: vendorAccount } = expectedRole === 'vendor'
     ? await supabase.from('vendors').select('id').eq('profile_id', userData.user.id).eq('status', 'approved').maybeSingle()
     : { data: null }
+  const { data: logisticsAccount } = expectedRole === 'logistics'
+    ? await supabase.from('logistics_agents').select('id').eq('profile_id', userData.user.id).eq('status', 'approved').maybeSingle()
+    : { data: null }
   const hasPortalAccess = expectedRole === 'customer'
     ? true
     : expectedRole === 'vendor'
       ? Boolean(roleAssignment) && Boolean(vendorAccount)
+      : expectedRole === 'logistics'
+        ? Boolean(roleAssignment) && Boolean(logisticsAccount)
       : Boolean(roleAssignment) || expectedRole === 'admin' && profile?.role === 'admin'
 
   if (!hasPortalAccess) {
     await supabase.auth.signOut()
     const message = expectedRole === 'vendor'
       ? 'This email is not registered to an approved vendor account.'
-      : 'This account is not provisioned for this portal.'
+      : expectedRole === 'logistics'
+        ? 'This email is not registered to an approved logistics account.'
+        : expectedRole === 'admin'
+          ? 'This email is not approved for admin access.'
+          : 'This account is not provisioned for this portal.'
     throw redirect(`${portalLoginPath}?error=${encodeURIComponent(message)}`, { headers })
   }
 

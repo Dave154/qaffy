@@ -242,6 +242,7 @@ async function sendReferralRewardNotifications(recipients: ReferralRewardRecipie
     payload: {
       title: 'Referral reward added',
       body: `You earned ₦${recipient.amount.toLocaleString()} in referral credit.`,
+      details: [`Referral credit: ₦${recipient.amount.toLocaleString()}`, 'Your promotional balance is now available.'],
       url: '/settings#referrals',
       tag: `referral-reward:${recipient.rewardId}`,
     },
