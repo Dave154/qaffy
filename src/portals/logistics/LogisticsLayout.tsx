@@ -28,19 +28,16 @@ export async function loader({ request }: Route.LoaderArgs) {
     .eq('agent_profile_id', profile.id)
     .order('created_at', { ascending: false })
 
-  const orderIds = [...new Set((agentEvents ?? []).map((event) => event.order_id).filter(Boolean))]
-
-  const orders = orderIds.length > 0
-    ? await serverSupabase
-        .from('orders')
-        .select('*')
-        .in('id', orderIds)
-        .order('created_at', { ascending: false })
-    : { data: [] }
+  const relevantStatuses = ['pending_pickup', 'out_for_delivery', 'picked_up', 'delivered'] as const
+  const { data: ordersData } = await serverSupabase
+    .from('orders')
+    .select('*')
+    .in('status', relevantStatuses)
+    .order('created_at', { ascending: false })
 
   const logisticsEvents = agentEvents ?? []
 
-  const customerIds = [...new Set((orders.data ?? []).map((order) => order.customer_id).filter(Boolean))]
+  const customerIds = [...new Set((ordersData ?? []).map((order) => order.customer_id).filter(Boolean))]
   const profileMap = new Map<string, { name: string | null; uid: string | null }>()
 
   if (customerIds.length > 0) {
@@ -57,7 +54,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   }
 
   const locationIds = [...new Set(
-    (orders.data ?? [])
+    (ordersData ?? [])
       .map((order) => order.pickup_location_id)
       .filter((id): id is string => typeof id === 'string' && id.length > 0),
   )]
@@ -76,7 +73,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     }
   }
 
-  const expandedOrders = (orders.data ?? []).map((order) => ({
+  const expandedOrders = (ordersData ?? []).map((order) => ({
     ...order,
     customer_name: profileMap.get(order.customer_id)?.name ?? 'Customer',
     customer_uid: profileMap.get(order.customer_id)?.uid ?? null,
