@@ -36,7 +36,7 @@ export async function loader({ request }: { request: Request }) {
           customerId: subscription.customer_id,
           notificationType: 'subscription_expired',
           subscriptionId: subscription.id,
-          payload: { title: 'Plan expired', body: `Your ${subscription.plan_name} plan has expired.`, url: '/plans', tag: `subscription:${subscription.id}:lifecycle` },
+          payload: { title: 'Plan expired', body: `Your ${subscription.plan_name} plan has expired.`, details: [`Plan: ${subscription.plan_name}`, 'Renew your plan to continue using subscription benefits.'], url: '/plans', tag: `subscription:${subscription.id}:lifecycle` },
         })
         expired += 1
       }
@@ -49,7 +49,7 @@ export async function loader({ request }: { request: Request }) {
       customerId: subscription.customer_id,
       notificationType: 'subscription_renewal_reminder',
       subscriptionId: subscription.id,
-      payload: { title: 'Plan ending soon', body: `Your ${subscription.plan_name} plan ends in ${daysRemaining} day${daysRemaining === 1 ? '' : 's'}.`, url: '/plans', tag: `subscription:${subscription.id}:lifecycle` },
+      payload: { title: 'Plan ending soon', body: `Your ${subscription.plan_name} plan ends in ${daysRemaining} day${daysRemaining === 1 ? '' : 's'}.`, details: [`Plan: ${subscription.plan_name}`, `Days remaining: ${daysRemaining}`], url: '/plans', tag: `subscription:${subscription.id}:lifecycle` },
     })
     remindersSent += 1
   }

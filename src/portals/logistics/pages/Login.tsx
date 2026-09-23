@@ -1,16 +1,17 @@
 import type { FormEvent } from 'react'
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router'
+import { useLocation, useNavigate } from 'react-router'
 import QaffyLogo from '../../../components/QaffyLogo'
 import RouteLoadingScreen from '../../../components/RouteLoadingScreen'
 import { isSupabaseConfigured, supabase } from '../../../lib/supabase.client'
 
 export default function Login() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [email, setEmail] = useState('')
   const [showEmailAuth, setShowEmailAuth] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setError] = useState(() => new URLSearchParams(location.search).get('error') ?? '')
 
   useEffect(() => {
     const redirectExistingLogistics = async () => {
@@ -18,7 +19,12 @@ export default function Login() {
       const { data: userData } = await supabase.auth.getUser()
       if (!userData.user) return
       const { data: role } = await supabase.from('profile_roles').select('role').eq('profile_id', userData.user.id).eq('role', 'logistics').eq('status', 'approved').maybeSingle()
-      if (!role) return
+      const { data: logisticsAccount } = await supabase.from('logistics_agents').select('id').eq('profile_id', userData.user.id).eq('status', 'approved').maybeSingle()
+      if (!role || !logisticsAccount) {
+        await supabase.auth.signOut()
+        setError('This email is not registered to an approved logistics account.')
+        return
+      }
       const { data: profile } = await supabase.from('profiles').select('name, phone').eq('id', userData.user.id).maybeSingle()
       const nextPath = profile?.name && profile?.phone ? '/logistics' : '/logistics/complete-profile?next=%2Flogistics'
       navigate(nextPath, { replace: true })
@@ -50,7 +56,7 @@ export default function Login() {
 
     if (authError) {
       setIsSubmitting(false)
-      setError(authError.message)
+      setError(authError.message.toLowerCase().includes('signups not allowed for otp') ? 'This email is not registered to an approved logistics account.' : authError.message)
       return
     }
 
@@ -144,6 +150,7 @@ export default function Login() {
                 </button>
               )}
 
+              {error && <p role="alert" className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
               {showEmailAuth && (
                 <div className="space-y-4">
                   <label className="block">
@@ -159,7 +166,6 @@ export default function Login() {
                 </div>
               )}
 
-              {error && <p role="alert" className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
 
               {showEmailAuth && (
                 <button

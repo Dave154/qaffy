@@ -1,108 +1,62 @@
-# React + TypeScript + Vite
+# Qaffy
 
-## Supabase Email OTP
+Qaffy is a multi-portal laundry platform built with React, TypeScript, Vite, and Supabase. It supports customer ordering, logistics pickup/delivery, vendor review, and admin operations in a single app shell.
 
-The customer signup and sign-in flows use Supabase email OTP. In the Supabase dashboard, open **Authentication > Email Templates** and paste the HTML from `supabase/email-templates/otp.html` into the relevant template. It uses `{{ .Token }}` and matches the app's 8-digit OTP input. The default `{{ .ConfirmationURL }}` template sends a magic link instead of a code, which will not work with the OTP input screen.
+## Status snapshot
 
-Configure the project URL and allowed redirect URLs for the application origin. The app expects the public `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` variables plus the server-side `SUPABASE_URL` and `SUPABASE_ANON_KEY` variables.
+As of 2026-09-22, the codebase includes the following active workstreams:
 
-Set `VITE_SITE_URL` to the canonical public origin in production so canonical links and social preview URLs use the deployed domain instead of the incoming request host.
+- Customer portal: live wallet, Paystack-backed top-ups, plan purchases, order flow, invoices, notifications, referrals, and OTP experience
+- Logistics portal: signed-in agent scope, pickup/delivery workflows, and agency-specific event history
+- Vendor portal: review workflow, settlement finance context, and responsive partner UI
+- Admin portal: overview, orders, partners, categories, mismatches, finance, plans, and notifications
 
-## Customer Web Push Notifications
+## Core architecture
 
-Customer notifications are implemented with browser Web Push. Customers can enable or disable notifications from the Overview prompt or Settings. The browser registers `public/push-sw.js`, saves the subscription through `POST /api/push-subscriptions`, and the service worker opens the relevant Qaffy page when a notification is clicked.
+- Frontend: React + TypeScript + Vite + React Router
+- Data/auth: Supabase Postgres + auth + migrations + realtime
+- Roles: additive portal roles via `profile_roles` with legacy compatibility support
+- Primary portals:
+  - customer
+  - logistics
+  - vendor
+  - admin
 
-Apply these migrations before enabling the feature in a connected Supabase project:
+## Key docs
 
-- `supabase/migrations/20260918100000_push_subscriptions.sql`
-- `supabase/migrations/20260918110000_notification_events.sql`
+- [AGENTS.md](AGENTS.md) — product and system architecture history, operational requirements, and portal handoff notes
+- [ADMIN_PLAN.md](ADMIN_PLAN.md) — admin roadmap, confirmed rules, and priority sequencing
+- [REFERRAL_PLAN.md](REFERRAL_PLAN.md) — referral attribution, rewards, and campaign logic
+- [FINANCE_AND_PAYMENT_FLOW.md](FINANCE_AND_PAYMENT_FLOW.md) — payment, wallet, and finance flow documentation
 
-Configure these environment variables on the server and client deployment:
+## Local setup
 
-- `VITE_VAPID_PUBLIC_KEY` for browser subscription setup
-- `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and `VAPID_SUBJECT` for server delivery
-- `CRON_SECRET` for the protected subscription reminder/expiry route
-
-The wrapped notification service records an idempotent event before sending, removes expired browser subscriptions, and records sent/failed status. Notifications currently cover pickup, delivery, ready-for-delivery, mismatch confirmation, payment required/confirmed, wallet top-up confirmation, subscription activation, and subscription renewal/expiry. The feature requires a browser with Web Push support; the VS Code embedded browser is intentionally rejected, so use Chrome or Edge over HTTPS for deployment or a supported local origin.
-
-## Customer PWA Installation
-
-Qaffy is installable as a customer PWA. The customer sidebar includes a compact **Install Qaffy** action that uses the browser's native `beforeinstallprompt` flow when the browser exposes it. The prompt is captured at client startup so it is not lost before the sidebar mounts, and the action disappears after the `appinstalled` event or when the app is already running in standalone mode.
-
-PWA metadata is defined in `public/manifest.webmanifest`, with square Qaffy icons in `public/qaffy-icon-192.svg` and `public/qaffy-icon-512.svg`. The existing `public/push-sw.js` is registered at app startup and continues to handle Web Push notifications while also satisfying the service-worker requirement for installation.
-
-Native install prompts are browser-controlled and may be suppressed after a previous dismissal, on unsupported browsers, or when the origin is not considered installable. Test in Chrome or Edge over a supported origin; the VS Code embedded browser is not a reliable PWA installation environment. When testing after manifest or service-worker changes, unregister the old worker and clear site data before reloading.
-
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
-
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
+```bash
+npm install
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://npmx.dev/package/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://npmx.dev/package/eslint-plugin-react-dom) for React-specific lint rules:
+## Validation
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+Use the repo checks before shipping changes:
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
+```bash
+npm run typecheck
+npm run build
+npm run lint
 ```
+
+## Required environment notes
+
+- `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`
+- `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` where server-side actions require them
+- Paystack and wallet configuration for trusted payment/webhook flows
+- VAPID keys for browser push delivery when enabling customer notifications
+
+## Current implementation priorities
+
+- Complete customer portal polish and live data reconciliation
+- Finalize trusted settlement payout execution for admin finance
+- Continue live smoke testing against Supabase and Paystack flows
+- Keep docs aligned with the live product status before shipping or handoff
+

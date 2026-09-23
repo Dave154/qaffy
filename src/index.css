@@ -220,6 +220,74 @@ body {
   }
 }
 
+.referral-modal-backdrop {
+  animation: referral-modal-fade 0.22s ease-out;
+}
+
+.referral-modal-card {
+  animation: referral-modal-pop 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
+  transform-origin: center;
+}
+
+.referral-modal-badge {
+  animation: referral-modal-glow 2.2s ease-in-out infinite;
+}
+
+.referral-modal-dot {
+  animation: referral-modal-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes referral-modal-fade {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes referral-modal-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.92) translateY(16px);
+  }
+
+  65% {
+    opacity: 1;
+    transform: scale(1.02) translateY(-2px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes referral-modal-glow {
+  0%,
+  100% {
+    box-shadow: 0 12px 28px rgba(0, 183, 212, 0.18);
+  }
+
+  50% {
+    box-shadow: 0 16px 32px rgba(0, 183, 212, 0.28);
+  }
+}
+
+@keyframes referral-modal-pulse {
+  0%,
+  100% {
+    opacity: 0.75;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.2);
+  }
+}
+
 #root,
 [data-reactroot] {
   position: relative;

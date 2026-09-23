@@ -52,6 +52,7 @@ export async function action({ request }: { request: Request }) {
         payload: {
           title: 'Your order is ready for delivery',
           body: `Your clean laundry is on the way for ${order.public_order_number}.`,
+          details: [`Order: ${order.public_order_number}`, 'Payment has been confirmed.', 'Your laundry is on its way to you.'],
           url: `/orders?order=${encodeURIComponent(order.public_order_number)}`,
           tag: `order:${order.id}:delivery`,
         },

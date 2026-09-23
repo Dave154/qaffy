@@ -71,6 +71,7 @@ export async function action({ request }: Route.ActionArgs) {
         payload: {
           title: 'Order count updated',
           body: `A different item count was confirmed for ${result.publicOrderNumber}. Review the updated invoice.`,
+          details: [`Order: ${result.publicOrderNumber}`, `Count change: ${result.mismatchDirection === 'over' ? 'More items were confirmed' : 'Fewer items were confirmed'}`, 'Review the updated invoice for the final amount.'],
           url: `/orders?order=${encodeURIComponent(result.publicOrderNumber)}`,
           tag: `order:${orderId}:mismatch`,
         },
@@ -85,6 +86,7 @@ export async function action({ request }: Route.ActionArgs) {
         payload: {
           title: 'Payment required',
           body: `Payment is needed before ${result.publicOrderNumber} can be delivered.`,
+          details: [`Order: ${result.publicOrderNumber}`, 'The invoice is still unpaid.', 'Top up your wallet to make delivery available.'],
           url: `/invoice?order=${encodeURIComponent(result.publicOrderNumber)}`,
           tag: `order:${orderId}:payment`,
         },
@@ -99,6 +101,7 @@ export async function action({ request }: Route.ActionArgs) {
         payload: {
           title: 'Payment confirmed',
           body: `Your invoice for ${result.publicOrderNumber} has been paid.`,
+          details: [`Order: ${result.publicOrderNumber}`, 'The invoice is fully paid.', 'Your order can now move to delivery.'],
           url: `/orders?order=${encodeURIComponent(result.publicOrderNumber)}`,
           tag: `order:${orderId}:payment`,
         },

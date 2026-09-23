@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Clock3, X } from 'lucide-react'
 
 type PlanEndingBannerProps = {
   planName: string
   endDate: string | null
+  onDismiss?: () => void
 }
 
 function getDaysRemaining(endDate: string) {
@@ -13,13 +14,28 @@ function getDaysRemaining(endDate: string) {
   return Math.ceil((end.getTime() - startOfToday.getTime()) / 86_400_000)
 }
 
-export default function PlanEndingBanner({ planName, endDate }: PlanEndingBannerProps) {
+export function shouldShowPlanEndingBanner(endDate: string | null) {
+  if (!endDate) return false
+  const daysRemaining = getDaysRemaining(endDate)
+  return daysRemaining >= 0 && daysRemaining <= 7
+}
+
+export default function PlanEndingBanner({ planName, endDate, onDismiss }: PlanEndingBannerProps) {
   const [dismissedAt, setDismissedAt] = useState<number | null>(null)
   const daysRemaining = endDate ? getDaysRemaining(endDate) : null
   const storageKey = endDate ? `qaffy-plan-ending-banner:${endDate}` : null
-  const storedDismissal = storageKey && typeof window !== 'undefined' ? window.localStorage.getItem(storageKey) : null
-  const dismissalStage = dismissedAt ?? (storedDismissal ? Number(storedDismissal) : null)
+  const dismissalStage = dismissedAt
   const shouldShow = dismissalStage === null || (daysRemaining !== null && daysRemaining <= 3 && dismissalStage === 7)
+
+  useEffect(() => {
+    if (!storageKey) {
+      setDismissedAt(null)
+      return
+    }
+
+    const storedDismissal = window.localStorage.getItem(storageKey)
+    setDismissedAt(storedDismissal ? Number(storedDismissal) : null)
+  }, [storageKey])
 
   if (!endDate || daysRemaining === null || daysRemaining < 0 || daysRemaining > 7 || !shouldShow) return null
 
@@ -27,6 +43,7 @@ export default function PlanEndingBanner({ planName, endDate }: PlanEndingBanner
     const dismissalStage = daysRemaining <= 3 ? 3 : 7
     if (storageKey) window.localStorage.setItem(storageKey, String(dismissalStage))
     setDismissedAt(dismissalStage)
+    onDismiss?.()
   }
 
   return (

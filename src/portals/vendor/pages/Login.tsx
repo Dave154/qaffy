@@ -23,7 +23,12 @@ export default function Login() {
       const { data: userData } = await supabase.auth.getUser()
       if (!userData.user) return
       const { data: role } = await supabase.from('profile_roles').select('role').eq('profile_id', userData.user.id).eq('role', 'vendor').eq('status', 'approved').maybeSingle()
-      if (!role) return
+      const { data: vendorAccount } = await supabase.from('vendors').select('id').eq('profile_id', userData.user.id).eq('status', 'approved').maybeSingle()
+      if (!role || !vendorAccount) {
+        await supabase.auth.signOut()
+        setError('This email is not registered to an approved vendor account.')
+        return
+      }
       const { data: profile } = await supabase.from('profiles').select('name, phone').eq('id', userData.user.id).maybeSingle()
       const nextPath = profile?.name && profile?.phone ? '/vendor' : '/vendor/complete-profile?next=%2Fvendor'
       navigate(nextPath, { replace: true })
@@ -82,8 +87,9 @@ export default function Login() {
           <div className="mb-7 text-center"><QaffyLogo className="mx-auto inline-flex lg:hidden" /><h2 className="mt-4 text-[2.5rem] font-semibold text-slate-900">Vendor sign in</h2><p className="mt-2 text-sm text-slate-500">Access your Qaffy vendor workspace</p></div>
           <button type="button" onClick={() => void signInWithGoogle()} className="flex w-full items-center justify-center gap-3 rounded-2xl bg-brand-primary px-4 py-3.5 text-sm font-semibold text-white shadow-md shadow-brand-soft transition hover:bg-brand-primary-hover"><svg viewBox="0 0 48 48" aria-hidden="true" className="h-5 w-5 rounded-full bg-white" role="img"><path fill="#EA4335" d="M24 9.5c3.54 0 6.72 1.22 9.23 3.61l6.86-6.86C35.47 2.39 30.27 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.2C12.13 13.52 17.6 9.5 24 9.5Z"/><path fill="#4285F4" d="M46.5 24.6c0-1.64-.15-3.22-.42-4.74H24v9h12.7c-.55 2.96-2.2 5.47-4.69 7.17l7.6 5.9c4.43-4.09 7.89-10.15 7.89-17.33Z"/><path fill="#FBBC05" d="M32.01 36.11c-1.99 1.35-4.54 2.14-8.01 2.14-6.4 0-11.87-4.02-13.81-9.42l-8.02 6.21C3.99 41.38 13.14 48 24 48c7.1 0 13.08-2.34 17.42-6.36l-9.41-5.53Z"/><path fill="#34A853" d="M10.2 28.83A14.42 14.42 0 0 1 9.5 24c0-1.63.28-3.22.78-4.74L2.56 13.22A23.92 23.92 0 0 0 0 24c0 3.78.89 7.35 2.56 10.49l7.64-5.66Z"/></svg>Continue with Google</button>
           <div className="my-5 flex items-center gap-3 text-xs text-slate-400"><span className="h-px flex-1 bg-slate-200" /><span>or</span><span className="h-px flex-1 bg-slate-200" /></div>
+          {error && <p role="alert" className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
           {!showEmailAuth && <button type="button" onClick={() => setShowEmailAuth(true)} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-sm font-semibold text-slate-700 transition hover:border-brand-border hover:bg-brand-soft">Continue with email</button>}
-          {showEmailAuth && <form onSubmit={submit} className="space-y-4"><input type="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Enter your approved email" aria-label="Vendor email address" className="h-14 w-full rounded-lg border border-brand-border bg-white px-4 text-sm font-semibold text-black shadow-sm outline-none transition placeholder:text-field-placeholder focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" />{error && <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}<button type="submit" disabled={isSubmitting} className="w-full rounded-2xl bg-slate-900 px-4 py-3.5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50">{isSubmitting ? 'Sending code...' : 'Send email code'}</button></form>}
+          {showEmailAuth && <form onSubmit={submit} className="space-y-4"><input type="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Enter your approved email" aria-label="Vendor email address" className="h-14 w-full rounded-lg border border-brand-border bg-white px-4 text-sm font-semibold text-black shadow-sm outline-none transition placeholder:text-field-placeholder focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" /><button type="submit" disabled={isSubmitting} className="w-full rounded-2xl bg-slate-900 px-4 py-3.5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50">{isSubmitting ? 'Sending code...' : 'Send email code'}</button></form>}
         </div>
       </div>
     </main>

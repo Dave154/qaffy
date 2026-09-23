@@ -226,6 +226,21 @@ export interface Payment {
   created_at: string
 }
 
+export interface NotificationEvent {
+  id: string
+  event_key: string
+  customer_id: string
+  notification_type: string
+  order_id: string | null
+  subscription_id: string | null
+  payload: Record<string, unknown>
+  status: 'pending' | 'sent' | 'failed'
+  error_message: string | null
+  created_at: string
+  sent_at: string | null
+  read_at: string | null
+}
+
 export interface VendorSettlement {
   id: string
   vendor_id: string
@@ -338,6 +353,7 @@ export interface Database {
       mismatches: TableDef<Mismatch>
       invoices: TableDef<Invoice>
       payments: TableDef<Payment>
+      notification_events: TableDef<NotificationEvent>
       vendor_settlements: TableDef<VendorSettlement>
       vendor_settlement_orders: TableDef<VendorSettlementOrder>
       referrals: TableDef<Referral>

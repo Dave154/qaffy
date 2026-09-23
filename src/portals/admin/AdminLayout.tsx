@@ -1,4 +1,4 @@
-import { AlertTriangle, Bell, Boxes, ChevronDown, ChevronLeft, ChevronRight, CircleDollarSign, ClipboardList, Gift, LayoutDashboard, LogOut, MapPin, Settings, ShieldCheck, Search, UsersRound } from 'lucide-react'
+import { AlertTriangle, Bell, Boxes, ChevronDown, ChevronLeft, ChevronRight, CircleDollarSign, ClipboardList, Gift, LayoutDashboard, LogOut, MapPin, Menu, Settings, ShieldCheck, Search, UsersRound, X } from 'lucide-react'
 import { useState } from 'react'
 import { data, NavLink, Outlet, useLoaderData, useLocation, useNavigate } from 'react-router'
 import type { Route } from './+types/AdminLayout'
@@ -29,6 +29,7 @@ export default function AdminLayout() {
   const location = useLocation()
   const navigate = useNavigate()
   const [isCollapsed, setIsCollapsed] = useState(false)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [openNav, setOpenNav] = useState<string | null>(
     location.pathname.startsWith('/admin/partners')
       ? 'Partners'
@@ -67,13 +68,14 @@ export default function AdminLayout() {
     if (supabase) await supabase.auth.signOut()
     navigate('/admin/login', { replace: true })
   }
+  const closeMobileMenu = () => setMobileMenuOpen(false)
   return (
     <div className="flex min-h-screen bg-[#fafafa] text-slate-900">
-      <aside className={`fixed left-0 top-0 z-30 hidden h-screen max-h-screen shrink-0 self-start flex-col overflow-visible border-r border-[#f2f3f3] bg-white py-7 transition-[width] duration-300 md:flex ${isCollapsed ? 'w-[76px] px-3' : 'w-[221px] px-[13px]'}`}>
+      <aside className={`fixed left-0 top-0 z-30 hidden h-screen max-h-screen shrink-0 self-start flex-col overflow-visible border-r border-[#f2f3f3] bg-white py-7 transition-[width] duration-300 lg:flex ${isCollapsed ? 'w-[76px] px-3' : 'w-[221px] px-[13px]'}`}>
         <div className="scrollbar-hidden flex min-h-0 flex-1 flex-col overflow-y-auto">
-        <div className={`mb-8 ${isCollapsed ? 'text-center' : ''}`}>
+        <div className={`mb-8 flex flex-col gap-3 ${isCollapsed ? 'items-center text-center' : ''}`}>
           {isCollapsed ? <span className="mt-2 block text-3xl leading-[33px] text-brand-primary" style={{ fontFamily: 'Pacifico, cursive' }}>Q</span> : <QaffyLogo className="mt-2 origin-left px-3 scale-[0.78]" />}
-          <p className={`mt-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-brand-primary ${isCollapsed ? 'sr-only' : 'px-3'}`}>Admin</p>
+          <p className={`text-[10px] font-semibold uppercase tracking-[0.22em] text-brand-primary ${isCollapsed ? 'sr-only' : 'px-3'}`}>Admin</p>
         </div>
 
         <nav className={`mx-auto space-y-2 ${isCollapsed ? 'w-full' : 'w-[194px]'}`}>
@@ -107,9 +109,53 @@ export default function AdminLayout() {
           </button>
       </aside>
 
-      <main className={`min-h-screen min-w-0 flex-1 px-4 pb-10 pt-5 transition-[margin] duration-300 md:px-7 md:pt-[22px] ${isCollapsed ? 'md:ml-[76px]' : 'md:ml-[221px]'}`}>
+      <div className="fixed inset-x-0 top-0 z-40 flex h-14 items-center justify-between border-b border-[#f2f3f3] bg-white px-4 lg:hidden">
+        <button type="button" onClick={() => setMobileMenuOpen(true)} aria-label="Open admin navigation" aria-expanded={mobileMenuOpen} className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-600">
+          <Menu size={18} />
+        </button>
+        <div className="flex flex-col items-center justify-center gap-3">
+          <QaffyLogo className="scale-[0.82]" />
+          <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-brand-primary">Admin</span>
+        </div>
+        <div className="w-9" aria-hidden="true" />
+      </div>
+      {mobileMenuOpen && <div className="fixed inset-0 z-50 lg:hidden">
+        <button type="button" aria-label="Close admin navigation overlay" onClick={closeMobileMenu} className="absolute inset-0 bg-slate-950/35" />
+        <aside className="relative z-10 flex h-full w-[84%] max-w-sm flex-col overflow-y-auto bg-white px-[13px] py-5 shadow-xl">
+          <div className="mb-6 flex items-center justify-between">
+            <div className="flex flex-1 flex-col items-start gap-3">
+              <QaffyLogo className="scale-[0.78] origin-left px-0" />
+              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-brand-primary">Admin</p>
+            </div>
+            <button type="button" onClick={closeMobileMenu} aria-label="Close admin navigation" className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-600"><X size={17} /></button>
+          </div>
+          <nav className="space-y-2">
+            {navItems.map((item) => <div key={item.to} className="space-y-1.5">
+              {item.children ? <>
+                <button type="button" onClick={() => setOpenNav((open) => open === item.label ? null : item.label)} aria-expanded={openNav === item.label} className={`group flex h-11 w-full items-center rounded-xl px-4 text-sm font-medium transition ${openNav === item.label || (item.label === 'Partners' && location.pathname.startsWith('/admin/partners')) || (item.label === 'Settings' && (location.pathname.startsWith('/admin/settings') || location.pathname.startsWith('/admin/categories') || location.pathname.startsWith('/admin/pickup-locations') || location.pathname.startsWith('/admin/admins'))) ? 'bg-brand-soft text-brand-primary' : 'text-[#121212] hover:bg-brand-soft hover:text-brand-primary'}`}>
+                  <item.icon size={17} strokeWidth={1.8} aria-hidden="true" className="shrink-0" />
+                  <span className="ml-3">{item.label}</span>
+                  <ChevronDown size={15} aria-hidden="true" className={`ml-auto transition-transform duration-300 ${openNav === item.label ? 'rotate-180' : ''}`} />
+                </button>
+                <div className={`grid transition-[grid-template-rows,opacity] duration-300 ${openNav === item.label ? 'grid-rows-[1fr] opacity-100' : 'pointer-events-none grid-rows-[0fr] opacity-0'}`}>
+                  <div className="min-h-0 overflow-hidden pl-5">
+                    <div className="space-y-1 border-l border-brand-border pl-3">
+                      {item.children.map((child) => <NavLink key={child.to} to={child.to} prefetch="intent" onClick={closeMobileMenu} className={({ isActive }) => `flex min-h-9 items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition ${isActive ? 'bg-brand-soft text-brand-primary' : 'text-slate-500 hover:bg-brand-soft hover:text-brand-primary'}`}><ChevronRight size={13} strokeWidth={2} aria-hidden="true" />{child.label}</NavLink>)}
+                    </div>
+                  </div>
+                </div>
+              </> : <NavLink to={item.to} end={item.end} prefetch="intent" onClick={closeMobileMenu} className={({ isActive }) => `group flex h-11 items-center rounded-xl px-4 text-sm font-medium transition ${isActive ? 'bg-brand-soft text-brand-primary' : 'text-[#121212] hover:bg-brand-soft hover:text-brand-primary'}`}>
+                <item.icon size={17} strokeWidth={1.8} aria-hidden="true" className="shrink-0" />
+                <span className="ml-3">{item.label}</span>
+              </NavLink>}
+            </div>)}
+          </nav>
+          <button type="button" onClick={() => { closeMobileMenu(); void handleLogout() }} className="mt-auto flex h-10 w-full items-center rounded-[10px] px-4 text-sm font-medium text-red-600 hover:bg-red-50 hover:text-red-700"><LogOut size={17} strokeWidth={1.8} aria-hidden="true" className="mr-3 text-red-600" />Log out</button>
+        </aside>
+      </div>}
+      <main className={`min-h-screen min-w-0 flex-1 px-4 pb-10 pt-[4.5rem] transition-[margin] lg:px-7 lg:pt-[22px] ${isCollapsed ? 'lg:ml-[76px]' : 'lg:ml-[221px]'}`}>
         <div className="mx-auto max-w-[1180px]">
-          <div className="sticky top-0 z-20 -mx-4 mb-6 flex h-12 items-center justify-between gap-4 bg-[#fafafa] px-4 py-1 md:-mx-7 md:px-7">
+          <div className="sticky top-0 z-20 -mx-4 mb-6 hidden h-12 items-center justify-between gap-4 bg-[#fafafa] px-4 py-1 lg:-mx-7 lg:flex lg:px-7">
             <h2 className="text-[28px] font-semibold leading-[34px] tracking-tight text-[#121212]">{pageTitle}</h2>
             <div className="ml-auto flex h-12 w-full max-w-[310px] items-center gap-2 rounded-full border border-[#f2f3f3] bg-white px-4 text-sm text-[#8e9a9a] shadow-[0_2px_8px_rgba(0,0,0,0.02)]"><Search size={14} /> Search</div>
             <button type="button" aria-label="Notifications" className="flex h-10 w-10 items-center justify-center rounded-full border border-[#f2f3f3] bg-white text-[#121212]"><Bell size={16} /></button>

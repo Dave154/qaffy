@@ -5,9 +5,13 @@ import OtpInput from '../../../components/OtpInput'
 import { isSupabaseConfigured, supabase } from '../../../lib/supabase.client'
 import { clearReferralCodeCookie } from '../../../lib/referral.client'
 
-const getOtpError = (message: string, portal: string) => portal === 'vendor' && message.toLowerCase().includes('signups not allowed for otp')
-  ? 'This email is not registered to an approved vendor account.'
-  : message
+const getOtpError = (message: string, portal: string) => {
+  if (!message.toLowerCase().includes('signups not allowed for otp')) return message
+  if (portal === 'vendor') return 'This email is not registered to an approved vendor account.'
+  if (portal === 'admin') return 'This email is not approved for admin access.'
+  if (portal === 'logistics') return 'This email is not registered to an approved logistics account.'
+  return message
+}
 
 export default function VerifyOtp() {
   const navigate = useNavigate()
@@ -16,7 +20,7 @@ export default function VerifyOtp() {
   const email = params.get('email') ?? ''
   const mode = params.get('mode') ?? 'login'
   const portal = params.get('portal') ?? 'customer'
-  const expectedRole = portal === 'vendor' || portal === 'admin' ? portal : 'customer'
+  const expectedRole = portal === 'vendor' || portal === 'admin' || portal === 'logistics' ? portal : 'customer'
   const shouldCreateUser = expectedRole === 'customer' && mode === 'create-account'
   const [code, setCode] = useState(Array.from({ length: 8 }, () => ''))
   const [secondsRemaining, setSecondsRemaining] = useState(30)
@@ -98,14 +102,19 @@ export default function VerifyOtp() {
     const { data: vendorAccount } = expectedRole === 'vendor'
       ? await supabase.from('vendors').select('id').eq('profile_id', userData.user.id).eq('status', 'approved').maybeSingle()
       : { data: null }
+    const { data: logisticsAccount } = expectedRole === 'logistics'
+      ? await supabase.from('logistics_agents').select('id').eq('profile_id', userData.user.id).eq('status', 'approved').maybeSingle()
+      : { data: null }
     const hasPortalAccess = expectedRole === 'customer'
       ? Boolean(profile)
       : expectedRole === 'vendor'
         ? Boolean(roleAssignment) && Boolean(vendorAccount)
+        : expectedRole === 'logistics'
+          ? Boolean(roleAssignment) && Boolean(logisticsAccount)
         : Boolean(roleAssignment) || expectedRole === 'admin' && profile?.role === 'admin'
     if (!hasPortalAccess) {
       await supabase.auth.signOut()
-      setError(expectedRole === 'vendor' ? 'This email is not registered to an approved vendor account.' : 'This email belongs to a different Qaffy portal.')
+      setError(expectedRole === 'vendor' ? 'This email is not registered to an approved vendor account.' : expectedRole === 'logistics' ? 'This email is not registered to an approved logistics account.' : expectedRole === 'admin' ? 'This email is not approved for admin access.' : 'This email belongs to a different Qaffy portal.')
       setIsSubmitting(false)
       return
     }

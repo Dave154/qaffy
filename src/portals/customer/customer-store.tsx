@@ -85,6 +85,7 @@ export type CustomerOrder = {
   status: OrderStatus
   statusTone: string
   date: string
+  createdAt: string
   pickup: string
   total: number
   items: number
@@ -241,6 +242,7 @@ function mapDatabaseOrder(order: Order, persistedItems: PersistedOrderItem[] = [
     status: statusMap[order.status],
     statusTone: statusToneMap[order.status],
     date: formatOrderDateTime(order.created_at),
+    createdAt: order.created_at,
     pickup: order.status === 'pending_pickup' ? 'Pickup pending' : 'Pickup confirmed',
     total: invoiceAmountsByOrderId?.[order.id] ?? order.billed_extra_amount ?? 0,
     items: order.clothes_count_customer,
@@ -381,6 +383,7 @@ export function CustomerStoreProvider({
           status: 'Awaiting pickup',
           statusTone: 'bg-amber-50 text-amber-700',
           date: 'Just now',
+          createdAt: new Date().toISOString(),
           pickup: 'Pickup pending',
           total,
           items: clothes,
