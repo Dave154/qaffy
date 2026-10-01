@@ -462,7 +462,7 @@ Before updating UI components, verify:
 #### Admin and Finance continuation update (2026-09-17)
 
 - `src/portals/admin/pages/Mismatches.tsx` is read-only for accountability. It has compact/truncated rows, search and direction filters, a details modal, and a modal-only `View order` link to the exact `/admin/orders?orderId=<uuid>` detail view. The table no longer has a Reviewed/Resolve button.
-- `src/portals/admin/pages/Finance.tsx` persists admin profit withdrawals in `admin_finance_transactions` and subtracts them from displayed platform profit. This is an internal ledger entry, not a bank transfer.
+- Existing admin profit-withdrawal entries in `admin_finance_transactions` are subtracted from displayed platform profit. The Admin Finance withdrawal form and `record-withdrawal` action are disabled until a real, audited payout flow exists; do not treat ledger entries as bank transfers.
 - Finance settlement batches snapshot each confirmed order-item quantity, vendor unit rate, and payout amount in `vendor_settlement_items`, so later rate-card edits do not rewrite historical payouts.
 - Paystack balance failures display as unavailable with an error message instead of being represented as `₦0`.
 - Apply `supabase/migrations/20260917110000_admin_finance_ledger_and_settlement_snapshots.sql` before using the new Finance ledger or settlement snapshot paths. The generated Supabase TypeScript types do not yet include these new tables; Finance uses a local snapshot row type until types are regenerated.
@@ -487,6 +487,10 @@ Before updating UI components, verify:
 - Customer SSR date output uses an explicit `en-GB` locale for overview and notification timestamps to prevent server/client hydration mismatches.
 
 Outstanding Admin work is highlighted in `ADMIN_PLAN.md` under **Outstanding Admin Work**. The highest-priority unfinished item is trusted settlement payout release through Paystack Transfers, including transfer metadata, duplicate-transfer prevention, and paid-settlement audit records.
+
+The initial trusted payout release and reconciliation implementation is now present in `src/lib/payouts.server.ts` and Admin Finance. It is not production-complete until fake-provider regression tests, Paystack test-mode verification, and reconciliation smoke tests have passed.
+
+Payout error handling is part of that same unfinished workstream. The Admin must see an actionable distinction between local validation rejection, provider rejection, processing/unknown provider results, confirmed success, and internal recording failure. Provider calls must be idempotent, unknown results must be reconciled before retry, failed transfers must leave settlements unpaid, and no payout may be marked paid without confirmed provider success. Use the error-handling contract in `ADMIN_PLAN.md` and `FINANCE_AND_PAYMENT_FLOW.md` as the source of truth.
 
 - `src/portals/admin/pages/Home.tsx` loads live dashboard metrics, revenue, vendor/logistics counts, recent activity, and subscription analytics.
 - `src/portals/admin/pages/Orders.tsx` is routed at `/admin/orders` and supports search, filtering, and read-only detail views.

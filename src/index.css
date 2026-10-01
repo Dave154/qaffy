@@ -3,7 +3,7 @@
 @import '@fontsource/inter/600.css';
 @import '@fontsource/inter/700.css';
 @import '@fontsource/pacifico/400.css';
-@import "tailwindcss";
+@import 'tailwindcss';
 
 @theme {
   --color-violet-50: #fff1f3;
@@ -38,7 +38,7 @@
   --color-field-disabled-text: #8e9a9a;
   --color-surface: #fafafa;
   --color-ink: #121212;
-  --font-sans: "Inter", "Segoe UI", sans-serif;
+  --font-sans: 'Inter', 'Segoe UI', sans-serif;
 }
 
 :root {
@@ -95,7 +95,8 @@ body {
   width: var(--bubble-size);
   height: var(--bubble-size);
   border-radius: 57% 43% 49% 51% / 46% 54% 47% 53%;
-  box-shadow: inset 2px 3px 6px rgba(255, 255, 255, 0.65),
+  box-shadow:
+    inset 2px 3px 6px rgba(255, 255, 255, 0.65),
     inset -3px -4px 8px color-mix(in srgb, var(--bubble-color) 22%, transparent),
     0 0 18px color-mix(in srgb, var(--bubble-color) 28%, transparent);
   background:
@@ -313,14 +314,14 @@ textarea {
   background: rgba(183, 93, 61, 0.18);
 }
 
-[class*="rounded-"]:not([class*="rounded-full"]) {
+[class*='rounded-']:not([class*='rounded-full']) {
   border-radius: 1rem;
 }
 
-[class*="shadow-sm"],
-[class*="shadow-md"],
-[class*="shadow-lg"],
-[class*="shadow-xl"],
-[class*="shadow-2xl"] {
+[class*='shadow-sm'],
+[class*='shadow-md'],
+[class*='shadow-lg'],
+[class*='shadow-xl'],
+[class*='shadow-2xl'] {
   box-shadow: 0 2px 8px rgba(18, 18, 18, 0.05);
 }

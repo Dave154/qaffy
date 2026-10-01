@@ -10,13 +10,23 @@ export default function Transactions() {
   const navigation = useNavigation()
   const [activeFilter, setActiveFilter] = useState('All activity')
   const isLoading = navigation.state === 'loading'
-  const filteredTransactions = activeFilter === 'Top ups'
-    ? transactions.filter((transaction) => transaction.category === 'topup')
-    : activeFilter === 'Payments'
-      ? transactions.filter((transaction) => transaction.category === 'payment')
-      : transactions
+  const filteredTransactions =
+    activeFilter === 'Top ups'
+      ? transactions.filter((transaction) => transaction.category === 'topup')
+      : activeFilter === 'Payments'
+        ? transactions.filter((transaction) => transaction.category === 'payment')
+        : transactions
   const exportTransactions = () => {
-    const rows = [['Type', 'Reference', 'Amount', 'Date', 'Status'], ...filteredTransactions.map((transaction) => [transaction.title, transaction.reference, transaction.amount, transaction.date, transaction.status])]
+    const rows = [
+      ['Type', 'Reference', 'Amount', 'Date', 'Status'],
+      ...filteredTransactions.map((transaction) => [
+        transaction.title,
+        transaction.reference,
+        transaction.amount,
+        transaction.date,
+        transaction.status,
+      ]),
+    ]
     const csv = rows.map((row) => row.map((value) => `"${value.replaceAll('"', '""')}"`).join(',')).join('\n')
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
     const link = document.createElement('a')
@@ -44,7 +54,9 @@ export default function Transactions() {
               onClick={() => setActiveFilter(item)}
               aria-pressed={activeFilter === item}
               className={`shrink-0 rounded-full px-4 py-2 text-sm font-medium transition ${
-                activeFilter === item ? 'bg-slate-900 text-white shadow-sm shadow-slate-200' : 'bg-slate-50 text-slate-500 hover:bg-sky-50 hover:text-sky-700'
+                activeFilter === item
+                  ? 'bg-slate-900 text-white shadow-sm shadow-slate-200'
+                  : 'bg-slate-50 text-slate-500 hover:bg-sky-50 hover:text-sky-700'
               }`}
             >
               {item}
@@ -59,32 +71,64 @@ export default function Transactions() {
             <h3 className="text-lg font-bold text-slate-900">Recent activity</h3>
             <p className="mt-1 text-xs text-slate-500">Your wallet and payment activity</p>
           </div>
-          <button type="button" onClick={exportTransactions} className="hidden rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 hover:border-sky-200 hover:text-sky-700 sm:block">
+          <button
+            type="button"
+            onClick={exportTransactions}
+            className="hidden rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 hover:border-sky-200 hover:text-sky-700 sm:block"
+          >
             Export
           </button>
         </div>
 
-        {transactionError && <div role="alert" className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">Payment activity could not be loaded. Please refresh and try again.</div>}
-        {isLoading ? <div className="space-y-3" aria-live="polite">{[1, 2, 3].map((item) => <div key={item} className="h-16 animate-pulse rounded-2xl bg-slate-100" />)}</div> : filteredTransactions.length === 0 ? <div className="rounded-2xl bg-slate-50 p-8 text-center text-sm text-slate-500">{transactions.length === 0 ? 'No wallet activity yet.' : `No ${activeFilter.toLowerCase()} found.`}</div> : <div className="divide-y divide-slate-100">
-          {filteredTransactions.map((transaction) => (
-            <div key={transaction.id} className="flex min-w-0 items-start gap-2 py-4 first:pt-1 last:pb-1">
-              <div className="flex min-w-0 flex-1 items-center gap-3">
-                <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl text-lg ${transaction.direction === 'credit' ? 'bg-emerald-50 text-emerald-600' : 'bg-sky-50 text-sky-700'}`}>
-                  {transaction.direction === 'credit' ? '↓' : '↑'}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate font-semibold text-slate-900">{transaction.title}</p>
-                  <CopyableOrderId id={transaction.reference} label="Transaction reference" className="mt-0.5 max-w-full text-xs text-slate-500" />
-                  <p className="mt-1 text-[11px] text-slate-400">{transaction.date}</p>
+        {transactionError && (
+          <div role="alert" className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
+            Payment activity could not be loaded. Please refresh and try again.
+          </div>
+        )}
+        {isLoading ? (
+          <div className="space-y-3" aria-live="polite">
+            {[1, 2, 3].map((item) => (
+              <div key={item} className="h-16 animate-pulse rounded-2xl bg-slate-100" />
+            ))}
+          </div>
+        ) : filteredTransactions.length === 0 ? (
+          <div className="rounded-2xl bg-slate-50 p-8 text-center text-sm text-slate-500">
+            {transactions.length === 0 ? 'No wallet activity yet.' : `No ${activeFilter.toLowerCase()} found.`}
+          </div>
+        ) : (
+          <div className="divide-y divide-slate-100">
+            {filteredTransactions.map((transaction) => (
+              <div key={transaction.id} className="flex min-w-0 items-start gap-2 py-4 first:pt-1 last:pb-1">
+                <div className="flex min-w-0 flex-1 items-center gap-3">
+                  <span
+                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl text-lg ${transaction.direction === 'credit' ? 'bg-emerald-50 text-emerald-600' : 'bg-sky-50 text-sky-700'}`}
+                  >
+                    {transaction.direction === 'credit' ? '↓' : '↑'}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-semibold text-slate-900">{transaction.title}</p>
+                    <CopyableOrderId
+                      id={transaction.reference}
+                      label="Transaction reference"
+                      className="mt-0.5 max-w-full text-xs text-slate-500"
+                    />
+                    <p className="mt-1 text-[11px] text-slate-400">{transaction.date}</p>
+                  </div>
+                </div>
+                <div className="shrink-0 text-right">
+                  <p className={`font-semibold ${transaction.direction === 'credit' ? 'text-emerald-600' : 'text-slate-900'}`}>
+                    {transaction.amount}
+                  </p>
+                  <p
+                    className={`mt-1 text-[11px] font-medium ${transaction.status === 'Successful' ? 'text-emerald-600' : transaction.status === 'Failed' ? 'text-rose-600' : 'text-amber-600'}`}
+                  >
+                    {transaction.status}
+                  </p>
                 </div>
               </div>
-              <div className="shrink-0 text-right">
-                <p className={`font-semibold ${transaction.direction === 'credit' ? 'text-emerald-600' : 'text-slate-900'}`}>{transaction.amount}</p>
-                <p className={`mt-1 text-[11px] font-medium ${transaction.status === 'Successful' ? 'text-emerald-600' : transaction.status === 'Failed' ? 'text-rose-600' : 'text-amber-600'}`}>{transaction.status}</p>
-              </div>
-            </div>
-          ))}
-        </div>}
+            ))}
+          </div>
+        )}
       </section>
     </div>
   )

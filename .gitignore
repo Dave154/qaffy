@@ -17,6 +17,7 @@ coverage
 playwright-report
 test-results
 *.local
+supabase/.temp/
 
 # Environment variables
 .env

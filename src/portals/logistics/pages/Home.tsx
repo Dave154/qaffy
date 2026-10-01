@@ -7,8 +7,6 @@ import { isSupabaseServerConfigured } from '../../../lib/supabase.server'
 import CopyableOrderId from '../../../components/CopyableOrderId'
 import { sendCustomerNotification } from '../../../lib/notifications.server'
 
-// Logistics currently runs in dev-friendly mode, so this action uses the trusted
-// server connection while still validating both the order and its pickup OTP.
 // eslint-disable-next-line react-refresh/only-export-components
 export async function action({ request }: Route.ActionArgs) {
   let agentProfileId: string | null = null
@@ -20,7 +18,9 @@ export async function action({ request }: Route.ActionArgs) {
 
   const formData = await request.formData()
   const orderId = String(formData.get('orderId') ?? '')
-  const otp = String(formData.get('otp') ?? '').replace(/\D/g, '').slice(-4)
+  const otp = String(formData.get('otp') ?? '')
+    .replace(/\D/g, '')
+    .slice(-4)
   const intent = String(formData.get('intent') ?? 'pickup')
 
   if (intent !== 'pickup' && intent !== 'final_delivery') {
@@ -28,21 +28,28 @@ export async function action({ request }: Route.ActionArgs) {
   }
 
   if (!orderId || otp.length !== 4) {
-    return data({ ok: false, message: `A valid ${intent === 'final_delivery' ? 'final delivery' : intent} OTP is required.` }, { status: 400 })
+    return data(
+      { ok: false, message: `A valid ${intent === 'final_delivery' ? 'final delivery' : intent} OTP is required.` },
+      { status: 400 },
+    )
   }
 
   const [order] = await sql`
-    ${intent === 'final_delivery' ? sql`update orders
+    ${
+      intent === 'final_delivery'
+        ? sql`update orders
     set status = 'delivered', delivery_otp = null
     where id = ${orderId}
       and status = 'out_for_delivery'
       and right(regexp_replace(coalesce(delivery_otp, ''), '[^0-9]', '', 'g'), 4) = ${otp}
-    returning id, customer_id, public_order_number, picked_up_date, status` : sql`update orders
+    returning id, customer_id, public_order_number, picked_up_date, status`
+        : sql`update orders
     set status = 'picked_up', picked = true, picked_up_date = now(), pickup_otp = null
     where id = ${orderId}
       and status = 'pending_pickup'
       and right(regexp_replace(coalesce(pickup_otp, ''), '[^0-9]', '', 'g'), 4) = ${otp}
-    returning id, customer_id, public_order_number, picked_up_date, status`}
+    returning id, customer_id, public_order_number, picked_up_date, status`
+    }
   `
 
   if (!order) {
@@ -75,7 +82,10 @@ export async function action({ request }: Route.ActionArgs) {
         payload: {
           title: isPickup ? 'Your order was picked up' : 'Your order was delivered',
           body: isPickup ? 'Qaffy has collected your laundry.' : 'Your Qaffy laundry order has been delivered.',
-          details: [`Order: ${order.public_order_number}`, isPickup ? 'Your laundry is now with Qaffy.' : 'Your laundry has been handed back to you.'],
+          details: [
+            `Order: ${order.public_order_number}`,
+            isPickup ? 'Your laundry is now with Qaffy.' : 'Your laundry has been handed back to you.',
+          ],
           url: `/orders?order=${encodeURIComponent(order.public_order_number)}`,
           tag: `order:${order.id}:${isPickup ? 'pickup' : 'delivery'}`,
         },
@@ -136,7 +146,12 @@ function isWithinRange(dateIso: string, range: (typeof filters)[number]) {
 }
 
 export default function Home() {
-  const { orders, logisticsEvents, activeTab, setActiveTab } = useOutletContext<{ orders: OrderRecord[]; logisticsEvents: Array<{ order_id: string; event_type: 'picked_up' | 'delivered'; created_at: string }>; activeTab: 'pickup' | 'delivery'; setActiveTab: (tab: 'pickup' | 'delivery') => void }>()
+  const { orders, logisticsEvents, activeTab, setActiveTab } = useOutletContext<{
+    orders: OrderRecord[]
+    logisticsEvents: Array<{ order_id: string; event_type: 'picked_up' | 'delivered'; created_at: string }>
+    activeTab: 'pickup' | 'delivery'
+    setActiveTab: (tab: 'pickup' | 'delivery') => void
+  }>()
   const fetcher = useFetcher<typeof action>()
   const revalidator = useRevalidator()
   const [selectedRange, setSelectedRange] = useState<(typeof filters)[number]>('Today')
@@ -187,7 +202,10 @@ export default function Home() {
   }, [enteredOtp, orders])
 
   const pickedUpOrders = useMemo(
-    () => orders.filter((order) => order.picked && matchesSelectedLocation(order) && isWithinRange(order.picked_up_date ?? order.created_at, selectedRange)),
+    () =>
+      orders.filter(
+        (order) => order.picked && matchesSelectedLocation(order) && isWithinRange(order.picked_up_date ?? order.created_at, selectedRange),
+      ),
     [orders, selectedLocation, selectedRange],
   )
 
@@ -197,25 +215,30 @@ export default function Home() {
   )
 
   const pickedUpEvents = useMemo(
-    () => logisticsEvents.filter((event) => {
-      if (event.event_type !== 'picked_up') return false
-      const order = orders.find((item) => item.id === event.order_id)
-      return order ? matchesSelectedLocation(order) && isWithinRange(event.created_at, selectedRange) : false
-    }),
+    () =>
+      logisticsEvents.filter((event) => {
+        if (event.event_type !== 'picked_up') return false
+        const order = orders.find((item) => item.id === event.order_id)
+        return order ? matchesSelectedLocation(order) && isWithinRange(event.created_at, selectedRange) : false
+      }),
     [logisticsEvents, orders, selectedLocation, selectedRange],
   )
 
   const deliveredEvents = useMemo(
-    () => logisticsEvents.filter((event) => {
-      if (event.event_type !== 'delivered') return false
-      const order = orders.find((item) => item.id === event.order_id)
-      return order ? matchesSelectedLocation(order) && isWithinRange(event.created_at, selectedRange) : false
-    }),
+    () =>
+      logisticsEvents.filter((event) => {
+        if (event.event_type !== 'delivered') return false
+        const order = orders.find((item) => item.id === event.order_id)
+        return order ? matchesSelectedLocation(order) && isWithinRange(event.created_at, selectedRange) : false
+      }),
     [logisticsEvents, orders, selectedLocation, selectedRange],
   )
 
   const pendingDeliveryOrders = useMemo(
-    () => orders.filter((order) => order.status === 'out_for_delivery' && matchesSelectedLocation(order) && isWithinRange(order.created_at, selectedRange)),
+    () =>
+      orders.filter(
+        (order) => order.status === 'out_for_delivery' && matchesSelectedLocation(order) && isWithinRange(order.created_at, selectedRange),
+      ),
     [orders, selectedLocation, selectedRange],
   )
   const deliveryEnteredOtp = otp.join('').trim()
@@ -359,8 +382,20 @@ export default function Home() {
       <div className="flex flex-col items-center gap-2 px-1 sm:flex-row sm:items-center sm:justify-between">
         <div className="shrink-0 rounded-full border border-brand-border bg-brand-soft p-1 shadow-sm">
           <div className="flex gap-1">
-            <button type="button" onClick={() => setActiveTab('pickup')} className={`rounded-full px-2.5 py-1 text-xs font-medium transition sm:px-3 sm:py-1.5 sm:text-sm ${activeTab === 'pickup' ? 'bg-brand-primary text-white shadow-sm' : 'text-slate-600 hover:text-brand-primary'}`}>Pickup</button>
-            <button type="button" onClick={() => setActiveTab('delivery')} className={`rounded-full px-2.5 py-1 text-xs font-medium transition sm:px-3 sm:py-1.5 sm:text-sm ${activeTab === 'delivery' ? 'bg-brand-primary text-white shadow-sm' : 'text-slate-600 hover:text-brand-primary'}`}>Delivery</button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('pickup')}
+              className={`rounded-full px-2.5 py-1 text-xs font-medium transition sm:px-3 sm:py-1.5 sm:text-sm ${activeTab === 'pickup' ? 'bg-brand-primary text-white shadow-sm' : 'text-slate-600 hover:text-brand-primary'}`}
+            >
+              Pickup
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('delivery')}
+              className={`rounded-full px-2.5 py-1 text-xs font-medium transition sm:px-3 sm:py-1.5 sm:text-sm ${activeTab === 'delivery' ? 'bg-brand-primary text-white shadow-sm' : 'text-slate-600 hover:text-brand-primary'}`}
+            >
+              Delivery
+            </button>
           </div>
         </div>
         <div className="flex min-w-0 flex-wrap items-center justify-center gap-2 sm:justify-end">
@@ -400,98 +435,223 @@ export default function Home() {
 
       <div className="grid gap-3 md:grid-cols-2">
         <div className="rounded-[24px] border border-[#e7e7e7] bg-white p-4 shadow-sm shadow-slate-100">
-          <div className="inline-flex rounded-full bg-brand-soft px-2.5 py-1 text-xs font-medium text-brand-primary">{activeTab === 'delivery' ? 'Delivered' : 'Picked up'}</div>
-          <p className="mt-4 text-3xl font-bold text-slate-900">{activeTab === 'delivery' ? summary[selectedRange].delivered : summary[selectedRange].pickedUp}</p>
-          <p className="mt-1 text-sm text-slate-500">{activeTab === 'delivery' ? 'Orders delivered' : 'Orders picked up'} in {selectedRange.toLowerCase()}</p>
+          <div className="inline-flex rounded-full bg-brand-soft px-2.5 py-1 text-xs font-medium text-brand-primary">
+            {activeTab === 'delivery' ? 'Delivered' : 'Picked up'}
+          </div>
+          <p className="mt-4 text-3xl font-bold text-slate-900">
+            {activeTab === 'delivery' ? summary[selectedRange].delivered : summary[selectedRange].pickedUp}
+          </p>
+          <p className="mt-1 text-sm text-slate-500">
+            {activeTab === 'delivery' ? 'Orders delivered' : 'Orders picked up'} in {selectedRange.toLowerCase()}
+          </p>
         </div>
 
         <div className="rounded-[24px] border border-[#e7e7e7] bg-white p-4 shadow-sm shadow-slate-100">
-          <div className="inline-flex rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">{activeTab === 'delivery' ? 'Pending delivery' : 'Pending'}</div>
-          <p className="mt-4 text-3xl font-bold text-slate-900">{activeTab === 'delivery' ? summary[selectedRange].pendingDelivery : summary[selectedRange].pending}</p>
-          <p className="mt-1 text-sm text-slate-500">{activeTab === 'delivery' ? 'Orders awaiting delivery' : 'Orders still pending'} in {selectedRange.toLowerCase()}</p>
+          <div className="inline-flex rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">
+            {activeTab === 'delivery' ? 'Pending delivery' : 'Pending'}
+          </div>
+          <p className="mt-4 text-3xl font-bold text-slate-900">
+            {activeTab === 'delivery' ? summary[selectedRange].pendingDelivery : summary[selectedRange].pending}
+          </p>
+          <p className="mt-1 text-sm text-slate-500">
+            {activeTab === 'delivery' ? 'Orders awaiting delivery' : 'Orders still pending'} in {selectedRange.toLowerCase()}
+          </p>
         </div>
       </div>
 
       <div className="rounded-[28px] border border-[#e7e7e7] bg-white p-4 shadow-sm shadow-slate-100 md:p-5">
         {activeTab === 'delivery' ? (
           <>
-            <div className="mb-4 flex items-center justify-between"><h2 className="text-xl font-bold text-slate-900">Search OTP</h2><span className="rounded-full bg-brand-soft px-2.5 py-1 text-xs font-medium text-brand-primary">Delivery</span></div>
-            <div className="rounded-[24px] border border-[#e7e7e7] bg-[#fafafa] p-4"><p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400">Customer OTP</p><div className="mt-4 flex justify-center gap-2 sm:gap-3">{otp.map((digit, index) => <input key={index} ref={(element) => { inputRefs.current[index] = element }} id={`delivery-otp-${index}`} type="text" inputMode="numeric" maxLength={1} value={digit} onChange={(event) => updateCode(index, event.target.value)} onKeyDown={(event) => handleOtpKeyDown(index, event)} onPaste={handlePaste} className="h-14 w-12 rounded-xl border border-brand-border bg-white text-center text-lg font-semibold text-slate-900 shadow-sm outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus sm:h-16 sm:w-14" />)}</div></div>
-            <div className="mt-4 min-h-[76px] rounded-[22px] border border-[#e7e7e7] bg-slate-50 p-4">{deliveryMatchedOrder ? <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-3"><div><p className="text-sm font-semibold text-slate-800">{deliveryMatchedOrder.customer_name ?? 'Customer'}</p><p className="mt-1 text-xs font-semibold text-brand-primary">{deliveryMatchedOrder.public_order_number}</p><p className="mt-1 text-xs text-slate-500">{deliveryMatchedOrder.customer_uid ?? 'UID unavailable'}</p><p className="mt-1 text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Ready to complete</p></div><button type="button" onClick={deliverOrder} disabled={isPickingUp} className="rounded-full bg-brand-primary px-3 py-2 text-xs font-semibold text-white disabled:opacity-60">{isPickingUp ? 'Saving...' : 'Complete delivery'}</button></div> : <p className="text-sm text-slate-500">{deliveryEnteredOtp ? 'No order matches this OTP.' : 'Search for a delivery OTP to complete the handoff.'}</p>}</div>
-            <section className="mt-5"><h2 className="text-xl font-bold text-slate-900">Delivered orders</h2><div className="mt-4 space-y-2">{deliveredEvents.length === 0 ? <p className="text-sm text-slate-500">No delivery events recorded yet.</p> : deliveredEvents.slice(0, 10).map((event) => { const deliveredOrder = orders.find((item) => item.id === event.order_id); return <div key={event.order_id + event.created_at} className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-3 text-sm"><div><p className="font-semibold text-slate-800">{deliveredOrder?.public_order_number ?? 'Order unavailable'}</p><p className="mt-1 text-xs text-slate-500">{deliveredOrder?.customer_name ?? 'Customer'}</p></div><span className="text-xs text-slate-500">{new Date(event.created_at).toLocaleString()}</span></div> })}</div></section>
-          </>
-        ) : (
-        <>
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-xl font-bold text-slate-900">Search OTP</h2>
-          <span className="rounded-full bg-brand-soft px-2.5 py-1 text-xs font-medium text-brand-primary">Pickup</span>
-        </div>
-
-        <div className="rounded-[24px] border border-[#e7e7e7] bg-[#fafafa] p-4">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400">Customer OTP</p>
-          <div className="mt-4 flex justify-center gap-2 sm:gap-3">
-            {otp.map((digit, index) => (
-              <input
-                key={index}
-                ref={(element) => {
-                  inputRefs.current[index] = element
-                }}
-                id={`pickup-otp-${index}`}
-                type="text"
-                inputMode="numeric"
-                maxLength={1}
-                value={digit}
-                onChange={(event) => updateCode(index, event.target.value)}
-                onKeyDown={(event) => handleOtpKeyDown(index, event)}
-                onPaste={handlePaste}
-                className="h-14 w-12 rounded-xl border border-brand-border bg-white text-center text-lg font-semibold text-slate-900 shadow-sm outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus sm:h-16 sm:w-14"
-              />
-            ))}
-          </div>
-        </div>
-
-        <div className="mt-4 rounded-[22px] border border-[#e7e7e7] bg-slate-50 p-4">
-          <p className="text-[10px] uppercase tracking-[0.18em] text-slate-400">Result</p>
-          <div className="mt-3 min-h-[72px]">
-            {isSearching ? (
-              <div className="flex items-center gap-2 text-sm text-slate-600">
-                <span className="h-4 w-4 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" />
-                Searching OTP...
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-xl font-bold text-slate-900">Search OTP</h2>
+              <span className="rounded-full bg-brand-soft px-2.5 py-1 text-xs font-medium text-brand-primary">Delivery</span>
+            </div>
+            <div className="rounded-[24px] border border-[#e7e7e7] bg-[#fafafa] p-4">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400">Customer OTP</p>
+              <div className="mt-4 flex justify-center gap-2 sm:gap-3">
+                {otp.map((digit, index) => (
+                  <input
+                    key={index}
+                    ref={(element) => {
+                      inputRefs.current[index] = element
+                    }}
+                    id={`delivery-otp-${index}`}
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={1}
+                    value={digit}
+                    onChange={(event) => updateCode(index, event.target.value)}
+                    onKeyDown={(event) => handleOtpKeyDown(index, event)}
+                    onPaste={handlePaste}
+                    className="h-14 w-12 rounded-xl border border-brand-border bg-white text-center text-lg font-semibold text-slate-900 shadow-sm outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus sm:h-16 sm:w-14"
+                  />
+                ))}
               </div>
-            ) : matchedOrder ? (
-              <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-3">
-                <div>
-                  <p className="text-sm font-semibold text-slate-800">{matchedOrder.public_order_number}</p>
-                  <p className="mt-1 text-xs font-medium text-slate-600">{matchedOrder.customer_name ?? 'Customer'}</p>
-                  <p className="mt-1 text-[11px] font-medium text-slate-500">Pickup: {matchedOrder.pickup_location_name ?? 'Location pending'}</p>
-                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                    <span>UID:</span>
-                    {matchedOrder.customer_uid ? <CopyableOrderId id={matchedOrder.customer_uid} label="Customer UID" /> : <span>Not available</span>}
+            </div>
+            <div className="mt-4 min-h-[76px] rounded-[22px] border border-[#e7e7e7] bg-slate-50 p-4">
+              {deliveryMatchedOrder ? (
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-3">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-800">{deliveryMatchedOrder.customer_name ?? 'Customer'}</p>
+                    <p className="mt-1 text-xs font-semibold text-brand-primary">{deliveryMatchedOrder.public_order_number}</p>
+                    <p className="mt-1 text-xs text-slate-500">{deliveryMatchedOrder.customer_uid ?? 'UID unavailable'}</p>
+                    <p className="mt-1 text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Ready to complete</p>
                   </div>
-                </div>
-                {matchedOrder.picked ? (
-                  <span className="inline-flex items-center rounded-full bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
-                    Picked
-                  </span>
-                ) : (
-                  <button type="button" onClick={pickUpOrder} disabled={isPickingUp} className="rounded-full bg-brand-primary px-3 py-2 text-xs font-semibold text-white transition hover:bg-brand-primary-hover disabled:cursor-wait disabled:opacity-60">
-                    {isPickingUp ? 'Saving...' : 'Pick up'}
+                  <button
+                    type="button"
+                    onClick={deliverOrder}
+                    disabled={isPickingUp}
+                    className="rounded-full bg-brand-primary px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
+                  >
+                    {isPickingUp ? 'Saving...' : 'Complete delivery'}
                   </button>
+                </div>
+              ) : (
+                <p className="text-sm text-slate-500">
+                  {deliveryEnteredOtp ? 'No order matches this OTP.' : 'Search for a delivery OTP to complete the handoff.'}
+                </p>
+              )}
+            </div>
+            <section className="mt-5">
+              <h2 className="text-xl font-bold text-slate-900">Delivered orders</h2>
+              <div className="mt-4 space-y-2">
+                {deliveredEvents.length === 0 ? (
+                  <p className="text-sm text-slate-500">No delivery events recorded yet.</p>
+                ) : (
+                  deliveredEvents.slice(0, 10).map((event) => {
+                    const deliveredOrder = orders.find((item) => item.id === event.order_id)
+                    return (
+                      <div
+                        key={event.order_id + event.created_at}
+                        className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-3 text-sm"
+                      >
+                        <div>
+                          <p className="font-semibold text-slate-800">{deliveredOrder?.public_order_number ?? 'Order unavailable'}</p>
+                          <p className="mt-1 text-xs text-slate-500">{deliveredOrder?.customer_name ?? 'Customer'}</p>
+                        </div>
+                        <span className="text-xs text-slate-500">{new Date(event.created_at).toLocaleString()}</span>
+                      </div>
+                    )
+                  })
                 )}
               </div>
-            ) : (
-              <p className="text-sm text-slate-500">{enteredOtp ? 'No order matches this OTP.' : 'Search for a customer OTP to find the order.'}</p>
-            )}
-          </div>
-        </div>
+            </section>
+          </>
+        ) : (
+          <>
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-xl font-bold text-slate-900">Search OTP</h2>
+              <span className="rounded-full bg-brand-soft px-2.5 py-1 text-xs font-medium text-brand-primary">Pickup</span>
+            </div>
 
-        {(message || completedOrderId || (fetcher.data && !fetcher.data.ok && 'message' in fetcher.data)) && (
-          <p role="status" className="mt-3 text-sm text-slate-600">
-            {completedOrderId ? 'Pickup confirmed successfully.' : fetcher.data && !fetcher.data.ok && 'message' in fetcher.data ? fetcher.data.message : message}
-          </p>
-        )}
-        <section className="mt-5"><h2 className="text-xl font-bold text-slate-900">Picked up orders</h2><div className="mt-4 space-y-2">{pickedUpEvents.length === 0 ? <p className="text-sm text-slate-500">No pickup events recorded yet.</p> : pickedUpEvents.slice(0, 10).map((event) => { const pickedOrder = orders.find((item) => item.id === event.order_id); return <div key={event.order_id + event.created_at} className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-3 text-sm"><div><p className="font-semibold text-slate-800">{pickedOrder?.public_order_number ?? 'Order unavailable'}</p><p className="mt-1 text-xs text-slate-500">{pickedOrder?.customer_name ?? 'Customer'}</p><p className="mt-1 text-[11px] text-slate-500">Pickup: {pickedOrder?.pickup_location_name ?? 'Location pending'}</p></div><span className="text-xs text-slate-500">{new Date(event.created_at).toLocaleString()}</span></div> })}</div></section>
-        </>
+            <div className="rounded-[24px] border border-[#e7e7e7] bg-[#fafafa] p-4">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400">Customer OTP</p>
+              <div className="mt-4 flex justify-center gap-2 sm:gap-3">
+                {otp.map((digit, index) => (
+                  <input
+                    key={index}
+                    ref={(element) => {
+                      inputRefs.current[index] = element
+                    }}
+                    id={`pickup-otp-${index}`}
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={1}
+                    value={digit}
+                    onChange={(event) => updateCode(index, event.target.value)}
+                    onKeyDown={(event) => handleOtpKeyDown(index, event)}
+                    onPaste={handlePaste}
+                    className="h-14 w-12 rounded-xl border border-brand-border bg-white text-center text-lg font-semibold text-slate-900 shadow-sm outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus sm:h-16 sm:w-14"
+                  />
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-[22px] border border-[#e7e7e7] bg-slate-50 p-4">
+              <p className="text-[10px] uppercase tracking-[0.18em] text-slate-400">Result</p>
+              <div className="mt-3 min-h-[72px]">
+                {isSearching ? (
+                  <div className="flex items-center gap-2 text-sm text-slate-600">
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" />
+                    Searching OTP...
+                  </div>
+                ) : matchedOrder ? (
+                  <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-3">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-800">{matchedOrder.public_order_number}</p>
+                      <p className="mt-1 text-xs font-medium text-slate-600">{matchedOrder.customer_name ?? 'Customer'}</p>
+                      <p className="mt-1 text-[11px] font-medium text-slate-500">
+                        Pickup: {matchedOrder.pickup_location_name ?? 'Location pending'}
+                      </p>
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                        <span>UID:</span>
+                        {matchedOrder.customer_uid ? (
+                          <CopyableOrderId id={matchedOrder.customer_uid} label="Customer UID" />
+                        ) : (
+                          <span>Not available</span>
+                        )}
+                      </div>
+                    </div>
+                    {matchedOrder.picked ? (
+                      <span className="inline-flex items-center rounded-full bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
+                        Picked
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={pickUpOrder}
+                        disabled={isPickingUp}
+                        className="rounded-full bg-brand-primary px-3 py-2 text-xs font-semibold text-white transition hover:bg-brand-primary-hover disabled:cursor-wait disabled:opacity-60"
+                      >
+                        {isPickingUp ? 'Saving...' : 'Pick up'}
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-500">
+                    {enteredOtp ? 'No order matches this OTP.' : 'Search for a customer OTP to find the order.'}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {(message || completedOrderId || (fetcher.data && !fetcher.data.ok && 'message' in fetcher.data)) && (
+              <p role="status" className="mt-3 text-sm text-slate-600">
+                {completedOrderId
+                  ? 'Pickup confirmed successfully.'
+                  : fetcher.data && !fetcher.data.ok && 'message' in fetcher.data
+                    ? fetcher.data.message
+                    : message}
+              </p>
+            )}
+            <section className="mt-5">
+              <h2 className="text-xl font-bold text-slate-900">Picked up orders</h2>
+              <div className="mt-4 space-y-2">
+                {pickedUpEvents.length === 0 ? (
+                  <p className="text-sm text-slate-500">No pickup events recorded yet.</p>
+                ) : (
+                  pickedUpEvents.slice(0, 10).map((event) => {
+                    const pickedOrder = orders.find((item) => item.id === event.order_id)
+                    return (
+                      <div
+                        key={event.order_id + event.created_at}
+                        className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-3 text-sm"
+                      >
+                        <div>
+                          <p className="font-semibold text-slate-800">{pickedOrder?.public_order_number ?? 'Order unavailable'}</p>
+                          <p className="mt-1 text-xs text-slate-500">{pickedOrder?.customer_name ?? 'Customer'}</p>
+                          <p className="mt-1 text-[11px] text-slate-500">
+                            Pickup: {pickedOrder?.pickup_location_name ?? 'Location pending'}
+                          </p>
+                        </div>
+                        <span className="text-xs text-slate-500">{new Date(event.created_at).toLocaleString()}</span>
+                      </div>
+                    )
+                  })
+                )}
+              </div>
+            </section>
+          </>
         )}
       </div>
     </div>

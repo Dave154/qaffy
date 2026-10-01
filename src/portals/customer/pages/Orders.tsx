@@ -11,7 +11,6 @@ import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../li
 import { chargeSubscriptionInvoice, debitOneOffInvoice, InsufficientBalanceError } from '../../../lib/wallet.server'
 import { sendCustomerNotification } from '../../../lib/notifications.server'
 
-// Charges subscription overflow from the authenticated customer's subscription balance.
 // eslint-disable-next-line react-refresh/only-export-components
 export async function action({ request }: Route.ActionArgs) {
   if (!isSupabaseServerConfigured) return data({ ok: false, message: 'Supabase is not configured.' }, { status: 500 })
@@ -32,11 +31,24 @@ export async function action({ request }: Route.ActionArgs) {
     }
     const result = await chargeSubscriptionInvoice(userData.user.id, invoiceId)
     if (!result.alreadyPaid) {
-      await sendCustomerNotification({ eventKey: `invoice:${invoiceId}:paid`, customerId: userData.user.id, notificationType: 'payment_confirmed', orderId: result.orderId, payload: { title: 'Payment confirmed', body: `Your invoice for ${result.publicOrderNumber} has been paid.`, details: [`Order: ${result.publicOrderNumber}`, 'The invoice is fully paid.', 'Your order can continue to delivery.'], url: `/orders?order=${encodeURIComponent(result.publicOrderNumber)}`, tag: `order:${result.orderId}:payment` } })
+      await sendCustomerNotification({
+        eventKey: `invoice:${invoiceId}:paid`,
+        customerId: userData.user.id,
+        notificationType: 'payment_confirmed',
+        orderId: result.orderId,
+        payload: {
+          title: 'Payment confirmed',
+          body: `Your invoice for ${result.publicOrderNumber} has been paid.`,
+          details: [`Order: ${result.publicOrderNumber}`, 'The invoice is fully paid.', 'Your order can continue to delivery.'],
+          url: `/orders?order=${encodeURIComponent(result.publicOrderNumber)}`,
+          tag: `order:${result.orderId}:payment`,
+        },
+      })
     }
     return data({ ok: true }, { headers })
   } catch (error) {
-    if (error instanceof InsufficientBalanceError) return data({ ok: false, message: 'Your subscription balance is too low for the extra units.' }, { status: 402, headers })
+    if (error instanceof InsufficientBalanceError)
+      return data({ ok: false, message: 'Your subscription balance is too low for the extra units.' }, { status: 402, headers })
     const message = error instanceof Error ? error.message : 'Unknown wallet error'
     return data({ ok: false, message: `The extra charge could not be paid from your wallet: ${message}` }, { status: 500, headers })
   }
@@ -52,7 +64,9 @@ export default function Orders() {
   const searchQuery = (searchParams.get('search') ?? '').trim().toLowerCase()
   const requestedOrderId = searchParams.get('order')
   const returnTo = searchParams.get('returnTo') ?? '/orders'
-  const requestedOrder = requestedOrderId ? orders.find((order) => order.publicOrderNumber === requestedOrderId || order.id === requestedOrderId) ?? null : null
+  const requestedOrder = requestedOrderId
+    ? (orders.find((order) => order.publicOrderNumber === requestedOrderId || order.id === requestedOrderId) ?? null)
+    : null
   const orderDetails = requestedOrder ?? selectedOrder
 
   const closeOrderDetails = () => {
@@ -82,15 +96,16 @@ export default function Orders() {
   }
 
   const filteredOrders = orders.filter((order) => {
-    const matchesFilter = activeFilter === 'Active'
-      ? order.status !== 'Delivered'
-      : activeFilter === 'Delivered'
-        ? order.status === 'Delivered'
-        : activeFilter === 'Pending payment'
-          ? order.paymentStatus === 'Pending'
-          : activeFilter === 'Needs attention'
-            ? Boolean(order.mismatch) && order.paymentStatus === 'Pending'
-            : true
+    const matchesFilter =
+      activeFilter === 'Active'
+        ? order.status !== 'Delivered'
+        : activeFilter === 'Delivered'
+          ? order.status === 'Delivered'
+          : activeFilter === 'Pending payment'
+            ? order.paymentStatus === 'Pending'
+            : activeFilter === 'Needs attention'
+              ? Boolean(order.mismatch) && order.paymentStatus === 'Pending'
+              : true
     if (!matchesFilter) return false
     if (!searchQuery) return true
     return [order.publicOrderNumber, order.title, order.pickup, order.status].some((value) => value.toLowerCase().includes(searchQuery))
@@ -98,18 +113,21 @@ export default function Orders() {
 
   const stats = [
     { label: 'Total orders', value: String(orders.length), helper: 'In your history' },
-    { label: 'Active', value: String(orders.filter((order) => order.status !== 'Delivered').length).padStart(2, '0'), helper: 'In progress' },
+    {
+      label: 'Active',
+      value: String(orders.filter((order) => order.status !== 'Delivered').length).padStart(2, '0'),
+      helper: 'In progress',
+    },
     { label: 'Delivered', value: String(orders.filter((order) => order.status === 'Delivered').length), helper: 'Completed' },
-    // { label: 'Spend', value: `₦${orders.reduce((total, order) => total + order.total, 0).toLocaleString()}`, helper: 'Across all orders' },
   ]
 
-  const getAmountLabel = (order: typeof orders[number]) => {
+  const getAmountLabel = (order: (typeof orders)[number]) => {
     if (order.total > 0) return `₦${order.total.toLocaleString()}`
     if (order.status === 'In progress') return 'Final billing pending'
     if (order.isSubscriptionOrder && ['Ready for delivery', 'Delivered'].includes(order.status)) return 'Covered by plan'
     return 'No charge yet'
   }
-  const getVisibleOtp = (order: typeof orders[number]) => {
+  const getVisibleOtp = (order: (typeof orders)[number]) => {
     if (order.status === 'Awaiting pickup') return order.pickupOtp
     if (order.status !== 'Delivered') return order.deliveryOtp ?? ''
     return ''
@@ -121,7 +139,11 @@ export default function Orders() {
         <div>
           <h2 className="mt-1 text-2xl font-bold tracking-tight text-[#121212] lg:hidden">Orders</h2>
         </div>
-        <button type="button" onClick={() => setIsOrderModalOpen(true)} className="rounded-lg bg-brand-primary px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-primary-hover">
+        <button
+          type="button"
+          onClick={() => setIsOrderModalOpen(true)}
+          className="rounded-lg bg-brand-primary px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-primary-hover"
+        >
           New order
         </button>
       </header>
@@ -164,22 +186,37 @@ export default function Orders() {
               <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0 flex-1 sm:pr-4">
                   <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-lg font-semibold text-slate-900"><CopyableOrderId id={order.publicOrderNumber} /></p>
-                    <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold ${order.statusTone}`}>
+                    <p className="text-lg font-semibold text-slate-900">
+                      <CopyableOrderId id={order.publicOrderNumber} />
+                    </p>
+                    <span
+                      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold ${order.statusTone}`}
+                    >
                       <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" aria-hidden="true" />
                       {order.status}
                     </span>
                   </div>
                   <p className="mt-2 text-sm font-medium text-slate-700">{order.title}</p>
                   <p className="mt-1 text-xs text-slate-500">{order.date}</p>
-                  {order.mismatch && <div className="mt-3 min-w-0 overflow-hidden rounded-xl border border-amber-200 bg-amber-50 p-3 text-left"><p className="text-xs font-semibold text-amber-800">{order.mismatch.direction === 'over' ? 'Extra items confirmed' : 'Fewer items confirmed'}</p><p className="mt-1 min-w-0 truncate text-xs text-amber-700" title={order.mismatch.detail}>{order.mismatch.detail}</p></div>}
+                  {order.mismatch && (
+                    <div className="mt-3 min-w-0 overflow-hidden rounded-xl border border-amber-200 bg-amber-50 p-3 text-left">
+                      <p className="text-xs font-semibold text-amber-800">
+                        {order.mismatch.direction === 'over' ? 'Extra items confirmed' : 'Fewer items confirmed'}
+                      </p>
+                      <p className="mt-1 min-w-0 truncate text-xs text-amber-700" title={order.mismatch.detail}>
+                        {order.mismatch.detail}
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 <div className="shrink-0 sm:ml-2">
                   {getVisibleOtp(order) ? (
                     <div className="flex items-start gap-3 sm:flex-col sm:items-end">
                       <div className="min-w-0">
-                        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-primary">{order.status === 'Awaiting pickup' ? 'Pickup OTP' : 'Delivery OTP'}</p>
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-primary">
+                          {order.status === 'Awaiting pickup' ? 'Pickup OTP' : 'Delivery OTP'}
+                        </p>
                         <div className="mt-2">
                           <ProtectedOtp value={getVisibleOtp(order)} />
                         </div>
@@ -199,14 +236,16 @@ export default function Orders() {
                 <button
                   type="button"
                   onClick={() => setSelectedOrder(order)}
-                    className="rounded-lg border border-brand-border bg-white px-3.5 py-2 text-sm font-semibold text-brand-primary hover:bg-brand-soft"
+                  className="rounded-lg border border-brand-border bg-white px-3.5 py-2 text-sm font-semibold text-brand-primary hover:bg-brand-soft"
                 >
                   {order.action}
                 </button>
               </div>
             </article>
           ))}
-          {filteredOrders.length === 0 && <p className="rounded-2xl bg-slate-50 p-6 text-center text-sm text-slate-500">No orders match this filter.</p>}
+          {filteredOrders.length === 0 && (
+            <p className="rounded-2xl bg-slate-50 p-6 text-center text-sm text-slate-500">No orders match this filter.</p>
+          )}
         </div>
       </section>
 

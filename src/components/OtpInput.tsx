@@ -18,9 +18,12 @@ export default function OtpInput({ value, onChange, idPrefix, length, inputClass
 
   const applyDigits = (index: number, digits: string) => {
     const next = [...value]
-    digits.slice(0, length - index).split('').forEach((digit, offset) => {
-      next[index + offset] = digit
-    })
+    digits
+      .slice(0, length - index)
+      .split('')
+      .forEach((digit, offset) => {
+        next[index + offset] = digit
+      })
     onChange(next)
     focusInput(Math.min(index + digits.length, length - 1))
   }
@@ -83,7 +86,9 @@ export default function OtpInput({ value, onChange, idPrefix, length, inputClass
       {value.map((digit, index) => (
         <input
           key={index}
-          ref={(input) => { inputRefs.current[index] = input }}
+          ref={(input) => {
+            inputRefs.current[index] = input
+          }}
           id={`${idPrefix}-${index}`}
           type="text"
           inputMode="numeric"

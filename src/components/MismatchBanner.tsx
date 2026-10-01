@@ -23,8 +23,13 @@ export default function MismatchBanner({ orders }: MismatchBannerProps) {
           {mismatches.length === 1 ? 'Your order count was updated' : `${mismatches.length} order counts were updated`}
         </p>
         <div className="mt-1 flex min-w-0 items-center gap-3">
-          <p className="min-w-0 flex-1 truncate text-sm text-amber-800" title={latestMismatch.detail}>{latestMismatch.detail}</p>
-          <a href="/orders?filter=Needs%20attention" className="inline-flex shrink-0 items-center gap-1 text-xs font-semibold text-amber-900 hover:text-amber-950">
+          <p className="min-w-0 flex-1 truncate text-sm text-amber-800" title={latestMismatch.detail}>
+            {latestMismatch.detail}
+          </p>
+          <a
+            href="/orders?filter=Needs%20attention"
+            className="inline-flex shrink-0 items-center gap-1 text-xs font-semibold text-amber-900 hover:text-amber-950"
+          >
             Review <ArrowRight className="h-3.5 w-3.5" />
           </a>
         </div>

@@ -15,11 +15,11 @@ The admin work is now substantially implemented and aligned with the live platfo
 - Live overview metrics, charts, and date filters across day/week/month/all-time ranges
 - Live admin orders with search, filter, and read-only detail views
 - Vendor/logistics partner management, category and rate management, and mismatch review
-- Finance summary pages with admin withdrawal ledger and settlement snapshots
+- Finance summary pages with historical admin withdrawal ledger totals and settlement snapshots
 - Notification center and referral-aware customer UI updates outside the admin portal
 - Customer-facing correctness fixes such as timestamp-based recent-order sorting and pending referral reward wording
 
-The highest-priority remaining admin gap is still the trusted settlement payout release flow through verified Paystack Transfers, including transfer metadata, dedupe protection, and audit persistence.
+The trusted settlement payout release flow through verified Paystack Transfers is implemented. The remaining high-priority payout work is stateful fake-provider coverage, staging migration verification, and Paystack test-mode validation before production use.
 
 ## Product Rules
 
@@ -63,13 +63,13 @@ These items are **not complete yet**:
 - **Admin Overview chart metrics:** implemented 2026-09-16 with Orders, Revenue, and New customers chart options.
 - **Admin Overview chart values:** implemented 2026-09-22 with hover/focus/tap values for trend points, revenue bars, workload bars, and plan subscriber bars.
 - **Admin mobile navigation:** implemented 2026-09-22 with a full-screen drawer below the desktop breakpoint and no desktop sidebar space on mobile.
-- **Settlement payout release:** execute trusted Admin payout transfers after verifying the vendor payout account. The current Admin Finance page records internal withdrawals and settlement batches, but does not initiate bank transfers yet.
+- **Settlement payout release:** trusted Admin transfer, reconciliation, explicit retry, transfer metadata, and duplicate prevention are implemented. Provider timeouts/unknown results remain processing and can be reconciled by the original reference when no transfer code was returned. Foundational fake-provider outcome tests exist; full persistence/error-path tests and Paystack test-mode verification remain before production use.
 
 ### Medium Priority
 
 - **Automatic subscription dates:** derive subscription start/end dates from the selected plan and semester settings in Admin User Details.
-- **Settlement transfer audit trail:** persist transfer reference, actor, timestamps, status, and failure reason.
-- **Duplicate payout prevention:** prevent a settlement from being transferred more than once.
+- **Settlement transfer audit trail:** implemented in `vendor_settlement_transfers` with actor, reference, recipient snapshot, timestamps, provider response, status, and failure reason.
+- **Duplicate payout prevention:** implemented with a unique transfer per settlement, locked state checks, and a stable Paystack reference reused after a confirmed failure.
 - **Finance loading/error states:** show dedicated loading and query-error states in Admin and Vendor Finance.
 - **Historical payout-rate versioning:** item-level payout snapshots are now stored when a settlement batch is created through `supabase/migrations/20260917110000_admin_finance_ledger_and_settlement_snapshots.sql`.
 
@@ -108,12 +108,13 @@ These items are **not complete yet**:
 - Admin Partners now supports vendor and logistics onboarding, approval, suspension, rejection, and deletion flows.
 - Admin Categories and Rates now supports category creation, updates, activation, archival-safe deletion behavior, and customer/vendor pricing controls.
 - Admin Mismatch Review is a read-only accountability view with search, direction filtering, compact/truncated rows, a detail modal, and a modal-only link to the exact Admin order detail.
-- Admin Finance loads live payout summaries and settlement creation data from live orders and rates. Admin profit withdrawals persist in `admin_finance_transactions`, and settlement item snapshots preserve historical vendor rates and amounts.
+- Admin Finance loads live payout summaries and settlement creation data from live orders and rates. Existing admin withdrawal entries in `admin_finance_transactions` remain included in profit calculations, but new withdrawal submissions are disabled until an actual payout flow is implemented. Settlement item snapshots preserve historical vendor rates and amounts.
+- Admin Finance can release eligible settlements, reconcile queued/processing transfers, retry failed/rejected transfers, and display provider references and actionable failure states. The server keeps settlements pending until confirmed transfer success.
 - Finance now renders Paystack balance failures as `Unavailable` with an explanatory state instead of silently showing `₦0`.
 - Finance cards and payout panels have responsive containment; million-level amounts use compact notation such as `₦7.36M`.
 - Admin Plans supports plan edits and semester configuration settings.
 - Admin sidebar links now use `/admin/*` paths instead of leaving the admin portal.
-- Delivery verification, trusted settlement transfer execution, and wallet/messaging/archive layers remain future work.
+- Trusted settlement transfer execution is implemented; delivery verification and wallet/messaging/archive layers remain future work.
 
 ## Navigation and Screens
 
@@ -290,16 +291,47 @@ Vendor-side finance preparation is complete; Admin payout execution remains the 
 - Customer Settings shows referral sharing, referral history, and reward status.
 - Remaining referral governance work is Admin reward history/export and audited exceptional reversal or correction workflows.
 
-### Next Admin Workstream: Settlement Payouts
+### Next Admin Workstream: Payout Validation and Rollout
 
-Implement this only after confirming the unresolved product decisions below:
+The trusted payout release, reconciliation, retry, transfer ledger, and audit path are implemented. Do not enable production transfers until the remaining checks below pass:
 
-- Review pending settlement batches and their included orders.
-- Confirm the vendor payout account is verified before any transfer.
-- Initiate the approved Paystack transfer from a trusted server action.
-- Persist transfer reference, recipient metadata, actor, timestamps, status, and failure reason.
-- Make payout status transitions auditable and prevent duplicate transfers.
+- Confirm the approved vendor payout-rate formula; do not change the implemented rate-card calculation without product sign-off.
+- Complete repeatable fake-provider tests for persisted success, rejection, timeout/unknown, duplicate request, reconciliation by transfer code and reference, reversal, database failure, and retry-after-confirmed-failure.
+- Apply and verify the payout-transfer migration in staging, then run Paystack test-mode transfers and reconciliation against a verified test recipient.
 - Keep settlement reversal and partial payment disabled until explicitly approved.
+
+#### Payout Error Handling Contract
+
+Payout errors must be understandable to an Admin operator and must never silently mark a settlement as paid. Store the provider's technical response for audit/debugging, but show a short actionable message in the Admin UI.
+
+Use separate transfer states so `vendor_settlements.status = 'paid'` is reserved for confirmed successful payout:
+
+- `queued`: the Admin request passed validation and is waiting to be sent.
+- `processing`: Paystack accepted the request or the result is not yet known.
+- `success`: Paystack confirmed the transfer; the settlement may become `paid`.
+- `failed`: the transfer did not complete; the settlement remains pending and may be retried after the cause is addressed.
+- `reversed`: Paystack reversed a previously successful transfer; do not automatically retry or reopen the settlement.
+- `rejected`: local validation prevented a provider call; no transfer was attempted.
+
+Admin-facing errors should explain the next action:
+
+- Missing or unverified payout account: `Verify the vendor payout account before releasing this settlement.`
+- Missing Paystack recipient: `The vendor account is verified, but its Paystack payout recipient is not ready.`
+- Settlement already paid or in progress: `This settlement already has a payout in progress or has been paid.`
+- Provider rejection: `Paystack rejected this payout. Review the payout account and provider details before retrying.`
+- Provider timeout or unknown result: `Paystack did not confirm the payout. Check the transfer status before retrying.`
+- Configuration or service failure: `Payout service is temporarily unavailable. No settlement was marked as paid.`
+- Database or audit failure: `The payout result could not be recorded safely. Do not retry until the transfer status is reconciled.`
+
+Retry rules:
+
+- Validation failures are not retryable until the underlying data is corrected.
+- Confirmed provider failures may be retried explicitly by Admin.
+- Unknown or processing results require reconciliation before another transfer attempt.
+- A repeated request must be idempotent and must not create a second active transfer.
+- No automatic retry, partial payment, or settlement reversal is allowed without explicit approval.
+
+Testing must repeat each state and error path with a fake provider before Paystack test mode is used. At minimum, cover success, account rejection, recipient rejection, timeout, duplicate submission, provider failure, reconciliation, and retry-after-failure.
 
 ### Phase 4: Governance and Subscriptions
 

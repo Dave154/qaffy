@@ -88,7 +88,11 @@ export default function VerifyOtp() {
     })
 
     if (authError) {
-      setError(authError.message.toLowerCase().includes('signups not allowed for otp') ? 'This email is not registered to an approved logistics account.' : authError.message)
+      setError(
+        authError.message.toLowerCase().includes('signups not allowed for otp')
+          ? 'This email is not registered to an approved logistics account.'
+          : authError.message,
+      )
       return
     }
 
@@ -104,7 +108,9 @@ export default function VerifyOtp() {
       <div className="w-full max-w-130 rounded-[28px] border border-[#e7e7e7] bg-white p-4 shadow-[0_24px_80px_rgba(17,24,39,0.08)] sm:p-7">
         <div className="mb-6 flex items-center justify-between gap-3">
           <QaffyLogo />
-          <span className="rounded-full bg-brand-soft px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-brand-primary">Logistics</span>
+          <span className="rounded-full bg-brand-soft px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-brand-primary">
+            Logistics
+          </span>
         </div>
 
         <button
@@ -124,9 +130,19 @@ export default function VerifyOtp() {
             </p>
           </div>
 
-          {error && <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+          {error && (
+            <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+              {error}
+            </p>
+          )}
 
-          <OtpInput value={code} onChange={setCode} idPrefix="logistics-otp" length={codeLength} inputClassName="aspect-square min-w-0 w-full rounded-lg border border-brand-border bg-white p-0 text-center text-lg font-semibold leading-none text-slate-900 shadow-sm outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus sm:text-xl" />
+          <OtpInput
+            value={code}
+            onChange={setCode}
+            idPrefix="logistics-otp"
+            length={codeLength}
+            inputClassName="aspect-square min-w-0 w-full rounded-lg border border-brand-border bg-white p-0 text-center text-lg font-semibold leading-none text-slate-900 shadow-sm outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus sm:text-xl"
+          />
 
           <p className="text-center text-sm text-[#3d3d3d]">
             Didn&apos;t get the code?{' '}

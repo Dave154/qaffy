@@ -35,7 +35,8 @@ export async function action({ request }: Route.ActionArgs) {
     })
     return data({ ok: true, deliveryOtp: result.deliveryOtp }, { headers })
   } catch (error) {
-    if (error instanceof InsufficientBalanceError) return data({ ok: false, message: 'Your wallet balance is too low for this invoice.' }, { status: 402, headers })
+    if (error instanceof InsufficientBalanceError)
+      return data({ ok: false, message: 'Your wallet balance is too low for this invoice.' }, { status: 402, headers })
     const message = error instanceof Error ? error.message : 'The invoice could not be paid.'
     return data({ ok: false, message }, { status: 500, headers })
   }
@@ -73,17 +74,34 @@ export default function Invoice() {
         <div>
           <h2 className="mt-1 text-2xl font-bold tracking-tight text-[#121212] lg:hidden">Invoice</h2>
         </div>
-        <span className={`whitespace-nowrap rounded-full px-3 py-1.5 text-sm font-medium ${invoice.status === 'Paid' ? 'bg-emerald-50 text-emerald-700' : 'bg-brand-soft text-brand-primary'}`}>{invoice.status}</span>
+        <span
+          className={`whitespace-nowrap rounded-full px-3 py-1.5 text-sm font-medium ${invoice.status === 'Paid' ? 'bg-emerald-50 text-emerald-700' : 'bg-brand-soft text-brand-primary'}`}
+        >
+          {invoice.status}
+        </span>
       </header>
 
-      {invoices.length > 1 && <section className="rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-100 sm:p-5">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div><h3 className="font-bold text-slate-900">Invoice history</h3><p className="mt-1 text-sm text-slate-500">Select an order invoice to view its final billing details.</p></div>
-          <select value={invoice.id} onChange={(event) => setSelectedInvoiceId(event.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 focus:border-brand-primary focus:ring-2 focus:ring-brand-focus">
-            {invoices.map((item) => <option key={item.id} value={item.id}>{item.orderReference} · {item.status} · ₦{item.total.toLocaleString()}</option>)}
-          </select>
-        </div>
-      </section>}
+      {invoices.length > 1 && (
+        <section className="rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-100 sm:p-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h3 className="font-bold text-slate-900">Invoice history</h3>
+              <p className="mt-1 text-sm text-slate-500">Select an order invoice to view its final billing details.</p>
+            </div>
+            <select
+              value={invoice.id}
+              onChange={(event) => setSelectedInvoiceId(event.target.value)}
+              className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
+            >
+              {invoices.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.orderReference} · {item.status} · ₦{item.total.toLocaleString()}
+                </option>
+              ))}
+            </select>
+          </div>
+        </section>
+      )}
 
       <section className="rounded-[28px] bg-gradient-to-br from-brand-primary via-brand-primary to-brand-primary-hover p-5 text-white shadow-lg shadow-brand-border sm:p-6">
         <div className="flex items-start justify-between gap-4">
@@ -103,7 +121,13 @@ export default function Invoice() {
               <h3 className="text-lg font-bold text-slate-900">Laundry summary</h3>
               <p className="mt-1 text-sm text-slate-500">This invoice reflects your active bag count</p>
             </div>
-            <button type="button" onClick={() => window.print()} className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-600">Print invoice</button>
+            <button
+              type="button"
+              onClick={() => window.print()}
+              className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-600"
+            >
+              Print invoice
+            </button>
           </div>
 
           <div className="mt-5 space-y-3">
@@ -128,8 +152,53 @@ export default function Invoice() {
                 <span>Vendor confirmed</span>
                 <strong className="text-slate-900">{invoice.finalCount} items</strong>
               </div>
-              {invoice.mismatch && <div className="mt-3 min-w-0 border-t border-slate-200 pt-3 text-sm text-amber-700"><strong>{invoice.mismatch.direction === 'over' ? 'Extra billing due to over-count' : 'Under-count adjustment'}</strong><p className="mt-1 min-w-0 [overflow-wrap:anywhere]">{invoice.mismatch.detail}</p>{Array.isArray(invoice.mismatch.lines) && invoice.mismatch.lines.length > 0 && <div className="mt-3 overflow-x-auto rounded-xl border border-amber-200 bg-white"><table className="w-full min-w-[620px] text-left text-xs"><thead className="border-b border-amber-100 bg-amber-50 text-[10px] uppercase tracking-[0.08em] text-amber-700"><tr><th className="px-3 py-2 font-semibold">Item</th><th className="px-3 py-2 font-semibold">Service</th><th className="px-3 py-2 text-right font-semibold">Declared</th><th className="px-3 py-2 text-right font-semibold">Confirmed</th><th className="px-3 py-2 text-right font-semibold">Difference</th><th className="px-3 py-2 text-right font-semibold">Unit price</th><th className="px-3 py-2 text-right font-semibold">Extra</th></tr></thead><tbody>{invoice.mismatch.lines.map((line, index) => <tr key={`${line.category}-${line.service}-${index}`} className="border-b border-amber-50 last:border-0"><td className="px-3 py-2.5 font-semibold text-slate-800">{line.category}</td><td className="px-3 py-2.5 text-slate-600">{line.service === 'wash_iron' ? 'Wash + Iron' : line.service === 'wash' ? 'Wash' : 'Iron'}</td><td className="px-3 py-2.5 text-right text-slate-600">{line.originalQuantity}</td><td className="px-3 py-2.5 text-right text-slate-600">{line.confirmedQuantity}</td><td className="px-3 py-2.5 text-right font-semibold text-amber-700">{line.difference > 0 ? '+' : ''}{line.difference}</td><td className="px-3 py-2.5 text-right text-slate-600">₦{line.unitPrice.toLocaleString()}</td><td className="px-3 py-2.5 text-right font-semibold text-amber-700">₦{line.extraAmount.toLocaleString()}</td></tr>)}</tbody></table></div>}</div>}
-              {invoice.extraAmount > 0 && <div className="mt-3 flex items-center justify-between border-t border-slate-200 pt-3 text-sm text-amber-700"><span>Extra confirmed items charge</span><strong>₦{invoice.extraAmount.toLocaleString()}</strong></div>}
+              {invoice.mismatch && (
+                <div className="mt-3 min-w-0 border-t border-slate-200 pt-3 text-sm text-amber-700">
+                  <strong>{invoice.mismatch.direction === 'over' ? 'Extra billing due to over-count' : 'Under-count adjustment'}</strong>
+                  <p className="mt-1 min-w-0 [overflow-wrap:anywhere]">{invoice.mismatch.detail}</p>
+                  {Array.isArray(invoice.mismatch.lines) && invoice.mismatch.lines.length > 0 && (
+                    <div className="mt-3 overflow-x-auto rounded-xl border border-amber-200 bg-white">
+                      <table className="w-full min-w-[620px] text-left text-xs">
+                        <thead className="border-b border-amber-100 bg-amber-50 text-[10px] uppercase tracking-[0.08em] text-amber-700">
+                          <tr>
+                            <th className="px-3 py-2 font-semibold">Item</th>
+                            <th className="px-3 py-2 font-semibold">Service</th>
+                            <th className="px-3 py-2 text-right font-semibold">Declared</th>
+                            <th className="px-3 py-2 text-right font-semibold">Confirmed</th>
+                            <th className="px-3 py-2 text-right font-semibold">Difference</th>
+                            <th className="px-3 py-2 text-right font-semibold">Unit price</th>
+                            <th className="px-3 py-2 text-right font-semibold">Extra</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {invoice.mismatch.lines.map((line, index) => (
+                            <tr key={`${line.category}-${line.service}-${index}`} className="border-b border-amber-50 last:border-0">
+                              <td className="px-3 py-2.5 font-semibold text-slate-800">{line.category}</td>
+                              <td className="px-3 py-2.5 text-slate-600">
+                                {line.service === 'wash_iron' ? 'Wash + Iron' : line.service === 'wash' ? 'Wash' : 'Iron'}
+                              </td>
+                              <td className="px-3 py-2.5 text-right text-slate-600">{line.originalQuantity}</td>
+                              <td className="px-3 py-2.5 text-right text-slate-600">{line.confirmedQuantity}</td>
+                              <td className="px-3 py-2.5 text-right font-semibold text-amber-700">
+                                {line.difference > 0 ? '+' : ''}
+                                {line.difference}
+                              </td>
+                              <td className="px-3 py-2.5 text-right text-slate-600">₦{line.unitPrice.toLocaleString()}</td>
+                              <td className="px-3 py-2.5 text-right font-semibold text-amber-700">₦{line.extraAmount.toLocaleString()}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+              {invoice.extraAmount > 0 && (
+                <div className="mt-3 flex items-center justify-between border-t border-slate-200 pt-3 text-sm text-amber-700">
+                  <span>Extra confirmed items charge</span>
+                  <strong>₦{invoice.extraAmount.toLocaleString()}</strong>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -153,7 +222,22 @@ export default function Invoice() {
             </div>
           </div>
 
-          {invoice.status === 'Paid' ? <button type="button" disabled className="mt-6 w-full rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-100">Paid</button> : <Link to="/?topup=1" className="mt-6 block w-full rounded-2xl bg-brand-primary px-4 py-3 text-center text-sm font-semibold text-white shadow-md shadow-brand-primary/20 transition hover:bg-brand-primary-hover">Top up wallet to pay</Link>}
+          {invoice.status === 'Paid' ? (
+            <button
+              type="button"
+              disabled
+              className="mt-6 w-full rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-100"
+            >
+              Paid
+            </button>
+          ) : (
+            <Link
+              to="/?topup=1"
+              className="mt-6 block w-full rounded-2xl bg-brand-primary px-4 py-3 text-center text-sm font-semibold text-white shadow-md shadow-brand-primary/20 transition hover:bg-brand-primary-hover"
+            >
+              Top up wallet to pay
+            </Link>
+          )}
 
           <Link
             to="/otp"
@@ -165,7 +249,6 @@ export default function Invoice() {
           </Link>
         </div>
       </section>
-
     </div>
   )
 }

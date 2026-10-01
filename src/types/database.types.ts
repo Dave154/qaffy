@@ -22,6 +22,7 @@ export type MismatchDirection = 'over' | 'under'
 export type InvoiceStatus = 'unpaid' | 'paid'
 export type PaymentStatus = 'pending' | 'success' | 'failed'
 export type SettlementStatus = 'pending' | 'paid'
+export type SettlementTransferStatus = 'queued' | 'processing' | 'success' | 'failed' | 'reversed' | 'rejected'
 export type ReferralStatus = 'pending' | 'qualified' | 'rewarded' | 'rejected' | 'expired' | 'reversed'
 export type ReferralCampaignStatus = 'draft' | 'active' | 'paused' | 'ended'
 export type ReferralRewardStatus = 'pending' | 'issued' | 'expired' | 'reversed' | 'failed'
@@ -31,7 +32,7 @@ export type LogisticsEventType = 'picked_up' | 'delivered'
 export interface Profile {
   id: string
   role: UserRole
-  qaffy_id: string | null
+  qaffy_id: string
   name: string | null
   phone: string | null
   pickup_location_id: string | null
@@ -46,6 +47,16 @@ export interface Vendor {
   profile_id: string
   business_name: string
   status: PartnerStatus
+  payout_bank_name?: string | null
+  payout_bank_code?: string | null
+  payout_account_number?: string | null
+  payout_account_name?: string | null
+  payout_account_status?: 'unverified' | 'verified'
+  payout_account_verified_at?: string | null
+  payout_account_error?: string | null
+  payout_recipient_code?: string | null
+  payout_recipient_created_at?: string | null
+  payout_recipient_updated_at?: string | null
   created_at: string
 }
 
@@ -224,6 +235,7 @@ export interface Payment {
   plan_id: string | null
   status: PaymentStatus
   created_at: string
+  succeeded_at: string | null
 }
 
 export interface NotificationEvent {
@@ -254,6 +266,35 @@ export interface VendorSettlement {
 export interface VendorSettlementOrder {
   settlement_id: string
   order_id: string
+}
+
+export interface VendorSettlementItem {
+  settlement_id: string
+  order_item_id: string
+  confirmed_quantity: number
+  vendor_unit_price: number
+  amount: number
+}
+
+export interface VendorSettlementTransfer {
+  id: string
+  settlement_id: string
+  vendor_id: string
+  amount: number
+  currency: 'NGN'
+  status: SettlementTransferStatus
+  paystack_transfer_code: string | null
+  paystack_reference: string | null
+  paystack_recipient_code: string | null
+  recipient_bank_code: string | null
+  recipient_account_number_masked: string | null
+  recipient_account_name: string | null
+  admin_profile_id: string
+  failure_reason: string | null
+  provider_response: Record<string, unknown>
+  created_at: string
+  updated_at: string
+  completed_at: string | null
 }
 
 export interface Referral {
@@ -356,6 +397,8 @@ export interface Database {
       notification_events: TableDef<NotificationEvent>
       vendor_settlements: TableDef<VendorSettlement>
       vendor_settlement_orders: TableDef<VendorSettlementOrder>
+      vendor_settlement_items: TableDef<VendorSettlementItem>
+      vendor_settlement_transfers: TableDef<VendorSettlementTransfer>
       referrals: TableDef<Referral>
       referral_campaigns: TableDef<ReferralCampaign>
       referral_rewards: TableDef<ReferralReward>

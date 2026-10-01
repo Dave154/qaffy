@@ -22,9 +22,7 @@ export default [
   route('complete-profile', 'portals/customer/pages/CompleteProfile.tsx'),
 
   ...prefix('logistics', [
-    layout('portals/logistics/LogisticsLayout.tsx', [
-      index('portals/logistics/pages/Home.tsx'),
-    ]),
+    layout('portals/logistics/LogisticsLayout.tsx', [index('portals/logistics/pages/Home.tsx')]),
     route('login', 'portals/logistics/pages/Login.tsx'),
     route('verify-otp', 'portals/logistics/pages/VerifyOtp.tsx'),
     route('complete-profile', 'portals/logistics/pages/CompleteProfile.tsx'),
@@ -55,6 +53,7 @@ export default [
       route('referrals', 'portals/admin/pages/Referrals.tsx'),
       route('admins', 'portals/admin/pages/Admins.tsx'),
       route('partners', 'portals/admin/pages/Partners.tsx'),
+      route('partners/:type/:id', 'portals/admin/pages/PartnerDetails.tsx'),
       route('partners/vendors', 'portals/admin/pages/Vendors.tsx'),
       route('partners/logistics', 'portals/admin/pages/Logistics.tsx'),
       route('users', 'portals/admin/pages/Users.tsx'),

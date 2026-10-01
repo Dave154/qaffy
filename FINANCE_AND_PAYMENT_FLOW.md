@@ -74,6 +74,7 @@ Approved operational billing model as of 2026-09-14.
 - Historical payout-rate versioning is still not implemented. The current rate card is used for derived payout calculations because the product has not yet approved a payout-rate formula or rate-history model.
 - Remaining vendor finance work: payout transfer metadata and final settlement payment workflow.
 - Vendor phase handoff: payout release belongs to Admin. The next implementation should review pending settlement batches, require a verified vendor payout account, execute the approved trusted Paystack transfer, and persist auditable transfer metadata. Do not initiate transfers from the vendor portal.
+- The initial Admin payout release and reconciliation service is now implemented. It creates an idempotent transfer record, calls Paystack from the server, leaves settlements pending while a result is unknown, and exposes release, reconcile, retry, and failure states in Admin Finance. Repeatable fake-provider tests and Paystack test-mode verification remain before production use.
 
 - Audit on 2026-09-16 identified high-risk follow-up work: restrict vendor RLS writes, auto-settle normal orders when the wallet covers the final invoice, sum only `subscription_units_applied` for allowance usage, preserve stored order-item prices, prevent duplicate settlement membership, make subscription allocation deterministic, reject missing-rate and incomplete payloads, display `confirmed_quantity` after finalization, make settlement creation atomic, improve mismatch detail, exclude cancelled orders from allowance usage, and append vendor confirmation audit events.
 - The first security fix moves vendor claiming to the trusted database path and applies `supabase/migrations/20260916110000_restrict_vendor_writes.sql`.
@@ -220,6 +221,43 @@ For a subscription order with excess units, the same final invoice represents th
 - Unverified or mismatched bank details cannot be used to initiate a vendor transfer.
 - The resolved account details and Paystack verification reference/status should be stored for subsequent settlement transfers.
 
+## Bulk settlement creation
+
+- Admin may select multiple approved vendors for one date range. Each selected vendor receives a separate settlement, and each newly created settlement is immediately submitted to the trusted Paystack transfer service after the batch transaction commits.
+- The preview includes only approved vendors with a verified payout account and Paystack recipient, plus non-cancelled, vendor-confirmed orders with paid customer invoices that are not already linked to a settlement. Ineligible vendors remain visible with a reason but cannot be selected.
+- Creation rechecks vendor approval, payout-account readiness, and order eligibility inside one database transaction, then writes each settlement, its order links, immutable item snapshots, and audit event atomically. If any selected vendor is no longer eligible or any write fails, the entire bulk operation rolls back.
+- The global unique order-to-settlement constraint remains the final duplicate guard for concurrent admins and retries.
+- Run `npm test` for the paid-only preview and fake-transaction tests. Repeat the suite three times before staging any connected-database or Paystack test-mode flow.
+
+## Settlement payout error handling
+
+- Settlement records and payout transfers remain separate durable operations, but Admin settlement creation immediately attempts the transfer for each created batch. A created settlement must never be represented as paid until Paystack confirms success.
+- Auto-release attempts are processed sequentially. Successful transfers mark their settlements paid; processing or unknown results require reconciliation before retry; failed or rejected results remain pending and can be explicitly retried after review.
+- The payout transfer must have its own durable status and audit record. `vendor_settlements.status = 'paid'` is allowed only after Paystack confirms a successful transfer.
+- Use explicit transfer states for `queued`, `processing`, `success`, `failed`, `reversed`, and `rejected`.
+- Store the Paystack transfer code/reference, recipient snapshot, Admin actor, timestamps, provider response, and failure reason.
+- A missing or unverified vendor account, missing Paystack recipient, invalid amount, paid settlement, or active transfer is a local rejection. Do not call Paystack and show Admin what must be corrected.
+- A Paystack rejection is a failed transfer. Keep the settlement pending, preserve the provider reason, and permit an explicit retry only after validation passes.
+- A timeout or unknown provider response is not a failure and not a success. Mark the transfer as processing or reconciliation-required, check Paystack before retrying, and prevent a second active transfer.
+- The original Paystack reference is persisted before the provider call and must be reused to verify an uncertain transfer when Paystack did not return a transfer code. References must satisfy Paystack's length/character constraints.
+- Database, audit, or configuration failures must not mark the settlement paid. Surface a safe actionable message to Admin and preserve enough server-side detail for investigation.
+- Technical provider responses belong in protected audit data; Admin-facing messages should avoid raw credentials, tokens, or opaque response dumps.
+- Reversed transfers require investigation and an explicit operational decision. Do not automatically reopen, retry, or partially pay a settlement.
+- Provider outcome helpers now have repeatable fake-provider tests for unknown initiation results, explicit rejection, provider-confirmed failure, compliant references, and reference-based verification paths. Full persistence-level fake-provider coverage and disposable database fixtures are still required before live or Paystack test-mode transfers are used.
+
+### Admin-readable payout messages
+
+The Finance screen should distinguish these outcomes:
+
+- `Account not ready`: verify the vendor payout account.
+- `Recipient not ready`: recreate or refresh the Paystack recipient.
+- `Transfer in progress`: reconcile the existing transfer before retrying.
+- `Transfer failed`: review the failure reason, correct the cause, then retry explicitly.
+- `Transfer succeeded`: show the provider reference and payout timestamp.
+- `Payout service unavailable`: no payment confirmation was received; settlement remains unpaid.
+
+The UI should always show whether a provider call was attempted, whether the result is known, and what the Admin can do next.
+
 ## Recommended implementation sequence
 
 1. Finalize vendor-confirmed count model
@@ -229,7 +267,10 @@ For a subscription order with excess units, the same final invoice represents th
 5. Add wallet deduction at final invoice settlement time
 6. Add pending-payment state when wallet balance is insufficient
 7. Add admin mismatch tracking and finance reporting
-8. Then add vendor settlement logic based on final confirmed values
+8. Create immutable vendor settlement snapshots and make settlement creation atomic
+9. Add a trusted payout transfer ledger and Paystack recipient readiness
+10. Add payout release, reconciliation, audit logging, and explicit retry handling
+11. Then add vendor settlement logic based on final confirmed values
 
 ## One-sentence policy statement
 
