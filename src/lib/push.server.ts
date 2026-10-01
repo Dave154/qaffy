@@ -38,21 +38,26 @@ export async function sendCustomerPush(customerId: string, payload: PushPayload)
     where customer_id = ${customerId}
   `
 
-  await Promise.all(subscriptions.map(async (subscription) => {
-    try {
-      await webpush.sendNotification({ endpoint: subscription.endpoint, keys: { p256dh: subscription.p256dh, auth: subscription.auth } }, JSON.stringify(payload))
-      await sql`
+  await Promise.all(
+    subscriptions.map(async (subscription) => {
+      try {
+        await webpush.sendNotification(
+          { endpoint: subscription.endpoint, keys: { p256dh: subscription.p256dh, auth: subscription.auth } },
+          JSON.stringify(payload),
+        )
+        await sql`
         update push_subscriptions
         set last_used_at = now()
         where id = ${subscription.id}
       `
-    } catch (error) {
-      const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? error.statusCode : undefined
-      if (statusCode === 404 || statusCode === 410) {
-        await sql`delete from push_subscriptions where id = ${subscription.id}`
-        return
+      } catch (error) {
+        const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? error.statusCode : undefined
+        if (statusCode === 404 || statusCode === 410) {
+          await sql`delete from push_subscriptions where id = ${subscription.id}`
+          return
+        }
+        console.error('Customer push notification failed:', error)
       }
-      console.error('Customer push notification failed:', error)
-    }
-  }))
+    }),
+  )
 }

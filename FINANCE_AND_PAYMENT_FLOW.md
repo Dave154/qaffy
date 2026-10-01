@@ -9,7 +9,8 @@ Approved operational billing model as of 2026-09-14.
 - Customer top-ups initialize Paystack server-side and record a pending payment row.
 - No customer return callback is configured or used; the browser never verifies payment or credits the wallet.
 - Paystack receives the customer overview URL only as a navigation destination after checkout; it is not a payment callback handler.
-- `POST /api/paystack/webhook` validates Paystack's HMAC signature and is the authoritative processor for `charge.success` events.
+- `POST /api/paystack/webhook` validates Paystack's HMAC signature and processes `charge.success` plus `transfer.success`, `transfer.failed`, and `transfer.reversed` events. Transfer events update the persisted payout ledger and settlement status idempotently; Admin Finance revalidates from Supabase Realtime, with a manual refresh control and reconciliation fallback.
+- Apply `supabase/migrations/20261001110000_payout_transfer_realtime.sql` to publish settlement and transfer changes for Admin Finance Realtime updates.
 - Wallet crediting is idempotent by payment reference.
 - Production requires `PAYSTACK_SECRET_KEY`, `DATABASE_URL`, and the Paystack dashboard webhook URL pointing to `/api/paystack/webhook`.
 - The pending payment row is created before Paystack initialization so a successful charge always has a local reconciliation record.
@@ -39,7 +40,7 @@ Approved operational billing model as of 2026-09-14.
 - Subscription purchases store `payments.plan_id` and activate `subscriptions` only through the signed webhook; they do not credit either wallet balance.
 - Customer plans are loaded from active database rows and duplicate active subscriptions are blocked at both UI and server levels.
 - Customer wallet and subscription updates use Supabase Realtime, with bounded return-page refresh fallback for webhook timing.
-- Apply `20260915110000_customer_wallet_realtime.sql`, `20260915120000_subscription_payment_plan.sql`, `20260915130000_authoritative_order_item_pricing.sql`, and `20260915140000_public_order_numbers.sql` before live testing.
+- Apply `20260915110000_customer_wallet_realtime.sql`, `20260915120000_subscription_payment_plan.sql`, `20260915130000_authoritative_order_item_pricing.sql`, `20260915140000_public_order_numbers.sql`, and `20261001120000_subscription_usage_applied_at.sql` before live testing.
 - Customer NewOrder now loads active categories, customer Wash/Iron/Wash + Iron rates, and subscription units from Supabase. Order creation recalculates prices from the database and does not charge the wallet.
 - Subscription orders remain unpaid at creation. Weekly subscription usage and coverage are evaluated from the vendor-confirmed final count, not the customer's original estimate.
 - Migration `20260915130000_authoritative_order_item_pricing.sql` overwrites client-supplied `order_items.unit_price` values from the selected customer rate in the database.
@@ -60,7 +61,7 @@ Approved operational billing model as of 2026-09-14.
 - The vendor-confirmed final count remains authoritative for invoices and settlements. Vendor-added categories are retained with their confirmed quantities, and extra billing is measured against the original order items rather than a baseline that includes additions.
 - Vendor review displays only physical customer and received item quantities; subscription-unit accounting remains hidden from the vendor and trusted server-side.
 - Physical counts and weighted subscription units are stored in separate order fields. Mismatch direction uses physical counts; subscription allowance usage uses vendor-confirmed unit fields.
-- Subscription usage meters count only units covered by the plan; excess units charged from the general wallet are excluded from weekly allowance usage.
+- Subscription usage meters count only units covered by the plan; excess units charged from the general wallet are excluded from weekly allowance usage. The calendar week starts Sunday at 00:00 in `Africa/Lagos`. Units are assigned to the week when the vendor confirms the order, using `subscription_units_applied_at`; confirmation locks the active subscription row so concurrent orders cannot spend the same allowance twice.
 - Unclaimed vendor orders are claimed before the vendor sees the detailed review form; count entry is prioritized after ownership is established.
 
 ### Vendor confirmation audit checkpoint
@@ -74,6 +75,7 @@ Approved operational billing model as of 2026-09-14.
 - Historical payout-rate versioning is still not implemented. The current rate card is used for derived payout calculations because the product has not yet approved a payout-rate formula or rate-history model.
 - Remaining vendor finance work: payout transfer metadata and final settlement payment workflow.
 - Vendor phase handoff: payout release belongs to Admin. The next implementation should review pending settlement batches, require a verified vendor payout account, execute the approved trusted Paystack transfer, and persist auditable transfer metadata. Do not initiate transfers from the vendor portal.
+- The Admin payout service creates an idempotent transfer record, calls Paystack from the server, leaves settlements pending while a result is unknown, and exposes release, reconcile, retry, and failure states in Admin Finance. Admin settlement creation now attempts each payout immediately after the settlement transaction commits. A ₦200 Paystack test-mode transfer completed successfully on staging; SQL-adapter integration tests and payout-rate approval remain before production use.
 
 - Audit on 2026-09-16 identified high-risk follow-up work: restrict vendor RLS writes, auto-settle normal orders when the wallet covers the final invoice, sum only `subscription_units_applied` for allowance usage, preserve stored order-item prices, prevent duplicate settlement membership, make subscription allocation deterministic, reject missing-rate and incomplete payloads, display `confirmed_quantity` after finalization, make settlement creation atomic, improve mismatch detail, exclude cancelled orders from allowance usage, and append vendor confirmation audit events.
 - The first security fix moves vendor claiming to the trusted database path and applies `supabase/migrations/20260916110000_restrict_vendor_writes.sql`.
@@ -220,6 +222,43 @@ For a subscription order with excess units, the same final invoice represents th
 - Unverified or mismatched bank details cannot be used to initiate a vendor transfer.
 - The resolved account details and Paystack verification reference/status should be stored for subsequent settlement transfers.
 
+## Bulk settlement creation
+
+- Admin may select multiple approved vendors for one date range. Each selected vendor receives a separate settlement, and each newly created settlement is immediately submitted to the trusted Paystack transfer service after the batch transaction commits.
+- The preview includes only approved vendors with a verified payout account and Paystack recipient, plus non-cancelled, vendor-confirmed orders with paid customer invoices that are not already linked to a settlement. Ineligible vendors remain visible with a reason but cannot be selected.
+- Creation rechecks vendor approval, payout-account readiness, and order eligibility inside one database transaction, then writes each settlement, its order links, immutable item snapshots, and audit event atomically. If any selected vendor is no longer eligible or any write fails, the entire bulk operation rolls back.
+- The global unique order-to-settlement constraint remains the final duplicate guard for concurrent admins and retries.
+- Run `npm test` for the paid-only preview and fake-transaction tests. Repeat the suite three times before staging any connected-database or Paystack test-mode flow.
+
+## Settlement payout error handling
+
+- Settlement records and payout transfers remain separate durable operations, but Admin settlement creation immediately attempts the transfer for each created batch. A created settlement must never be represented as paid until Paystack confirms success.
+- Auto-release attempts are processed sequentially. Successful transfers mark their settlements paid; processing or unknown results require reconciliation before retry; failed or rejected results remain pending and can be explicitly retried after review.
+- The payout transfer must have its own durable status and audit record. `vendor_settlements.status = 'paid'` is allowed only after Paystack confirms a successful transfer.
+- Use explicit transfer states for `queued`, `processing`, `success`, `failed`, `reversed`, and `rejected`.
+- Store the Paystack transfer code/reference, recipient snapshot, Admin actor, timestamps, provider response, and failure reason.
+- A missing or unverified vendor account, missing Paystack recipient, invalid amount, paid settlement, or active transfer is a local rejection. Do not call Paystack and show Admin what must be corrected.
+- A Paystack rejection is a failed transfer. Keep the settlement pending, preserve the provider reason, and permit an explicit retry only after validation passes.
+- A timeout or unknown provider response is not a failure and not a success. Mark the transfer as processing or reconciliation-required, check Paystack before retrying, and prevent a second active transfer.
+- The original Paystack reference is persisted before the provider call and must be reused to verify an uncertain transfer when Paystack did not return a transfer code. References must satisfy Paystack's length/character constraints.
+- Database, audit, or configuration failures must not mark the settlement paid. Surface a safe actionable message to Admin and preserve enough server-side detail for investigation.
+- Technical provider responses belong in protected audit data; Admin-facing messages should avoid raw credentials, tokens, or opaque response dumps.
+- Reversed transfers require investigation and an explicit operational decision. Do not automatically reopen, retry, or partially pay a settlement.
+- Payout workflow tests use a transactional fake store and fake provider to cover persisted success, local/provider rejection, timeout/unknown, duplicate release, reconciliation by transfer code and reference, reversal, database/audit rollback, and retry with the existing reference. They do not exercise the production SQL adapter; add disposable-Postgres integration coverage before enabling live transfers.
+
+### Admin-readable payout messages
+
+The Finance screen should distinguish these outcomes:
+
+- `Account not ready`: verify the vendor payout account.
+- `Recipient not ready`: recreate or refresh the Paystack recipient.
+- `Transfer in progress`: reconcile the existing transfer before retrying.
+- `Transfer failed`: review the failure reason, correct the cause, then retry explicitly.
+- `Transfer succeeded`: show the provider reference and payout timestamp.
+- `Payout service unavailable`: no payment confirmation was received; settlement remains unpaid.
+
+The UI should always show whether a provider call was attempted, whether the result is known, and what the Admin can do next.
+
 ## Recommended implementation sequence
 
 1. Finalize vendor-confirmed count model
@@ -229,7 +268,10 @@ For a subscription order with excess units, the same final invoice represents th
 5. Add wallet deduction at final invoice settlement time
 6. Add pending-payment state when wallet balance is insufficient
 7. Add admin mismatch tracking and finance reporting
-8. Then add vendor settlement logic based on final confirmed values
+8. Create immutable vendor settlement snapshots and make settlement creation atomic
+9. Add a trusted payout transfer ledger and Paystack recipient readiness
+10. Add payout release, reconciliation, audit logging, and explicit retry handling
+11. Then add vendor settlement logic based on final confirmed values
 
 ## One-sentence policy statement
 

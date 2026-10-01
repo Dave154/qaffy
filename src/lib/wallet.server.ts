@@ -2,6 +2,7 @@ import { sql } from '@/lib/db.server'
 import type { WalletBalanceType } from '@/types/database.types'
 import type { TransactionSql } from 'postgres'
 import { sendCustomerNotification } from './notifications.server'
+import { getSubscriptionWeekStart } from './subscription-week'
 
 class InsufficientBalanceError extends Error {
   constructor() {
@@ -33,7 +34,7 @@ function allocateSubscriptionCoverage(items: SubscriptionAllocationItem[], allow
         const nextUsedUnits = usedUnits + quantity * item.units
         const candidate = {
           avoidedAmount: state.avoidedAmount + quantity * item.unitPrice,
-          quantities: state.quantities.map((value, index) => index === itemIndex ? value + quantity : value),
+          quantities: state.quantities.map((value, index) => (index === itemIndex ? value + quantity : value)),
         }
         const current = nextStates[nextUsedUnits]
         if (!current || candidate.avoidedAmount > current.avoidedAmount) nextStates[nextUsedUnits] = candidate
@@ -54,7 +55,13 @@ function allocateSubscriptionCoverage(items: SubscriptionAllocationItem[], allow
   return new Map(items.map((item, index) => [item.id, selected?.quantities[index] ?? 0]))
 }
 
-async function debitWalletForInvoice(tx: TransactionSql, customerId: string, invoiceId: string, amount: number, balanceType: WalletBalanceType) {
+async function debitWalletForInvoice(
+  tx: TransactionSql,
+  customerId: string,
+  invoiceId: string,
+  amount: number,
+  balanceType: WalletBalanceType,
+) {
   const [wallet] = await tx`
     select one_off_balance, subscription_balance, promotional_balance
     from wallets
@@ -150,7 +157,12 @@ async function debitWalletForInvoice(tx: TransactionSql, customerId: string, inv
 
 type ReferralRewardRecipient = { profileId: string; rewardId: string; amount: number }
 
-async function issueReferralRewards(tx: TransactionSql, customerId: string, orderId: string, invoiceAmount: number): Promise<ReferralRewardRecipient[]> {
+async function issueReferralRewards(
+  tx: TransactionSql,
+  customerId: string,
+  orderId: string,
+  invoiceAmount: number,
+): Promise<ReferralRewardRecipient[]> {
   const [referral] = await tx`
     select r.id, r.referrer_id
     from referrals r
@@ -235,18 +247,22 @@ async function issueReferralRewards(tx: TransactionSql, customerId: string, orde
 }
 
 async function sendReferralRewardNotifications(recipients: ReferralRewardRecipient[]) {
-  await Promise.all(recipients.map((recipient) => sendCustomerNotification({
-    eventKey: `referral-reward:${recipient.rewardId}:issued`,
-    customerId: recipient.profileId,
-    notificationType: 'referral_reward_issued',
-    payload: {
-      title: 'Referral reward added',
-      body: `You earned ₦${recipient.amount.toLocaleString()} in referral credit.`,
-      details: [`Referral credit: ₦${recipient.amount.toLocaleString()}`, 'Your promotional balance is now available.'],
-      url: '/settings#referrals',
-      tag: `referral-reward:${recipient.rewardId}`,
-    },
-  })))
+  await Promise.all(
+    recipients.map((recipient) =>
+      sendCustomerNotification({
+        eventKey: `referral-reward:${recipient.rewardId}:issued`,
+        customerId: recipient.profileId,
+        notificationType: 'referral_reward_issued',
+        payload: {
+          title: 'Referral reward added',
+          body: `You earned ₦${recipient.amount.toLocaleString()} in referral credit.`,
+          details: [`Referral credit: ₦${recipient.amount.toLocaleString()}`, 'Your promotional balance is now available.'],
+          url: '/settings#referrals',
+          tag: `referral-reward:${recipient.rewardId}`,
+        },
+      }),
+    ),
+  )
 }
 
 /** Debits the customer's wallet, marks the invoice paid, and issues the delivery OTP — all in one transaction. */
@@ -263,7 +279,8 @@ export async function payFromWallet(customerId: string, invoiceId: string, balan
     if (!invoice) throw new Error('Invoice not found')
     if (invoice.customer_id !== customerId) throw new Error('Not authorized for this invoice')
     if (invoice.status === 'paid') throw new Error('Invoice already paid')
-    if (invoice.status !== 'unpaid' || invoice.order_status !== 'invoiced') throw new Error('Invoice is not payable in its current order state')
+    if (invoice.status !== 'unpaid' || invoice.order_status !== 'invoiced')
+      throw new Error('Invoice is not payable in its current order state')
 
     const { newBalance } = await debitWalletForInvoice(tx, customerId, invoiceId, Number(invoice.amount), balanceType)
     const deliveryOtp = generateFourDigitOtp()
@@ -272,7 +289,14 @@ export async function payFromWallet(customerId: string, invoiceId: string, balan
     await tx`update orders set status = 'paid', delivery_otp = ${deliveryOtp} where id = ${invoice.order_id}`
     const referralRewardRecipients = await issueReferralRewards(tx, customerId, invoice.order_id, Number(invoice.amount))
 
-    return { invoiceId, orderId: invoice.order_id, publicOrderNumber: invoice.public_order_number, deliveryOtp, newBalance, referralRewardRecipients }
+    return {
+      invoiceId,
+      orderId: invoice.order_id,
+      publicOrderNumber: invoice.public_order_number,
+      deliveryOtp,
+      newBalance,
+      referralRewardRecipients,
+    }
   })
   await sendReferralRewardNotifications(result.referralRewardRecipients ?? [])
   return result
@@ -297,8 +321,18 @@ export async function finalizeVendorOrder(
     if (order.status !== 'at_vendor') throw new Error('This order is not ready for vendor review')
 
     if (!Array.isArray(receivedItems) || !Array.isArray(addedItems)) throw new Error('Order review details are invalid')
-    if (receivedItems.some((item) => !item.itemId || !Number.isSafeInteger(item.quantity) || item.quantity < 0)) throw new Error('Received quantities are invalid')
-    if (addedItems.some((item) => !item.categoryName || !['wash', 'iron', 'wash_iron'].includes(item.service) || !Number.isSafeInteger(item.quantity) || item.quantity < 1)) throw new Error('Added category details are invalid')
+    if (receivedItems.some((item) => !item.itemId || !Number.isSafeInteger(item.quantity) || item.quantity < 0))
+      throw new Error('Received quantities are invalid')
+    if (
+      addedItems.some(
+        (item) =>
+          !item.categoryName ||
+          !['wash', 'iron', 'wash_iron'].includes(item.service) ||
+          !Number.isSafeInteger(item.quantity) ||
+          item.quantity < 1,
+      )
+    )
+      throw new Error('Added category details are invalid')
 
     const addedItemIds: string[] = []
     for (const item of addedItems) {
@@ -326,29 +360,47 @@ export async function finalizeVendorOrder(
       left join cloth_category_rates r on r.category_id = oi.category_id
       where oi.order_id = ${orderId}
     `
-    if (items.some((item) => item.wash_price == null || item.iron_price == null || item.wash_iron_price == null || item.subscription_units == null || !Number.isSafeInteger(Number(item.subscription_units)) || Number(item.subscription_units) <= 0 || Number(item.unit_price) <= 0)) {
+    if (
+      items.some(
+        (item) =>
+          item.wash_price == null ||
+          item.iron_price == null ||
+          item.wash_iron_price == null ||
+          item.subscription_units == null ||
+          !Number.isSafeInteger(Number(item.subscription_units)) ||
+          Number(item.subscription_units) <= 0 ||
+          Number(item.unit_price) <= 0,
+      )
+    ) {
       throw new Error('A valid rate is required for every order item before finalization')
     }
     const orderItemIds = new Set(items.map((item) => item.id))
     const originalItemIds = new Set(items.filter((item) => !addedItemIds.includes(item.id)).map((item) => item.id))
-    if (receivedItems.length !== originalItemIds.size || new Set(receivedItems.map((item) => item.itemId)).size !== receivedItems.length) throw new Error('Every original order item must have exactly one received quantity')
-    if (receivedItems.some((item) => !orderItemIds.has(item.itemId) || !originalItemIds.has(item.itemId))) throw new Error('Received item does not belong to the original order')
+    if (receivedItems.length !== originalItemIds.size || new Set(receivedItems.map((item) => item.itemId)).size !== receivedItems.length)
+      throw new Error('Every original order item must have exactly one received quantity')
+    if (receivedItems.some((item) => !orderItemIds.has(item.itemId) || !originalItemIds.has(item.itemId)))
+      throw new Error('Received item does not belong to the original order')
     const receivedById = new Map(receivedItems.map((item) => [item.itemId, item.quantity]))
-    const mismatchItems = items.map((item) => {
-      const originalQuantity = addedItemIds.includes(item.id) ? 0 : Number(item.quantity)
-      const confirmedQuantity = receivedById.get(item.id) ?? (addedItemIds.includes(item.id) ? Number(item.quantity) : 0)
-      const difference = confirmedQuantity - originalQuantity
-      return {
-        category: item.category_name,
-        service: item.service,
-        originalQuantity,
-        confirmedQuantity,
-        difference,
-        unitPrice: Number(item.unit_price),
-        extraAmount: Math.max(0, difference * Number(item.unit_price)),
-      }
-    }).filter((item) => item.difference !== 0)
-    const finalCount = items.reduce((total, item) => total + (receivedById.get(item.id) ?? (addedItemIds.includes(item.id) ? Number(item.quantity) : 0)), 0)
+    const mismatchItems = items
+      .map((item) => {
+        const originalQuantity = addedItemIds.includes(item.id) ? 0 : Number(item.quantity)
+        const confirmedQuantity = receivedById.get(item.id) ?? (addedItemIds.includes(item.id) ? Number(item.quantity) : 0)
+        const difference = confirmedQuantity - originalQuantity
+        return {
+          category: item.category_name,
+          service: item.service,
+          originalQuantity,
+          confirmedQuantity,
+          difference,
+          unitPrice: Number(item.unit_price),
+          extraAmount: Math.max(0, difference * Number(item.unit_price)),
+        }
+      })
+      .filter((item) => item.difference !== 0)
+    const finalCount = items.reduce(
+      (total, item) => total + (receivedById.get(item.id) ?? (addedItemIds.includes(item.id) ? Number(item.quantity) : 0)),
+      0,
+    )
     const finalWeightedUnits = items.reduce((total, item) => {
       const quantity = receivedById.get(item.id) ?? (addedItemIds.includes(item.id) ? Number(item.quantity) : 0)
       return total + quantity * Number(item.subscription_units)
@@ -358,22 +410,23 @@ export async function finalizeVendorOrder(
       const unitPrice = Number(item.unit_price)
       return total + quantity * unitPrice
     }, 0)
-    const originalAmount = items.filter((item) => !addedItemIds.includes(item.id)).reduce((total, item) => {
-      const unitPrice = Number(item.unit_price)
-      return total + Number(item.quantity) * unitPrice
-    }, 0)
+    const originalAmount = items
+      .filter((item) => !addedItemIds.includes(item.id))
+      .reduce((total, item) => {
+        const unitPrice = Number(item.unit_price)
+        return total + Number(item.quantity) * unitPrice
+      }, 0)
     const extraAmount = Math.max(0, finalAmount - originalAmount)
     const billingCount = order.is_subscription_order ? finalWeightedUnits : finalCount
-    const mismatchDirection = finalCount > Number(order.clothes_count_customer) ? 'over' : finalCount < Number(order.clothes_count_customer) ? 'under' : null
+    const mismatchDirection =
+      finalCount > Number(order.clothes_count_customer) ? 'over' : finalCount < Number(order.clothes_count_customer) ? 'under' : null
     if (mismatchDirection && !mismatchDetail.trim()) throw new Error('Mismatch details are required when the final count changes')
 
     const referralRewardRecipients: ReferralRewardRecipient[] = []
 
     let invoiceAmount = Math.round(finalAmount * 100) / 100
     if (order.is_subscription_order) {
-      const weekStart = new Date()
-      weekStart.setHours(0, 0, 0, 0)
-      weekStart.setDate(weekStart.getDate() - weekStart.getDay())
+      const weekStart = getSubscriptionWeekStart()
       const [subscriptionPlan] = await tx`
         select p.weekly_limit
         from subscriptions s
@@ -383,21 +436,30 @@ export async function finalizeVendorOrder(
           and (s.end_date is null or s.end_date >= current_date)
         order by s.created_at desc
         limit 1
+        for update of s
       `
       const [usage] = await tx`
-        select coalesce(sum(clothes_count_vendor_units), 0) as used_units
+        select coalesce(sum(subscription_units_applied), 0) as used_units
         from orders
         where customer_id = ${order.customer_id}
           and is_subscription_order = true
-          and clothes_count_vendor_units is not null
+          and subscription_units_applied is not null
           and status <> 'cancelled'
-          and created_at >= ${weekStart}
+          and subscription_units_applied_at >= ${weekStart}
           and id <> ${orderId}
       `
       const remainingUnits = Math.max(0, Number(subscriptionPlan?.weekly_limit ?? 0) - Number(usage?.used_units ?? 0))
       let subscriptionUnitsApplied = 0
       invoiceAmount = 0
-      const subscriptionCoverage = allocateSubscriptionCoverage(items.map((item) => ({ id: item.id, quantity: Number(receivedById.get(item.id) ?? (addedItemIds.includes(item.id) ? Number(item.quantity) : 0)), units: Number(item.subscription_units), unitPrice: Number(item.unit_price) })), remainingUnits)
+      const subscriptionCoverage = allocateSubscriptionCoverage(
+        items.map((item) => ({
+          id: item.id,
+          quantity: Number(receivedById.get(item.id) ?? (addedItemIds.includes(item.id) ? Number(item.quantity) : 0)),
+          units: Number(item.subscription_units),
+          unitPrice: Number(item.unit_price),
+        })),
+        remainingUnits,
+      )
       for (const item of items) {
         const quantity = receivedById.get(item.id) ?? (addedItemIds.includes(item.id) ? Number(item.quantity) : 0)
         const units = Number(item.subscription_units)
@@ -407,7 +469,11 @@ export async function finalizeVendorOrder(
         invoiceAmount += (quantity - coveredQuantity) * unitPrice
       }
       invoiceAmount = Math.round(invoiceAmount * 100) / 100
-      await tx`update orders set subscription_units_applied = ${subscriptionUnitsApplied} where id = ${orderId}`
+      await tx`
+        update orders
+        set subscription_units_applied = ${subscriptionUnitsApplied}, subscription_units_applied_at = now()
+        where id = ${orderId}
+      `
     }
 
     await tx`
@@ -444,7 +510,7 @@ export async function finalizeVendorOrder(
       const deliveryOtp = generateFourDigitOtp()
       await tx`update invoices set status = 'paid', paid_at = now() where id = ${invoice.id}`
       await tx`update orders set status = 'paid', delivery_otp = ${deliveryOtp} where id = ${orderId}`
-      referralRewardRecipients.push(...await issueReferralRewards(tx, order.customer_id, orderId, invoiceAmount))
+      referralRewardRecipients.push(...(await issueReferralRewards(tx, order.customer_id, orderId, invoiceAmount)))
     }
 
     const [finalInvoice] = await tx`select status from invoices where id = ${invoice.id}`
@@ -500,10 +566,15 @@ export async function creditWallet(customerId: string, balanceType: WalletBalanc
       on conflict (reference) do nothing
     `
 
-    const [existingPayment] = await tx`select id, status from payments where reference = ${paymentReference} and customer_id = ${customerId}`
+    const [existingPayment] =
+      await tx`select id, status from payments where reference = ${paymentReference} and customer_id = ${customerId}`
     if (existingPayment?.status === 'success') {
       const [wallet] = await tx`select one_off_balance, subscription_balance from wallets where customer_id = ${customerId}`
-      return { newBalance: balanceType === 'subscription' ? Number(wallet.subscription_balance) : Number(wallet.one_off_balance), alreadyCredited: true, settledInvoices: [] }
+      return {
+        newBalance: balanceType === 'subscription' ? Number(wallet.subscription_balance) : Number(wallet.one_off_balance),
+        alreadyCredited: true,
+        settledInvoices: [],
+      }
     }
 
     const [wallet] = await tx`select * from wallets where customer_id = ${customerId} for update`
@@ -518,7 +589,12 @@ export async function creditWallet(customerId: string, balanceType: WalletBalanc
       set one_off_balance = ${oneOffBalance}, subscription_balance = ${subscriptionBalance}, updated_at = ${new Date()}
       where customer_id = ${customerId}
     `
-    const [payment] = await tx`update payments set status = 'success' where reference = ${paymentReference} returning id`
+    const [payment] = await tx`
+      update payments
+      set status = 'success', succeeded_at = coalesce(succeeded_at, now())
+      where reference = ${paymentReference}
+      returning id
+    `
     if (subscriptionCredit > 0) {
       await tx`
         insert into wallet_transactions (customer_id, balance_type, txn_type, amount, balance_after, related_payment_id)
@@ -562,12 +638,22 @@ export async function creditWallet(customerId: string, balanceType: WalletBalanc
             values (${customerId}, 'one_off', 'debit', ${invoiceAmount}, ${settledBalance}, ${invoice.id})
           `
         }
-        referralRewardRecipients.push(...await issueReferralRewards(tx, customerId, invoice.order_id, invoiceAmount))
-        settledInvoices.push({ invoiceId: invoice.id, orderId: invoice.order_id, publicOrderNumber: invoice.public_order_number, amount: invoiceAmount })
+        referralRewardRecipients.push(...(await issueReferralRewards(tx, customerId, invoice.order_id, invoiceAmount)))
+        settledInvoices.push({
+          invoiceId: invoice.id,
+          orderId: invoice.order_id,
+          publicOrderNumber: invoice.public_order_number,
+          amount: invoiceAmount,
+        })
       }
     }
 
-    return { newBalance: balanceType === 'subscription' ? subscriptionBalance : settledBalance, settledInvoices, alreadyCredited: false, referralRewardRecipients }
+    return {
+      newBalance: balanceType === 'subscription' ? subscriptionBalance : settledBalance,
+      settledInvoices,
+      alreadyCredited: false,
+      referralRewardRecipients,
+    }
   })
   await sendReferralRewardNotifications(result.referralRewardRecipients ?? [])
   return result
@@ -599,9 +685,12 @@ export async function activateSubscriptionFromPayment(customerId: string, paymen
       select semester_end_date from app_settings where key = 'semester' limit 1
     `
     const startDate = new Date()
-    const endDate = payment.type === 'semester'
-      ? settings?.semester_end_date ?? payment.semester_end_date ?? new Date(startDate.getFullYear(), startDate.getMonth() + 6, startDate.getDate()).toISOString().slice(0, 10)
-      : new Date(startDate.getFullYear(), startDate.getMonth() + 1, startDate.getDate()).toISOString().slice(0, 10)
+    const endDate =
+      payment.type === 'semester'
+        ? (settings?.semester_end_date ??
+          payment.semester_end_date ??
+          new Date(startDate.getFullYear(), startDate.getMonth() + 6, startDate.getDate()).toISOString().slice(0, 10))
+        : new Date(startDate.getFullYear(), startDate.getMonth() + 1, startDate.getDate()).toISOString().slice(0, 10)
 
     const [subscription] = await tx`
       insert into subscriptions (customer_id, plan_id, status, start_date, end_date)
@@ -626,7 +715,8 @@ export async function debitOneOffInvoice(customerId: string, invoiceId: string) 
     `
 
     if (!invoice || invoice.customer_id !== customerId || invoice.is_subscription_order) throw new Error('Invoice not found')
-    if (invoice.status === 'paid') return { invoiceId, alreadyPaid: true, orderId: invoice.order_id, publicOrderNumber: invoice.public_order_number }
+    if (invoice.status === 'paid')
+      return { invoiceId, alreadyPaid: true, orderId: invoice.order_id, publicOrderNumber: invoice.public_order_number }
 
     const [wallet] = await tx`select one_off_balance from wallets where customer_id = ${customerId} for update`
     const newBalance = Number(wallet.one_off_balance) - Number(invoice.amount)
@@ -674,7 +764,13 @@ export async function chargeSubscriptionInvoice(customerId: string, invoiceId: s
     `
 
     if (!invoice || invoice.customer_id !== customerId || !invoice.is_subscription_order) throw new Error('Invoice not found')
-    if (invoice.status === 'paid') return { amount: Number(invoice.amount), alreadyPaid: true, orderId: invoice.order_id, publicOrderNumber: invoice.public_order_number }
+    if (invoice.status === 'paid')
+      return {
+        amount: Number(invoice.amount),
+        alreadyPaid: true,
+        orderId: invoice.order_id,
+        publicOrderNumber: invoice.public_order_number,
+      }
 
     const amount = Number(invoice.amount)
     const { newBalance } = await debitWalletForInvoice(tx, customerId, invoiceId, amount, 'one_off')
@@ -683,7 +779,15 @@ export async function chargeSubscriptionInvoice(customerId: string, invoiceId: s
     await tx`update orders set status = 'paid', delivery_otp = ${deliveryOtp} where id = ${invoice.order_id}`
     const referralRewardRecipients = await issueReferralRewards(tx, customerId, invoice.order_id, amount)
 
-    return { amount, newBalance, deliveryOtp, alreadyPaid: false, orderId: invoice.order_id, publicOrderNumber: invoice.public_order_number, referralRewardRecipients }
+    return {
+      amount,
+      newBalance,
+      deliveryOtp,
+      alreadyPaid: false,
+      orderId: invoice.order_id,
+      publicOrderNumber: invoice.public_order_number,
+      referralRewardRecipients,
+    }
   })
   await sendReferralRewardNotifications(result.referralRewardRecipients ?? [])
   return result

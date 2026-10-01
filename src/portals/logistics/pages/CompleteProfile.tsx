@@ -55,8 +55,19 @@ export default function CompleteProfile() {
   return (
     <>
       <RouteLoadingScreen isLoading={isSubmitting} watchNavigation={false} />
-      <div className="flex min-h-screen items-center justify-center bg-[#0d1016] px-4 py-6" style={{ backgroundImage: 'linear-gradient(90deg, rgba(12,15,22,0.82), rgba(12,15,22,0.1)), url("https://images.unsplash.com/photo-1567113463300-102a7eb3cb26?q=80&w=1470&auto=format&fit=crop")', backgroundSize: 'cover', backgroundPosition: 'center' }}>
-        <div className="w-full max-w-[430px] rounded-[36px] bg-white/95 p-5 shadow-[0_30px_80px_rgba(0,0,0,0.28)] sm:p-7" style={{ fontFamily: 'Inter, sans-serif' }}>
+      <div
+        className="flex min-h-screen items-center justify-center bg-[#0d1016] px-4 py-6"
+        style={{
+          backgroundImage:
+            'linear-gradient(90deg, rgba(12,15,22,0.82), rgba(12,15,22,0.1)), url("https://images.unsplash.com/photo-1567113463300-102a7eb3cb26?q=80&w=1470&auto=format&fit=crop")',
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+        }}
+      >
+        <div
+          className="w-full max-w-[430px] rounded-[36px] bg-white/95 p-5 shadow-[0_30px_80px_rgba(0,0,0,0.28)] sm:p-7"
+          style={{ fontFamily: 'Inter, sans-serif' }}
+        >
           <div className="mb-7 text-center">
             <QaffyLogo className="mx-auto mb-5 inline-flex" />
             <h1 className="text-2xl font-semibold text-slate-900">Complete your logistics profile</h1>
@@ -64,10 +75,31 @@ export default function CompleteProfile() {
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">
-            <input aria-label="Full name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Enter your full name" className="h-14 w-full rounded-lg border border-field-border bg-white px-4 text-[14px] font-semibold text-black outline-none transition placeholder:text-field-placeholder focus:border-field-focus focus:ring-2 focus:ring-field-focus-soft" />
-            <input aria-label="Phone number" type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="0803 123 4567" className="h-14 w-full rounded-lg border border-field-border bg-white px-4 text-[14px] font-semibold text-black outline-none transition placeholder:text-field-placeholder focus:border-field-focus focus:ring-2 focus:ring-field-focus-soft" />
-            {error && <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
-            <button type="submit" disabled={isSubmitting} className="w-full rounded-2xl bg-brand-primary px-4 py-3.5 text-sm font-semibold text-white transition hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-60">
+            <input
+              aria-label="Full name"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              placeholder="Enter your full name"
+              className="h-14 w-full rounded-lg border border-field-border bg-white px-4 text-[14px] font-semibold text-black outline-none transition placeholder:text-field-placeholder focus:border-field-focus focus:ring-2 focus:ring-field-focus-soft"
+            />
+            <input
+              aria-label="Phone number"
+              type="tel"
+              value={phone}
+              onChange={(event) => setPhone(event.target.value)}
+              placeholder="0803 123 4567"
+              className="h-14 w-full rounded-lg border border-field-border bg-white px-4 text-[14px] font-semibold text-black outline-none transition placeholder:text-field-placeholder focus:border-field-focus focus:ring-2 focus:ring-field-focus-soft"
+            />
+            {error && (
+              <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+                {error}
+              </p>
+            )}
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="w-full rounded-2xl bg-brand-primary px-4 py-3.5 text-sm font-semibold text-white transition hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
+            >
               {isSubmitting ? 'Saving...' : 'Continue'}
             </button>
           </form>

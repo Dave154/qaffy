@@ -6,7 +6,13 @@ type ProtectedOtpProps = {
   containerClassName?: string
 }
 
-export default function ProtectedOtp({ value = '', className = 'gap-2', digitClassName = '', length = 4, containerClassName = '' }: ProtectedOtpProps) {
+export default function ProtectedOtp({
+  value = '',
+  className = 'gap-2',
+  digitClassName = '',
+  length = 4,
+  containerClassName = '',
+}: ProtectedOtpProps) {
   const digits = (value ?? '').replace(/\D/g, '').slice(0, length)
 
   return (

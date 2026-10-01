@@ -34,21 +34,26 @@ export default function BubblyBackground({
   centered = false,
 }: BubblyBackgroundProps) {
   return (
-    <div className={`qaffy-bubbles ${contained ? 'qaffy-bubbles--contained' : ''} ${centered ? 'qaffy-bubbles--centered' : ''} ${className}`} aria-hidden="true">
+    <div
+      className={`qaffy-bubbles ${contained ? 'qaffy-bubbles--contained' : ''} ${centered ? 'qaffy-bubbles--centered' : ''} ${className}`}
+      aria-hidden="true"
+    >
       {bubbles.slice(0, count).map((bubble, index) => (
         <span
           key={`${bubble.left}-${index}`}
           className="qaffy-bubble"
-          style={{
-            '--bubble-color': color,
-            '--bubble-opacity': opacity,
-            '--bubble-size': `${bubble.size}px`,
-            '--bubble-scale': scale,
-            '--bubble-left': centered ? `${centeredPositions[index % centeredPositions.length]}%` : `${bubble.left}%`,
-            '--bubble-bottom': `${bubble.bottom}%`,
-            '--bubble-duration': `${bubble.duration}s`,
-            '--bubble-delay': `${bubble.delay}s`,
-          } as CSSProperties}
+          style={
+            {
+              '--bubble-color': color,
+              '--bubble-opacity': opacity,
+              '--bubble-size': `${bubble.size}px`,
+              '--bubble-scale': scale,
+              '--bubble-left': centered ? `${centeredPositions[index % centeredPositions.length]}%` : `${bubble.left}%`,
+              '--bubble-bottom': `${bubble.bottom}%`,
+              '--bubble-duration': `${bubble.duration}s`,
+              '--bubble-delay': `${bubble.delay}s`,
+            } as CSSProperties
+          }
         />
       ))}
     </div>

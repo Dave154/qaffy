@@ -32,10 +32,11 @@ export async function requireRole(request: Request, role: UserRole | UserRole[])
     .eq('profile_id', userData.user.id)
     .eq('status', 'approved')
   const assignedRoles = new Set((roleAssignments ?? []).map((assignment) => assignment.role))
-  const hasAllowedRole = allowedRoles.some((allowedRole) => (
-    allowedRole === 'customer' && Boolean(profile)
-    || allowedRole !== 'customer' && (assignedRoles.has(allowedRole) || allowedRole === 'admin' && profile?.role === 'admin')
-  ))
+  const hasAllowedRole = allowedRoles.some(
+    (allowedRole) =>
+      (allowedRole === 'customer' && Boolean(profile)) ||
+      (allowedRole !== 'customer' && (assignedRoles.has(allowedRole) || (allowedRole === 'admin' && profile?.role === 'admin'))),
+  )
 
   if (!profile || !hasAllowedRole) {
     const destination = allowedRoles.includes('vendor')

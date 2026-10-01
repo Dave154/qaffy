@@ -2,34 +2,64 @@ import { useState } from 'react'
 import { NavLink, Outlet, data, redirect, useLoaderData, useLocation, useNavigate, useRevalidator } from 'react-router'
 import { useEffect } from 'react'
 import type { Route } from './+types/VendorLayout'
-import { ClipboardList, History, LayoutDashboard, LogOut, Menu, Settings, X } from 'lucide-react'
+import { Banknote, ClipboardList, History, LayoutDashboard, LogOut, Menu, Settings, X } from 'lucide-react'
 import QaffyLogo from '../../components/QaffyLogo'
 import { requireRole } from '../../lib/auth.server'
 import { supabase } from '../../lib/supabase.client'
 
-// Route loaders must be exported from the layout module for React Router.
 // eslint-disable-next-line react-refresh/only-export-components
 export async function loader({ request }: Route.LoaderArgs) {
   const auth = await requireRole(request, 'vendor')
   if (!auth) throw redirect('/vendor/login')
   const { supabase, headers } = auth
 
-  const { data: vendor } = await supabase.from('vendors').select('id').eq('profile_id', auth.profile.id).eq('status', 'approved').maybeSingle()
+  const { data: vendor } = await supabase
+    .from('vendors')
+    .select('id, payout_account_status, payout_recipient_code')
+    .eq('profile_id', auth.profile.id)
+    .eq('status', 'approved')
+    .maybeSingle()
   const { data: orders } = vendor
-    ? await supabase.from('orders').select('*').or(`vendor_id.eq.${vendor.id},and(vendor_id.is.null,status.eq.picked_up)`).order('created_at', { ascending: false })
+    ? await supabase
+        .from('orders')
+        .select('*')
+        .or(`vendor_id.eq.${vendor.id},and(vendor_id.is.null,status.eq.picked_up)`)
+        .order('created_at', { ascending: false })
     : { data: [] }
   const orderIds = (orders ?? []).map((order) => order.id)
   const customerIds = [...new Set((orders ?? []).map((order) => order.customer_id))]
   const locationIds = [...new Set((orders ?? []).map((order) => order.pickup_location_id).filter(Boolean))] as string[]
 
-  const [{ data: profiles }, { data: locations }, { data: items }, { data: invoices }, { data: mismatches }, { data: logisticsEvents }] = await Promise.all([
-    customerIds.length ? supabase.from('profiles').select('id, name, qaffy_id, email, phone').in('id', customerIds) : Promise.resolve({ data: [] }),
-    locationIds.length ? supabase.from('pickup_locations').select('id, name').in('id', locationIds) : Promise.resolve({ data: [] }),
-    orderIds.length ? supabase.from('order_items').select('id, order_id, category_id, quantity, confirmed_quantity, service, unit_price').in('order_id', orderIds) : Promise.resolve({ data: [] }),
-    orderIds.length ? supabase.from('invoices').select('id, order_id, amount, status, created_at, paid_at').in('order_id', orderIds) : Promise.resolve({ data: [] }),
-    orderIds.length ? supabase.from('mismatches').select('id, order_id, direction, detail, created_at').in('order_id', orderIds).order('created_at', { ascending: false }) : Promise.resolve({ data: [] }),
-    orderIds.length ? supabase.from('order_logistics_events').select('id, order_id, event_type, created_at').in('order_id', orderIds).order('created_at', { ascending: false }) : Promise.resolve({ data: [] }),
-  ])
+  const [{ data: profiles }, { data: locations }, { data: items }, { data: invoices }, { data: mismatches }, { data: logisticsEvents }] =
+    await Promise.all([
+      customerIds.length
+        ? supabase.from('profiles').select('id, name, qaffy_id, email, phone').in('id', customerIds)
+        : Promise.resolve({ data: [] }),
+      locationIds.length ? supabase.from('pickup_locations').select('id, name').in('id', locationIds) : Promise.resolve({ data: [] }),
+      orderIds.length
+        ? supabase
+            .from('order_items')
+            .select('id, order_id, category_id, quantity, confirmed_quantity, service, unit_price')
+            .in('order_id', orderIds)
+        : Promise.resolve({ data: [] }),
+      orderIds.length
+        ? supabase.from('invoices').select('id, order_id, amount, status, created_at, paid_at').in('order_id', orderIds)
+        : Promise.resolve({ data: [] }),
+      orderIds.length
+        ? supabase
+            .from('mismatches')
+            .select('id, order_id, direction, detail, created_at')
+            .in('order_id', orderIds)
+            .order('created_at', { ascending: false })
+        : Promise.resolve({ data: [] }),
+      orderIds.length
+        ? supabase
+            .from('order_logistics_events')
+            .select('id, order_id, event_type, created_at')
+            .in('order_id', orderIds)
+            .order('created_at', { ascending: false })
+        : Promise.resolve({ data: [] }),
+    ])
   const [{ data: categories }, { data: categoryRates }] = await Promise.all([
     supabase.from('cloth_categories').select('id, name').order('name', { ascending: true }),
     supabase.from('cloth_category_rates').select('category_id, vendor_wash_price, vendor_iron_price, vendor_wash_iron_price'),
@@ -47,15 +77,25 @@ export async function loader({ request }: Route.LoaderArgs) {
     rateCard.set(category.name, current)
   }
 
-  return data({ orders: (orders ?? []).map((order) => ({
-    ...order,
-    customer: (profiles ?? []).find((profile) => profile.id === order.customer_id) ?? null,
-    location: (locations ?? []).find((location) => location.id === order.pickup_location_id) ?? null,
-    items: (items ?? []).filter((item) => item.order_id === order.id).map((item) => ({ ...item, category: (categories ?? []).find((category) => category.id === item.category_id) ?? null })),
-    invoice: (invoices ?? []).find((invoice) => invoice.order_id === order.id) ?? null,
-    mismatches: (mismatches ?? []).filter((mismatch) => mismatch.order_id === order.id),
-    logisticsEvents: (logisticsEvents ?? []).filter((event) => event.order_id === order.id),
-  })), vendorName: auth.profile.name ?? 'Vendor', rateCard: [...rateCard.values()] }, { headers, status: 200 })
+  return data(
+    {
+      orders: (orders ?? []).map((order) => ({
+        ...order,
+        customer: (profiles ?? []).find((profile) => profile.id === order.customer_id) ?? null,
+        location: (locations ?? []).find((location) => location.id === order.pickup_location_id) ?? null,
+        items: (items ?? [])
+          .filter((item) => item.order_id === order.id)
+          .map((item) => ({ ...item, category: (categories ?? []).find((category) => category.id === item.category_id) ?? null })),
+        invoice: (invoices ?? []).find((invoice) => invoice.order_id === order.id) ?? null,
+        mismatches: (mismatches ?? []).filter((mismatch) => mismatch.order_id === order.id),
+        logisticsEvents: (logisticsEvents ?? []).filter((event) => event.order_id === order.id),
+      })),
+      vendorName: auth.profile.name ?? 'Vendor',
+      rateCard: [...rateCard.values()],
+      payoutAccountReady: !vendor || (vendor.payout_account_status === 'verified' && Boolean(vendor.payout_recipient_code)),
+    },
+    { headers, status: 200 },
+  )
 }
 
 const navigation = [
@@ -68,6 +108,7 @@ const navigation = [
 export default function VendorLayout() {
   const loaderData = useLoaderData<typeof loader>()
   const [menuOpen, setMenuOpen] = useState(false)
+  const [payoutPromptDismissed, setPayoutPromptDismissed] = useState(false)
   const location = useLocation()
   const navigate = useNavigate()
   const { revalidate } = useRevalidator()
@@ -95,50 +136,141 @@ export default function VendorLayout() {
     if (supabase) await supabase.auth.signOut()
     navigate('/vendor/login', { replace: true })
   }
-  const pageTitle = location.pathname === '/vendor'
-    ? 'Overview'
-    : navigation.find((item) => item.to !== '/vendor' && location.pathname.startsWith(item.to))?.label ?? 'Overview'
+  const pageTitle =
+    location.pathname === '/vendor'
+      ? 'Overview'
+      : (navigation.find((item) => item.to !== '/vendor' && location.pathname.startsWith(item.to))?.label ?? 'Overview')
 
   return (
     <div className="min-h-screen bg-[#f8f8f8] text-[#121212]">
+      {!loaderData.payoutAccountReady && !payoutPromptDismissed && (
+        <div
+          className="fixed inset-0 z-100 flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[3px]"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setPayoutPromptDismissed(true)
+          }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="vendor-payout-setup-title"
+            className="relative w-full max-w-110 rounded-2xl border border-white bg-white px-6 py-8 shadow-2xl sm:px-9 sm:py-9"
+          >
+            <button
+              type="button"
+              aria-label="Remind me later"
+              onClick={() => setPayoutPromptDismissed(true)}
+              className="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-900"
+            >
+              <X size={18} />
+            </button>
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-brand-soft text-brand-primary ring-4 ring-brand-soft/50">
+              <Banknote size={25} strokeWidth={1.8} />
+            </div>
+            <div className="mt-5 text-center">
+              <h2 id="vendor-payout-setup-title" className="mt-2 text-2xl font-bold leading-tight text-slate-900">
+                Set up your payout account
+              </h2>
+              <p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-slate-600">
+                Add your bank account details so we can send your payouts. Complete your setup to be included in settlements.
+              </p>
+            </div>
+            <div className="mt-6 space-y-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setPayoutPromptDismissed(true)
+                  navigate('/vendor/settings')
+                }}
+                className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-brand-primary px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-primary-hover"
+              >
+                <Settings size={17} /> Set up payout details
+              </button>
+              <button
+                type="button"
+                onClick={() => setPayoutPromptDismissed(true)}
+                className="h-11 w-full rounded-xl px-4 text-sm font-semibold text-slate-500 transition hover:bg-slate-50 hover:text-slate-800"
+              >
+                Remind me later
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
       <header className="sticky top-0 z-20 border-b border-[#f2f3f3] bg-white lg:hidden">
         <div className="mx-auto flex max-w-3xl items-center justify-between px-4 py-3.5 sm:px-6">
           <div className="flex flex-col items-center gap-3">
             <QaffyLogo className="inline-flex" />
             <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-brand-primary">Vendor</p>
           </div>
-          <button type="button" onClick={() => setMenuOpen((open) => !open)} aria-label="Open vendor menu" className="flex h-9 w-9 items-center justify-center rounded-lg border border-[#e7e7e7] bg-white text-slate-600">
+          <button
+            type="button"
+            onClick={() => setMenuOpen((open) => !open)}
+            aria-label="Open vendor menu"
+            className="flex h-9 w-9 items-center justify-center rounded-lg border border-[#e7e7e7] bg-white text-slate-600"
+          >
             {menuOpen ? <X size={22} /> : <Menu size={22} />}
           </button>
         </div>
       </header>
 
       <div className="min-h-screen">
-        <aside className={`${menuOpen ? 'translate-x-0' : '-translate-x-full'} fixed inset-y-0 left-0 z-30 flex w-[221px] flex-col overflow-y-auto border-r border-[#ececec] bg-white px-[13px] py-7 transition-transform lg:translate-x-0`}>
+        <aside
+          className={`${menuOpen ? 'translate-x-0' : '-translate-x-full'} fixed inset-y-0 left-0 z-30 flex w-[221px] flex-col overflow-y-auto border-r border-[#ececec] bg-white px-[13px] py-7 transition-transform lg:translate-x-0`}
+        >
           <div className="flex flex-col items-center gap-3 px-3">
             <QaffyLogo className="inline-flex" />
             <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-brand-primary">Vendor</p>
-            <button type="button" onClick={() => setMenuOpen(false)} className="ml-auto flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 lg:hidden" aria-label="Close vendor menu">
+            <button
+              type="button"
+              onClick={() => setMenuOpen(false)}
+              className="ml-auto flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 lg:hidden"
+              aria-label="Close vendor menu"
+            >
               <X size={16} />
             </button>
           </div>
           <nav className="mx-auto mt-12 w-[194px] space-y-1">
             {navigation.map(({ to, label, icon: Icon, end }) => (
-                <NavLink key={to} to={to} end={end} prefetch="intent" onClick={() => setMenuOpen(false)} className={({ isActive }) => `flex h-10 items-center gap-3 rounded-[8px] px-4 text-sm font-medium transition ${isActive ? 'bg-brand-surface text-brand-strong' : 'text-[#121212] hover:bg-[#f8f8f8]'}`}>
-                <span className="flex h-5 w-5 items-center justify-center rounded-[5px]"><Icon size={16} /></span>
+              <NavLink
+                key={to}
+                to={to}
+                end={end}
+                prefetch="intent"
+                onClick={() => setMenuOpen(false)}
+                className={({ isActive }) =>
+                  `flex h-10 items-center gap-3 rounded-[8px] px-4 text-sm font-medium transition ${isActive ? 'bg-brand-surface text-brand-strong' : 'text-[#121212] hover:bg-[#f8f8f8]'}`
+                }
+              >
+                <span className="flex h-5 w-5 items-center justify-center rounded-[5px]">
+                  <Icon size={16} />
+                </span>
                 {label}
               </NavLink>
             ))}
           </nav>
           <div className="mt-auto space-y-1">
-            <button type="button" onClick={() => void handleLogout()} className="flex h-10 w-full items-center gap-3 rounded-[8px] px-4 text-sm font-medium text-red-600 hover:bg-red-50">
+            <button
+              type="button"
+              onClick={() => void handleLogout()}
+              className="flex h-10 w-full items-center gap-3 rounded-[8px] px-4 text-sm font-medium text-red-600 hover:bg-red-50"
+            >
               <LogOut size={16} />
               <span>Log out</span>
             </button>
           </div>
         </aside>
 
-        {menuOpen && <button type="button" aria-label="Close vendor menu overlay" onClick={() => setMenuOpen(false)} className="fixed inset-0 z-20 bg-slate-950/20 lg:hidden" />}
+        {menuOpen && (
+          <button
+            type="button"
+            aria-label="Close vendor menu overlay"
+            onClick={() => setMenuOpen(false)}
+            className="fixed inset-0 z-20 bg-slate-950/20 lg:hidden"
+          />
+        )}
 
         <div className="min-w-0 lg:ml-[221px]">
           <header className="hidden h-[70px] items-center justify-between gap-4 border-b border-[#f2f3f3] bg-white px-7 pt-[22px] lg:sticky lg:top-0 lg:z-10 lg:flex">
@@ -146,7 +278,9 @@ export default function VendorLayout() {
               <h1 className="text-2xl font-bold text-slate-900">{pageTitle}</h1>
             </div>
           </header>
-          <main className="mx-auto w-full max-w-300 px-4 pb-8 pt-5 sm:px-6 sm:pt-6 lg:px-7 lg:pb-10 lg:pt-5"><Outlet context={loaderData} /></main>
+          <main className="mx-auto w-full max-w-300 px-4 pb-8 pt-5 sm:px-6 sm:pt-6 lg:px-7 lg:pb-10 lg:pt-5">
+            <Outlet context={loaderData} />
+          </main>
         </div>
       </div>
     </div>

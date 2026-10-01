@@ -1,0 +1,9 @@
+dist
+build
+.react-router
+.kilo
+node_modules
+package-lock.json
+supabase/.temp
+public
+src/types/database.types.ts

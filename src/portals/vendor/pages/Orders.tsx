@@ -19,9 +19,15 @@ export async function action({ request }: { request: Request }) {
     return data({ ok: false, message: 'Invalid order action.' }, { status: 400, headers: auth.headers })
   }
 
-  const { data: vendor, error: vendorError } = await auth.supabase.from('vendors').select('id').eq('profile_id', auth.profile.id).eq('status', 'approved').maybeSingle()
+  const { data: vendor, error: vendorError } = await auth.supabase
+    .from('vendors')
+    .select('id')
+    .eq('profile_id', auth.profile.id)
+    .eq('status', 'approved')
+    .maybeSingle()
   if (vendorError) return data({ ok: false, message: vendorError.message }, { status: 400, headers: auth.headers })
-  if (!vendor) return data({ ok: false, message: 'Approved vendor access is required to claim orders.' }, { status: 403, headers: auth.headers })
+  if (!vendor)
+    return data({ ok: false, message: 'Approved vendor access is required to claim orders.' }, { status: 403, headers: auth.headers })
 
   try {
     if (intent === 'claim') {
@@ -33,7 +39,8 @@ export async function action({ request }: { request: Request }) {
           and vendor_id is null
         returning id
       `
-      if (!claimedOrder) return data({ ok: false, message: 'This order is no longer available to claim.' }, { status: 409, headers: auth.headers })
+      if (!claimedOrder)
+        return data({ ok: false, message: 'This order is no longer available to claim.' }, { status: 409, headers: auth.headers })
     } else {
       const dispatchedOrders = await sql`
         update orders
@@ -43,23 +50,35 @@ export async function action({ request }: { request: Request }) {
           and status = 'paid'
         returning id, customer_id, public_order_number
       `
-      if (dispatchedOrders.length === 0) return data({ ok: false, message: 'No selected orders are ready for dispatch.' }, { status: 409, headers: auth.headers })
-      await Promise.all(dispatchedOrders.map((order) => sendCustomerNotification({
-        eventKey: `order:${order.id}:ready-for-delivery`,
-        customerId: order.customer_id,
-        notificationType: 'order_ready_for_delivery',
-        orderId: order.id,
-        payload: {
-          title: 'Your order is ready for delivery',
-          body: `Your clean laundry is on the way for ${order.public_order_number}.`,
-          details: [`Order: ${order.public_order_number}`, 'Payment has been confirmed.', 'Your laundry is on its way to you.'],
-          url: `/orders?order=${encodeURIComponent(order.public_order_number)}`,
-          tag: `order:${order.id}:delivery`,
-        },
-      })))
+      if (dispatchedOrders.length === 0)
+        return data({ ok: false, message: 'No selected orders are ready for dispatch.' }, { status: 409, headers: auth.headers })
+      await Promise.all(
+        dispatchedOrders.map((order) =>
+          sendCustomerNotification({
+            eventKey: `order:${order.id}:ready-for-delivery`,
+            customerId: order.customer_id,
+            notificationType: 'order_ready_for_delivery',
+            orderId: order.id,
+            payload: {
+              title: 'Your order is ready for delivery',
+              body: `Your clean laundry is on the way for ${order.public_order_number}.`,
+              details: [`Order: ${order.public_order_number}`, 'Payment has been confirmed.', 'Your laundry is on its way to you.'],
+              url: `/orders?order=${encodeURIComponent(order.public_order_number)}`,
+              tag: `order:${order.id}:delivery`,
+            },
+          }),
+        ),
+      )
     }
   } catch (error) {
-    return data({ ok: false, message: error instanceof Error ? error.message : intent === 'dispatch' ? 'Orders could not be moved to delivery.' : 'Order claim failed.' }, { status: 400, headers: auth.headers })
+    return data(
+      {
+        ok: false,
+        message:
+          error instanceof Error ? error.message : intent === 'dispatch' ? 'Orders could not be moved to delivery.' : 'Order claim failed.',
+      },
+      { status: 400, headers: auth.headers },
+    )
   }
   return data({ ok: true }, { headers: auth.headers })
 }
@@ -130,37 +149,45 @@ export default function Orders() {
     }
   }, [fetcher.data, revalidate])
 
-  const rows = useMemo(() => orders.map((order) => ({
-    ...order,
-    publicOrderNumber: order.public_order_number,
-    label: statusLabels[order.status],
-    customer: order.customer?.name ?? 'Customer',
-    customerId: order.customer?.qaffy_id ?? 'QF unavailable',
-    location: order.location?.name ?? 'Location pending',
-  })), [orders])
+  const rows = useMemo(
+    () =>
+      orders.map((order) => ({
+        ...order,
+        publicOrderNumber: order.public_order_number,
+        label: statusLabels[order.status],
+        customer: order.customer?.name ?? 'Customer',
+        customerId: order.customer?.qaffy_id ?? 'QF unavailable',
+        location: order.location?.name ?? 'Location pending',
+      })),
+    [orders],
+  )
 
   const filteredOrders = rows.filter((order) => {
-    const searchText = `${order.publicOrderNumber} ${order.customer} ${order.customerId} ${order.location} ${orderTypeLabels[order.order_type]}`.toLowerCase()
-    const inTab = activeTab === 'unclaimed'
-      ? order.status === 'picked_up'
-      : activeTab === 'processing'
-        ? order.status === 'paid'
-      : activeTab === 'claimed'
-        ? ['at_vendor', 'invoiced', 'out_for_delivery'].includes(order.status)
-        : order.status === 'delivered'
+    const searchText =
+      `${order.publicOrderNumber} ${order.customer} ${order.customerId} ${order.location} ${orderTypeLabels[order.order_type]}`.toLowerCase()
+    const inTab =
+      activeTab === 'unclaimed'
+        ? order.status === 'picked_up'
+        : activeTab === 'processing'
+          ? order.status === 'paid'
+          : activeTab === 'claimed'
+            ? ['at_vendor', 'invoiced', 'out_for_delivery'].includes(order.status)
+            : order.status === 'delivered'
     return searchText.includes(query.toLowerCase()) && inTab
   })
   const selectableOrders = filteredOrders.filter((order) => order.status === 'paid')
   const allSelectableOrdersSelected = selectableOrders.length > 0 && selectableOrders.every((order) => selectedOrderIds.includes(order.id))
 
   const toggleOrderSelection = (orderId: string) => {
-    setSelectedOrderIds((current) => current.includes(orderId) ? current.filter((id) => id !== orderId) : [...current, orderId])
+    setSelectedOrderIds((current) => (current.includes(orderId) ? current.filter((id) => id !== orderId) : [...current, orderId]))
   }
 
   const toggleAllSelectableOrders = () => {
-    setSelectedOrderIds((current) => allSelectableOrdersSelected
-      ? current.filter((id) => !selectableOrders.some((order) => order.id === id))
-      : [...new Set([...current, ...selectableOrders.map((order) => order.id)])])
+    setSelectedOrderIds((current) =>
+      allSelectableOrdersSelected
+        ? current.filter((id) => !selectableOrders.some((order) => order.id === id))
+        : [...new Set([...current, ...selectableOrders.map((order) => order.id)])],
+    )
   }
 
   const dispatchSelectedOrders = () => {
@@ -181,7 +208,7 @@ export default function Orders() {
   return (
     <div className="space-y-6">
       <header>
-        <h2 className="text-2xl font-bold tracking-tight text-slate-900">Orders</h2>
+        <h2 className="text-2xl font-bold tracking-tight text-slate-900 lg:hidden">Orders</h2>
         <p className="mt-2 text-sm text-slate-500">Review live customer orders and continue processing work.</p>
       </header>
 
@@ -205,25 +232,51 @@ export default function Orders() {
         <div className="flex flex-col gap-3 border-b border-[#ededed] p-4 md:flex-row md:items-center md:justify-between md:p-5">
           <div className="relative w-full md:max-w-sm">
             <Search size={16} className="absolute left-3 top-3 text-slate-400" />
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search orders or customers" className="h-10 w-full rounded-[8px] border border-[#dedede] pl-9 pr-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus" />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search orders or customers"
+              className="h-10 w-full rounded-[8px] border border-[#dedede] pl-9 pr-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
+            />
           </div>
           <div className="scrollbar-hidden flex flex-nowrap gap-2 overflow-x-auto pb-1">
             {[
               ['unclaimed', 'Unclaimed', rows.filter((order) => order.status === 'picked_up').length],
               ['processing', 'Processing', rows.filter((order) => order.status === 'paid').length],
-              ['claimed', 'Dispatched', rows.filter((order) => ['at_vendor', 'invoiced', 'out_for_delivery'].includes(order.status)).length],
+              [
+                'claimed',
+                'Dispatched',
+                rows.filter((order) => ['at_vendor', 'invoiced', 'out_for_delivery'].includes(order.status)).length,
+              ],
               ['delivered', 'Delivered', rows.filter((order) => order.status === 'delivered').length],
             ].map(([value, label, count]) => (
-              <button key={value} type="button" onClick={() => changeTab(value as typeof activeTab)} className={`inline-flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold ${activeTab === value ? 'bg-brand-primary text-white' : 'border border-slate-200 bg-white text-slate-600 hover:border-brand-primary hover:text-brand-primary'}`}>
-                {label}<span className={activeTab === value ? 'text-white/80' : 'text-slate-400'}>{count}</span>
+              <button
+                key={value}
+                type="button"
+                onClick={() => changeTab(value as typeof activeTab)}
+                className={`inline-flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold ${activeTab === value ? 'bg-brand-primary text-white' : 'border border-slate-200 bg-white text-slate-600 hover:border-brand-primary hover:text-brand-primary'}`}
+              >
+                {label}
+                <span className={activeTab === value ? 'text-white/80' : 'text-slate-400'}>{count}</span>
               </button>
             ))}
           </div>
         </div>
 
         <div className="p-4 md:hidden">
-          {fetcher.data && !fetcher.data.ok && 'message' in fetcher.data && <p role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm font-medium text-red-700">{String(fetcher.data.message)}</p>}
-          {fetcher.data?.ok && <p role="status" className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm font-medium text-emerald-700">Selected orders dispatched successfully.</p>}
+          {fetcher.data && !fetcher.data.ok && 'message' in fetcher.data && (
+            <p role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm font-medium text-red-700">
+              {String(fetcher.data.message)}
+            </p>
+          )}
+          {fetcher.data?.ok && (
+            <p
+              role="status"
+              className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm font-medium text-emerald-700"
+            >
+              Selected orders dispatched successfully.
+            </p>
+          )}
           <div className="space-y-3">
             {filteredOrders.map((order) => (
               <article key={order.id} className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm">
@@ -232,17 +285,60 @@ export default function Orders() {
                     <p className="truncate text-sm font-bold text-slate-900">{order.publicOrderNumber}</p>
                     <p className="mt-1 truncate text-sm text-slate-600">{order.customer}</p>
                   </div>
-                  <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold ${statusStyle[order.label]}`}>{order.label}</span>
+                  <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold ${statusStyle[order.label]}`}>
+                    {order.label}
+                  </span>
                 </div>
                 <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
-                  <div><dt className="text-slate-400">Service</dt><dd className="mt-0.5 truncate font-medium text-slate-700">{orderTypeLabels[order.order_type]}</dd></div>
-                  <div><dt className="text-slate-400">Items</dt><dd className="mt-0.5 font-medium text-slate-700">{order.clothes_count_customer}</dd></div>
-                  <div className="col-span-2"><dt className="text-slate-400">Pickup location</dt><dd className="mt-0.5 truncate font-medium text-slate-700">{order.location}</dd></div>
-                  <div className="col-span-2"><dt className="text-slate-400">Picked up</dt><dd className="mt-0.5 truncate font-medium text-slate-700">{formatDate(order.picked_up_date)}</dd></div>
+                  <div>
+                    <dt className="text-slate-400">Service</dt>
+                    <dd className="mt-0.5 truncate font-medium text-slate-700">{orderTypeLabels[order.order_type]}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-400">Items</dt>
+                    <dd className="mt-0.5 font-medium text-slate-700">{order.clothes_count_customer}</dd>
+                  </div>
+                  <div className="col-span-2">
+                    <dt className="text-slate-400">Pickup location</dt>
+                    <dd className="mt-0.5 truncate font-medium text-slate-700">{order.location}</dd>
+                  </div>
+                  <div className="col-span-2">
+                    <dt className="text-slate-400">Picked up</dt>
+                    <dd className="mt-0.5 truncate font-medium text-slate-700">{formatDate(order.picked_up_date)}</dd>
+                  </div>
                 </dl>
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3">
-                  {order.status === 'paid' ? <label className="flex items-center gap-2 text-xs font-semibold text-slate-600"><input type="checkbox" checked={selectedOrderIds.includes(order.id)} onChange={() => toggleOrderSelection(order.id)} aria-label={`Select ${order.publicOrderNumber}`} className="h-4 w-4 accent-brand-primary" />Select for dispatch</label> : <span />}
-                  {order.status === 'picked_up' ? <button type="button" onClick={() => fetcher.submit({ intent: 'claim', orderId: order.id }, { method: 'post' })} disabled={fetcher.state !== 'idle'} className="rounded-[7px] border border-[#dedede] px-3 py-2 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary disabled:cursor-wait disabled:opacity-60">{fetcher.state !== 'idle' ? 'Claiming...' : 'Claim'}</button> : <Link to={`/vendor?orderId=${encodeURIComponent(order.id)}&returnTo=orders`} className="rounded-[7px] border border-[#dedede] px-3 py-2 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary">View details</Link>}
+                  {order.status === 'paid' ? (
+                    <label className="flex items-center gap-2 text-xs font-semibold text-slate-600">
+                      <input
+                        type="checkbox"
+                        checked={selectedOrderIds.includes(order.id)}
+                        onChange={() => toggleOrderSelection(order.id)}
+                        aria-label={`Select ${order.publicOrderNumber}`}
+                        className="h-4 w-4 accent-brand-primary"
+                      />
+                      Select for dispatch
+                    </label>
+                  ) : (
+                    <span />
+                  )}
+                  {order.status === 'picked_up' ? (
+                    <button
+                      type="button"
+                      onClick={() => fetcher.submit({ intent: 'claim', orderId: order.id }, { method: 'post' })}
+                      disabled={fetcher.state !== 'idle'}
+                      className="rounded-[7px] border border-[#dedede] px-3 py-2 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary disabled:cursor-wait disabled:opacity-60"
+                    >
+                      {fetcher.state !== 'idle' ? 'Claiming...' : 'Claim'}
+                    </button>
+                  ) : (
+                    <Link
+                      to={`/vendor?orderId=${encodeURIComponent(order.id)}&returnTo=orders`}
+                      className="rounded-[7px] border border-[#dedede] px-3 py-2 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary"
+                    >
+                      View details
+                    </Link>
+                  )}
                 </div>
               </article>
             ))}
@@ -250,21 +346,50 @@ export default function Orders() {
           </div>
         </div>
         <div className="hidden overflow-x-auto p-4 md:block md:p-5">
-          {fetcher.data && !fetcher.data.ok && 'message' in fetcher.data && <p role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm font-medium text-red-700">{String(fetcher.data.message)}</p>}
-          {fetcher.data?.ok && <p role="status" className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm font-medium text-emerald-700">Selected orders dispatched successfully.</p>}
-          {selectableOrders.length > 0 && <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-brand-border bg-brand-soft px-3 py-2.5">
-            <label className="flex items-center gap-2 text-sm font-semibold text-brand-strong">
-              <input type="checkbox" checked={allSelectableOrdersSelected} onChange={toggleAllSelectableOrders} className="h-4 w-4 accent-brand-primary" />
-              Select orders ready for dispatch ({selectableOrders.length})
-            </label>
-            <button type="button" onClick={dispatchSelectedOrders} disabled={selectedOrderIds.length === 0 || fetcher.state !== 'idle'} className="rounded-[7px] bg-brand-primary px-3 py-2 text-xs font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50">
-              {fetcher.state !== 'idle' ? 'Dispatching...' : selectedOrderIds.length > 0 ? `Dispatch ${selectedOrderIds.length} selected` : 'Dispatch selected orders'}
-            </button>
-          </div>}
+          {fetcher.data && !fetcher.data.ok && 'message' in fetcher.data && (
+            <p role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm font-medium text-red-700">
+              {String(fetcher.data.message)}
+            </p>
+          )}
+          {fetcher.data?.ok && (
+            <p
+              role="status"
+              className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm font-medium text-emerald-700"
+            >
+              Selected orders dispatched successfully.
+            </p>
+          )}
+          {selectableOrders.length > 0 && (
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-brand-border bg-brand-soft px-3 py-2.5">
+              <label className="flex items-center gap-2 text-sm font-semibold text-brand-strong">
+                <input
+                  type="checkbox"
+                  checked={allSelectableOrdersSelected}
+                  onChange={toggleAllSelectableOrders}
+                  className="h-4 w-4 accent-brand-primary"
+                />
+                Select orders ready for dispatch ({selectableOrders.length})
+              </label>
+              <button
+                type="button"
+                onClick={dispatchSelectedOrders}
+                disabled={selectedOrderIds.length === 0 || fetcher.state !== 'idle'}
+                className="rounded-[7px] bg-brand-primary px-3 py-2 text-xs font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {fetcher.state !== 'idle'
+                  ? 'Dispatching...'
+                  : selectedOrderIds.length > 0
+                    ? `Dispatch ${selectedOrderIds.length} selected`
+                    : 'Dispatch selected orders'}
+              </button>
+            </div>
+          )}
           <table className="w-full min-w-[1240px] table-fixed text-left">
             <thead>
               <tr className="border-b border-[#ededed] bg-[#f8f8f8] text-[10px] uppercase tracking-[0.12em] text-slate-500">
-                <th className="w-12 px-4 py-3 font-semibold"><span className="sr-only">Select</span></th>
+                <th className="w-12 px-4 py-3 font-semibold">
+                  <span className="sr-only">Select</span>
+                </th>
                 <th className="w-36 px-4 py-3 font-semibold">Order</th>
                 <th className="w-56 px-4 py-3 font-semibold">Customer</th>
                 <th className="w-36 px-4 py-3 font-semibold">Service</th>
@@ -278,16 +403,64 @@ export default function Orders() {
             <tbody>
               {filteredOrders.map((order) => (
                 <tr key={order.id} className="border-b border-[#f0f0f0] last:border-0">
-                  <td className="px-4 py-4">{order.status === 'paid' && <input type="checkbox" checked={selectedOrderIds.includes(order.id)} onChange={() => toggleOrderSelection(order.id)} aria-label={`Select ${order.publicOrderNumber}`} className="h-4 w-4 accent-brand-primary" />}</td>
-                  <td className="whitespace-nowrap px-4 py-4 text-sm font-semibold text-slate-900" title={order.publicOrderNumber}>{order.publicOrderNumber}</td>
-                  <td className="max-w-56 truncate whitespace-nowrap px-4 py-4 text-sm font-semibold text-slate-900" title={order.customer}>{order.customer}</td>
-                  <td className="max-w-36 truncate whitespace-nowrap px-4 py-4 text-sm text-slate-600" title={orderTypeLabels[order.order_type]}>{orderTypeLabels[order.order_type]}</td>
+                  <td className="px-4 py-4">
+                    {order.status === 'paid' && (
+                      <input
+                        type="checkbox"
+                        checked={selectedOrderIds.includes(order.id)}
+                        onChange={() => toggleOrderSelection(order.id)}
+                        aria-label={`Select ${order.publicOrderNumber}`}
+                        className="h-4 w-4 accent-brand-primary"
+                      />
+                    )}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-4 text-sm font-semibold text-slate-900" title={order.publicOrderNumber}>
+                    {order.publicOrderNumber}
+                  </td>
+                  <td className="max-w-56 truncate whitespace-nowrap px-4 py-4 text-sm font-semibold text-slate-900" title={order.customer}>
+                    {order.customer}
+                  </td>
+                  <td
+                    className="max-w-36 truncate whitespace-nowrap px-4 py-4 text-sm text-slate-600"
+                    title={orderTypeLabels[order.order_type]}
+                  >
+                    {orderTypeLabels[order.order_type]}
+                  </td>
                   <td className="whitespace-nowrap px-4 py-4 text-sm text-slate-600">{order.clothes_count_customer}</td>
-                  <td className="max-w-40 truncate whitespace-nowrap px-4 py-4 text-sm text-slate-600" title={order.location}>{order.location}</td>
-                  <td className="max-w-40 truncate whitespace-nowrap px-4 py-4 text-sm text-slate-500" title={formatDate(order.picked_up_date)}>{formatDate(order.picked_up_date)}</td>
-                  <td className="px-4 py-4"><span className={`inline-flex whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${statusStyle[order.label]}`}>{order.label}</span></td>
+                  <td className="max-w-40 truncate whitespace-nowrap px-4 py-4 text-sm text-slate-600" title={order.location}>
+                    {order.location}
+                  </td>
+                  <td
+                    className="max-w-40 truncate whitespace-nowrap px-4 py-4 text-sm text-slate-500"
+                    title={formatDate(order.picked_up_date)}
+                  >
+                    {formatDate(order.picked_up_date)}
+                  </td>
+                  <td className="px-4 py-4">
+                    <span
+                      className={`inline-flex whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${statusStyle[order.label]}`}
+                    >
+                      {order.label}
+                    </span>
+                  </td>
                   <td className="whitespace-nowrap px-4 py-4 text-right">
-                    {order.status === 'picked_up' ? <button type="button" onClick={() => fetcher.submit({ intent: 'claim', orderId: order.id }, { method: 'post' })} disabled={fetcher.state !== 'idle'} className="rounded-[7px] border border-[#dedede] px-3 py-2 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary disabled:cursor-wait disabled:opacity-60">{fetcher.state !== 'idle' ? 'Claiming...' : 'Claim'}</button> : <Link to={`/vendor?orderId=${encodeURIComponent(order.id)}&returnTo=orders`} className="rounded-[7px] border border-[#dedede] px-3 py-2 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary">View details</Link>}
+                    {order.status === 'picked_up' ? (
+                      <button
+                        type="button"
+                        onClick={() => fetcher.submit({ intent: 'claim', orderId: order.id }, { method: 'post' })}
+                        disabled={fetcher.state !== 'idle'}
+                        className="rounded-[7px] border border-[#dedede] px-3 py-2 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary disabled:cursor-wait disabled:opacity-60"
+                      >
+                        {fetcher.state !== 'idle' ? 'Claiming...' : 'Claim'}
+                      </button>
+                    ) : (
+                      <Link
+                        to={`/vendor?orderId=${encodeURIComponent(order.id)}&returnTo=orders`}
+                        className="rounded-[7px] border border-[#dedede] px-3 py-2 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary"
+                      >
+                        View details
+                      </Link>
+                    )}
                   </td>
                 </tr>
               ))}

@@ -2,6 +2,7 @@ import { type RouteConfig, index, layout, prefix, route } from '@react-router/de
 
 export default [
   route('api/paystack/webhook', 'routes/paystack-webhook.ts'),
+  route('api/paystack-webhook', 'routes/paystack-webhook.ts', { id: 'paystack-webhook-legacy' }),
   route('api/referrals/attribute', 'routes/referral-attribution.ts'),
   route('api/push-subscriptions', 'routes/push-subscriptions.ts'),
   route('api/notifications/subscriptions', 'routes/subscription-notifications.ts'),
@@ -22,9 +23,7 @@ export default [
   route('complete-profile', 'portals/customer/pages/CompleteProfile.tsx'),
 
   ...prefix('logistics', [
-    layout('portals/logistics/LogisticsLayout.tsx', [
-      index('portals/logistics/pages/Home.tsx'),
-    ]),
+    layout('portals/logistics/LogisticsLayout.tsx', [index('portals/logistics/pages/Home.tsx')]),
     route('login', 'portals/logistics/pages/Login.tsx'),
     route('verify-otp', 'portals/logistics/pages/VerifyOtp.tsx'),
     route('complete-profile', 'portals/logistics/pages/CompleteProfile.tsx'),
@@ -55,6 +54,7 @@ export default [
       route('referrals', 'portals/admin/pages/Referrals.tsx'),
       route('admins', 'portals/admin/pages/Admins.tsx'),
       route('partners', 'portals/admin/pages/Partners.tsx'),
+      route('partners/:type/:id', 'portals/admin/pages/PartnerDetails.tsx'),
       route('partners/vendors', 'portals/admin/pages/Vendors.tsx'),
       route('partners/logistics', 'portals/admin/pages/Logistics.tsx'),
       route('users', 'portals/admin/pages/Users.tsx'),

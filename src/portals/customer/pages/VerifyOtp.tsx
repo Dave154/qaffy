@@ -96,34 +96,48 @@ export default function VerifyOtp() {
     }
 
     const { data: profile } = await supabase.from('profiles').select('role, name, phone').eq('id', userData.user.id).maybeSingle()
-    const { data: roleAssignment } = expectedRole !== 'customer'
-      ? await supabase.from('profile_roles').select('role').eq('profile_id', userData.user.id).eq('role', expectedRole).eq('status', 'approved').maybeSingle()
-      : { data: null }
-    const { data: vendorAccount } = expectedRole === 'vendor'
-      ? await supabase.from('vendors').select('id').eq('profile_id', userData.user.id).eq('status', 'approved').maybeSingle()
-      : { data: null }
-    const { data: logisticsAccount } = expectedRole === 'logistics'
-      ? await supabase.from('logistics_agents').select('id').eq('profile_id', userData.user.id).eq('status', 'approved').maybeSingle()
-      : { data: null }
-    const hasPortalAccess = expectedRole === 'customer'
-      ? Boolean(profile)
-      : expectedRole === 'vendor'
-        ? Boolean(roleAssignment) && Boolean(vendorAccount)
-        : expectedRole === 'logistics'
-          ? Boolean(roleAssignment) && Boolean(logisticsAccount)
-        : Boolean(roleAssignment) || expectedRole === 'admin' && profile?.role === 'admin'
+    const { data: roleAssignment } =
+      expectedRole !== 'customer'
+        ? await supabase
+            .from('profile_roles')
+            .select('role')
+            .eq('profile_id', userData.user.id)
+            .eq('role', expectedRole)
+            .eq('status', 'approved')
+            .maybeSingle()
+        : { data: null }
+    const { data: vendorAccount } =
+      expectedRole === 'vendor'
+        ? await supabase.from('vendors').select('id').eq('profile_id', userData.user.id).eq('status', 'approved').maybeSingle()
+        : { data: null }
+    const { data: logisticsAccount } =
+      expectedRole === 'logistics'
+        ? await supabase.from('logistics_agents').select('id').eq('profile_id', userData.user.id).eq('status', 'approved').maybeSingle()
+        : { data: null }
+    const hasPortalAccess =
+      expectedRole === 'customer'
+        ? Boolean(profile)
+        : expectedRole === 'vendor'
+          ? Boolean(roleAssignment) && Boolean(vendorAccount)
+          : expectedRole === 'logistics'
+            ? Boolean(roleAssignment) && Boolean(logisticsAccount)
+            : Boolean(roleAssignment) || (expectedRole === 'admin' && profile?.role === 'admin')
     if (!hasPortalAccess) {
       await supabase.auth.signOut()
-      setError(expectedRole === 'vendor' ? 'This email is not registered to an approved vendor account.' : expectedRole === 'logistics' ? 'This email is not registered to an approved logistics account.' : expectedRole === 'admin' ? 'This email is not approved for admin access.' : 'This email belongs to a different Qaffy portal.')
+      setError(
+        expectedRole === 'vendor'
+          ? 'This email is not registered to an approved vendor account.'
+          : expectedRole === 'logistics'
+            ? 'This email is not registered to an approved logistics account.'
+            : expectedRole === 'admin'
+              ? 'This email is not approved for admin access.'
+              : 'This email belongs to a different Qaffy portal.',
+      )
       setIsSubmitting(false)
       return
     }
 
-    const target = expectedRole === 'vendor'
-      ? '/vendor'
-      : expectedRole === 'admin'
-        ? '/admin'
-        : '/'
+    const target = expectedRole === 'vendor' ? '/vendor' : expectedRole === 'admin' ? '/admin' : '/'
 
     if (expectedRole !== 'customer' && (!profile?.name || !profile?.phone)) {
       const completionPath = expectedRole === 'vendor' ? '/vendor/complete-profile' : '/logistics/complete-profile'
@@ -185,9 +199,7 @@ export default function VerifyOtp() {
             <span className="block text-white/85">Every Fabric.</span>
           </h1>
 
-          <p className="mt-6 max-w-md text-base leading-7 text-slate-200">
-            Fresh Laundry, Zero Hassle
-          </p>
+          <p className="mt-6 max-w-md text-base leading-7 text-slate-200">Fresh Laundry, Zero Hassle</p>
 
           <p className="mt-2 max-w-md text-base leading-7 text-slate-300">
             Qaffy picks up, washes, and delivers — so you never have to worry about laundry again.
@@ -212,9 +224,19 @@ export default function VerifyOtp() {
               </p>
             </div>
 
-            {error && <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+            {error && (
+              <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+                {error}
+              </p>
+            )}
 
-            <OtpInput value={code} onChange={setCode} idPrefix="otp" length={8} inputClassName="aspect-square min-w-0 w-full rounded-lg border border-brand-border bg-white p-0 text-center text-lg font-semibold leading-none text-black shadow-sm outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus sm:text-xl" />
+            <OtpInput
+              value={code}
+              onChange={setCode}
+              idPrefix="otp"
+              length={8}
+              inputClassName="aspect-square min-w-0 w-full rounded-lg border border-brand-border bg-white p-0 text-center text-lg font-semibold leading-none text-black shadow-sm outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus sm:text-xl"
+            />
 
             <p className="text-center text-sm text-[#3d3d3d]">
               Didn&apos;t get the code?{' '}

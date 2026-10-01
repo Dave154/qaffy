@@ -1,12 +1,5 @@
 export type OrderLifecycleStatus =
-  | 'pending_pickup'
-  | 'picked_up'
-  | 'at_vendor'
-  | 'invoiced'
-  | 'paid'
-  | 'out_for_delivery'
-  | 'delivered'
-  | 'cancelled'
+  'pending_pickup' | 'picked_up' | 'at_vendor' | 'invoiced' | 'paid' | 'out_for_delivery' | 'delivered' | 'cancelled'
 
 export function isReadyForDispatch(status: OrderLifecycleStatus) {
   return status === 'paid'

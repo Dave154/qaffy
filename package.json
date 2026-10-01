@@ -8,7 +8,10 @@
     "build": "react-router build",
     "start": "react-router-serve ./build/server/index.js",
     "typecheck": "react-router typegen && tsc",
+    "test": "node --test src/lib/rate-card.test.mjs src/lib/payout-outcomes.test.mjs src/lib/payout-workflow.test.mjs src/lib/payout-webhooks.test.mjs src/lib/revenue-reporting.test.mjs src/lib/subscription-week.test.mjs",
     "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -41,6 +44,7 @@
     "eslint-plugin-react-refresh": "^0.5.4",
     "globals": "^17.11.0",
     "postcss": "^8.5.28",
+    "prettier": "^3.9.9",
     "tailwindcss": "^4.3.3",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.67.0",

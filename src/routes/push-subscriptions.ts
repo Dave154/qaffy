@@ -16,27 +16,34 @@ export async function action({ request }: Route.ActionArgs) {
   if (!userData.user) return data({ ok: false, message: 'Please sign in again.' }, { status: 401, headers })
 
   if (request.method === 'DELETE') {
-    const payload = await request.json() as PushSubscriptionPayload
+    const payload = (await request.json()) as PushSubscriptionPayload
     if (!payload.endpoint) return data({ ok: false, message: 'Push endpoint is missing.' }, { status: 400, headers })
-    const { error } = await supabase.from('push_subscriptions').delete().eq('customer_id', userData.user.id).eq('endpoint', payload.endpoint)
+    const { error } = await supabase
+      .from('push_subscriptions')
+      .delete()
+      .eq('customer_id', userData.user.id)
+      .eq('endpoint', payload.endpoint)
     if (error) return data({ ok: false, message: error.message }, { status: 500, headers })
     return data({ ok: true }, { headers })
   }
 
-  const payload = await request.json() as PushSubscriptionPayload
+  const payload = (await request.json()) as PushSubscriptionPayload
   const endpoint = payload.endpoint?.trim()
   const p256dh = payload.keys?.p256dh?.trim()
   const auth = payload.keys?.auth?.trim()
   if (!endpoint || !p256dh || !auth) return data({ ok: false, message: 'Push subscription is incomplete.' }, { status: 400, headers })
 
-  const { error } = await supabase.from('push_subscriptions').upsert({
-    customer_id: userData.user.id,
-    endpoint,
-    p256dh,
-    auth,
-    user_agent: request.headers.get('user-agent'),
-    last_used_at: new Date().toISOString(),
-  }, { onConflict: 'endpoint' })
+  const { error } = await supabase.from('push_subscriptions').upsert(
+    {
+      customer_id: userData.user.id,
+      endpoint,
+      p256dh,
+      auth,
+      user_agent: request.headers.get('user-agent'),
+      last_used_at: new Date().toISOString(),
+    },
+    { onConflict: 'endpoint' },
+  )
   if (error) return data({ ok: false, message: error.message }, { status: 500, headers })
 
   return data({ ok: true }, { headers })

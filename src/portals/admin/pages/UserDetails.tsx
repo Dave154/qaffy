@@ -1,114 +1,107 @@
-import { ArrowLeft, Copy, Save, WalletCards } from "lucide-react";
-import {
-  data,
-  Form,
-  Link,
-  useActionData,
-  useLoaderData,
-  useNavigation,
-} from "react-router";
-import { useState } from "react";
-import type { Route } from "./+types/UserDetails";
-import { requireRole } from "../../../lib/auth.server";
-import { adjustWallet } from "../../../lib/wallet.server";
-import { toast } from "../../../lib/toast";
+import { ArrowLeft, Copy, Save, WalletCards } from 'lucide-react'
+import { data, Form, Link, useActionData, useLoaderData, useNavigation } from 'react-router'
+import { useState } from 'react'
+import type { Route } from './+types/UserDetails'
+import { requireRole } from '../../../lib/auth.server'
+import { adjustWallet } from '../../../lib/wallet.server'
+import { toast } from '../../../lib/toast'
+import { sumSuccessfulPlanPayments } from '../../../lib/revenue-reporting'
 
 type DetailOrder = {
-  id: string;
-  status: string;
-  createdAt: string;
-  customerCount: number;
-  vendorCount: number | null;
-  invoiceAmount: number | null;
-  invoiceStatus: string | null;
-};
+  id: string
+  status: string
+  createdAt: string
+  customerCount: number
+  vendorCount: number | null
+  invoiceAmount: number | null
+  invoiceStatus: string | null
+}
 type DetailSubscription = {
-  id: string;
-  planName: string;
-  type: string;
-  status: string;
-  startDate: string;
-  endDate: string | null;
-};
+  id: string
+  planName: string
+  type: string
+  status: string
+  startDate: string
+  endDate: string | null
+}
 type DetailPayment = {
-  id: string;
-  provider: string;
-  reference: string;
-  amount: number;
-  status: string;
-  createdAt: string;
-};
+  id: string
+  provider: string
+  reference: string
+  amount: number
+  status: string
+  createdAt: string
+  succeededAt: string | null
+  planName: string | null
+}
 type DetailTransaction = {
-  id: string;
-  balanceType: string;
-  txnType: string;
-  amount: number;
-  balanceAfter: number;
-  createdAt: string;
-};
+  id: string
+  balanceType: string
+  txnType: string
+  amount: number
+  balanceAfter: number
+  createdAt: string
+}
 type DetailReferral = {
-  id: string;
-  referredId: string;
-  status: string;
-  rewardType: string | null;
-  rewardValue: number | null;
-  createdAt: string;
-};
+  id: string
+  referredId: string
+  status: string
+  rewardType: string | null
+  rewardValue: number | null
+  createdAt: string
+}
 type UserDetailsData = {
   profile: {
-    id: string;
-    qaffyId: string | null;
-    name: string | null;
-    email: string | null;
-    phone: string | null;
-    createdAt: string;
-  };
-  roles: string[];
+    id: string
+    qaffyId: string | null
+    name: string | null
+    email: string | null
+    phone: string | null
+    createdAt: string
+  }
+  roles: string[]
   stats: {
-    totalOrders: number;
-    completedOrders: number;
-    cancelledOrders: number;
-    totalSpent: number;
-    activeSubscriptions: number;
-  };
-  wallet: { oneOff: number; subscription: number };
-  orders: DetailOrder[];
-  subscriptions: DetailSubscription[];
-  payments: DetailPayment[];
-  transactions: DetailTransaction[];
-  referrals: DetailReferral[];
+    totalOrders: number
+    completedOrders: number
+    cancelledOrders: number
+    totalSpent: number
+    activeSubscriptions: number
+  }
+  wallet: { oneOff: number; subscription: number }
+  orders: DetailOrder[]
+  subscriptions: DetailSubscription[]
+  payments: DetailPayment[]
+  transactions: DetailTransaction[]
+  referrals: DetailReferral[]
   plans: Array<{
-    id: string;
-    name: string;
-    type: string;
-    semesterEndDate: string | null;
-    active: boolean;
-  }>;
-};
+    id: string
+    name: string
+    type: string
+    semesterEndDate: string | null
+    active: boolean
+  }>
+}
 
 function money(value: number) {
-  return `\u20A6${value.toLocaleString()}`;
+  return `\u20A6${value.toLocaleString()}`
 }
 function date(value: string | null) {
-  return value ? new Date(value).toLocaleString() : "Not recorded";
+  return value ? new Date(value).toLocaleString() : 'Not recorded'
 }
 function dateInput(value: Date) {
-  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`
 }
 function addMonth(value: string) {
-  const start = new Date(`${value}T12:00:00`);
-  return dateInput(
-    new Date(start.getFullYear(), start.getMonth() + 1, start.getDate()),
-  );
+  const start = new Date(`${value}T12:00:00`)
+  return dateInput(new Date(start.getFullYear(), start.getMonth() + 1, start.getDate()))
 }
 
 // eslint-disable-next-line react-refresh/only-export-components
 export async function loader({ request, params }: Route.LoaderArgs) {
-  const auth = await requireRole(request, "admin");
-  const customerId = params.id;
-  if (!auth || !customerId)
-    return data<UserDetailsData | null>(null, { status: 404 });
-  const { supabase, headers } = auth;
+  const auth = await requireRole(request, 'admin')
+  const customerId = params.id
+  if (!auth || !customerId) return data<UserDetailsData | null>(null, { status: 404 })
+  const { supabase, headers } = auth
   const [
     { data: profile },
     { data: roles },
@@ -121,86 +114,52 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     { data: transactions },
     { data: referrals },
   ] = await Promise.all([
+    supabase.from('profiles').select('id, qaffy_id, name, email, phone, created_at').eq('id', customerId).maybeSingle(),
+    supabase.from('profile_roles').select('role').eq('profile_id', customerId).eq('status', 'approved'),
+    supabase.from('wallets').select('one_off_balance, subscription_balance').eq('customer_id', customerId).maybeSingle(),
     supabase
-      .from("profiles")
-      .select("id, qaffy_id, name, email, phone, created_at")
-      .eq("id", customerId)
-      .maybeSingle(),
+      .from('orders')
+      .select('id, status, clothes_count_customer, clothes_count_vendor, created_at')
+      .eq('customer_id', customerId)
+      .order('created_at', { ascending: false }),
     supabase
-      .from("profile_roles")
-      .select("role")
-      .eq("profile_id", customerId)
-      .eq("status", "approved"),
+      .from('invoices')
+      .select('order_id, amount, status')
+      .in('order_id', (await supabase.from('orders').select('id').eq('customer_id', customerId)).data?.map((order) => order.id) ?? []),
     supabase
-      .from("wallets")
-      .select("one_off_balance, subscription_balance")
-      .eq("customer_id", customerId)
-      .maybeSingle(),
+      .from('subscriptions')
+      .select('id, plan_id, status, start_date, end_date')
+      .eq('customer_id', customerId)
+      .order('created_at', { ascending: false }),
+    supabase.from('plans').select('id, name, type, semester_end_date, active').order('created_at', { ascending: false }),
     supabase
-      .from("orders")
-      .select(
-        "id, status, clothes_count_customer, clothes_count_vendor, created_at",
-      )
-      .eq("customer_id", customerId)
-      .order("created_at", { ascending: false }),
+      .from('payments')
+      .select('id, provider, reference, amount, status, plan_id, created_at, succeeded_at')
+      .eq('customer_id', customerId)
+      .order('created_at', { ascending: false }),
     supabase
-      .from("invoices")
-      .select("order_id, amount, status")
-      .in(
-        "order_id",
-        (
-          await supabase
-            .from("orders")
-            .select("id")
-            .eq("customer_id", customerId)
-        ).data?.map((order) => order.id) ?? [],
-      ),
+      .from('wallet_transactions')
+      .select('id, balance_type, txn_type, amount, balance_after, created_at')
+      .eq('customer_id', customerId)
+      .order('created_at', { ascending: false }),
     supabase
-      .from("subscriptions")
-      .select("id, plan_id, status, start_date, end_date")
-      .eq("customer_id", customerId)
-      .order("created_at", { ascending: false }),
-    supabase
-      .from("plans")
-      .select("id, name, type, semester_end_date, active")
-      .order("created_at", { ascending: false }),
-    supabase
-      .from("payments")
-      .select("id, provider, reference, amount, status, created_at")
-      .eq("customer_id", customerId)
-      .order("created_at", { ascending: false }),
-    supabase
-      .from("wallet_transactions")
-      .select("id, balance_type, txn_type, amount, balance_after, created_at")
-      .eq("customer_id", customerId)
-      .order("created_at", { ascending: false }),
-    supabase
-      .from("referrals")
-      .select("id, referred_id, status, reward_type, reward_value, created_at")
-      .eq("referrer_id", customerId)
-      .order("created_at", { ascending: false }),
-  ]);
-  if (!profile)
-    return data<UserDetailsData | null>(null, { headers, status: 404 });
-  const planById = new Map((plans ?? []).map((plan) => [plan.id, plan]));
-  const invoiceByOrder = new Map(
-    (invoices ?? []).map((invoice) => [invoice.order_id, invoice]),
-  );
+      .from('referrals')
+      .select('id, referred_id, status, reward_type, reward_value, created_at')
+      .eq('referrer_id', customerId)
+      .order('created_at', { ascending: false }),
+  ])
+  if (!profile) return data<UserDetailsData | null>(null, { headers, status: 404 })
+  const planById = new Map((plans ?? []).map((plan) => [plan.id, plan]))
+  const invoiceByOrder = new Map((invoices ?? []).map((invoice) => [invoice.order_id, invoice]))
   const stats = {
     totalOrders: orders?.length ?? 0,
-    completedOrders: (orders ?? []).filter(
-      (order) => order.status === "delivered",
-    ).length,
-    cancelledOrders: (orders ?? []).filter(
-      (order) => order.status === "cancelled",
-    ).length,
-    totalSpent: (invoices ?? [])
-      .filter((invoice) => invoice.status === "paid")
-      .reduce((sum, invoice) => sum + Number(invoice.amount), 0),
-    activeSubscriptions: (subscriptions ?? []).filter(
-      (subscription) => subscription.status === "active",
-    ).length,
-  };
+    completedOrders: (orders ?? []).filter((order) => order.status === 'delivered').length,
+    cancelledOrders: (orders ?? []).filter((order) => order.status === 'cancelled').length,
+    totalSpent:
+      (invoices ?? []).filter((invoice) => invoice.status === 'paid').reduce((sum, invoice) => sum + Number(invoice.amount), 0) +
+      sumSuccessfulPlanPayments(payments ?? []),
+    activeSubscriptions: (subscriptions ?? []).filter((subscription) => subscription.status === 'active').length,
+  }
   return data<UserDetailsData>(
     {
       profile: {
@@ -223,15 +182,13 @@ export async function loader({ request, params }: Route.LoaderArgs) {
         createdAt: order.created_at,
         customerCount: order.clothes_count_customer,
         vendorCount: order.clothes_count_vendor,
-        invoiceAmount: invoiceByOrder.get(order.id)
-          ? Number(invoiceByOrder.get(order.id)?.amount)
-          : null,
+        invoiceAmount: invoiceByOrder.get(order.id) ? Number(invoiceByOrder.get(order.id)?.amount) : null,
         invoiceStatus: invoiceByOrder.get(order.id)?.status ?? null,
       })),
       subscriptions: (subscriptions ?? []).map((subscription) => ({
         id: subscription.id,
-        planName: planById.get(subscription.plan_id)?.name ?? "Unknown plan",
-        type: planById.get(subscription.plan_id)?.type ?? "unknown",
+        planName: planById.get(subscription.plan_id)?.name ?? 'Unknown plan',
+        type: planById.get(subscription.plan_id)?.type ?? 'unknown',
         status: subscription.status,
         startDate: subscription.start_date,
         endDate: subscription.end_date,
@@ -243,6 +200,8 @@ export async function loader({ request, params }: Route.LoaderArgs) {
         amount: Number(payment.amount),
         status: payment.status,
         createdAt: payment.created_at,
+        succeededAt: payment.succeeded_at,
+        planName: payment.plan_id ? (planById.get(payment.plan_id)?.name ?? 'Subscription plan') : null,
       })),
       transactions: (transactions ?? []).map((transaction) => ({
         id: transaction.id,
@@ -257,8 +216,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
         referredId: referral.referred_id,
         status: referral.status,
         rewardType: referral.reward_type,
-        rewardValue:
-          referral.reward_value === null ? null : Number(referral.reward_value),
+        rewardValue: referral.reward_value === null ? null : Number(referral.reward_value),
         createdAt: referral.created_at,
       })),
       plans: (plans ?? []).map((plan) => ({
@@ -270,110 +228,84 @@ export async function loader({ request, params }: Route.LoaderArgs) {
       })),
     },
     { headers, status: 200 },
-  );
+  )
 }
 
 // eslint-disable-next-line react-refresh/only-export-components
 export async function action({ request, params }: Route.ActionArgs) {
-  const auth = await requireRole(request, "admin");
-  const customerId = params.id;
-  if (!auth || !customerId)
-    return data(
-      { ok: false, message: "Admin access required." },
-      { status: 403 },
-    );
-  const formData = await request.formData();
-  const intent = String(formData.get("intent") ?? "");
-  if (intent === "profile") {
+  const auth = await requireRole(request, 'admin')
+  const customerId = params.id
+  if (!auth || !customerId) return data({ ok: false, message: 'Admin access required.' }, { status: 403 })
+  const formData = await request.formData()
+  const intent = String(formData.get('intent') ?? '')
+  if (intent === 'profile') {
     const { error } = await auth.supabase
-      .from("profiles")
+      .from('profiles')
       .update({
-        name: String(formData.get("name") ?? "").trim() || null,
-        email: String(formData.get("email") ?? "").trim() || null,
-        phone: String(formData.get("phone") ?? "").trim() || null,
+        name: String(formData.get('name') ?? '').trim() || null,
+        email: String(formData.get('email') ?? '').trim() || null,
+        phone: String(formData.get('phone') ?? '').trim() || null,
       })
-      .eq("id", customerId);
-    return error
-      ? data({ ok: false, message: error.message }, { status: 400 })
-      : data({ ok: true, message: "Profile updated." });
+      .eq('id', customerId)
+    return error ? data({ ok: false, message: error.message }, { status: 400 }) : data({ ok: true, message: 'Profile updated.' })
   }
-  if (intent === "wallet") {
+  if (intent === 'wallet') {
     try {
-      const amount = Number(formData.get("amount"));
-      if (!Number.isInteger(amount))
-        return data(
-          { ok: false, message: "Wallet adjustments must use whole numbers." },
-          { status: 400 },
-        );
-      const result = await adjustWallet(customerId, "one_off", amount);
+      const amount = Number(formData.get('amount'))
+      if (!Number.isInteger(amount)) return data({ ok: false, message: 'Wallet adjustments must use whole numbers.' }, { status: 400 })
+      const result = await adjustWallet(customerId, 'one_off', amount)
       return data({
         ok: true,
         message: `${result.balanceType} wallet adjusted by ${money(result.amount)}.`,
-      });
+      })
     } catch (error) {
       return data(
         {
           ok: false,
-          message:
-            error instanceof Error
-              ? error.message
-              : "Wallet adjustment failed.",
+          message: error instanceof Error ? error.message : 'Wallet adjustment failed.',
         },
         { status: 400 },
-      );
+      )
     }
   }
-  if (intent === "subscription") {
-    const planId = String(formData.get("planId") ?? "");
-    const startDate = String(
-      formData.get("startDate") ?? new Date().toISOString().slice(0, 10),
-    );
-    const endDate = String(formData.get("endDate") ?? "") || null;
-    if (!planId)
-      return data({ ok: false, message: "Select a plan." }, { status: 400 });
+  if (intent === 'subscription') {
+    const planId = String(formData.get('planId') ?? '')
+    const startDate = String(formData.get('startDate') ?? new Date().toISOString().slice(0, 10))
+    const endDate = String(formData.get('endDate') ?? '') || null
+    if (!planId) return data({ ok: false, message: 'Select a plan.' }, { status: 400 })
     const { data: existing } = await auth.supabase
-      .from("subscriptions")
-      .select("id")
-      .eq("customer_id", customerId)
-      .eq("status", "active")
-      .maybeSingle();
-    if (existing)
-      return data(
-        { ok: false, message: "Customer already has an active subscription." },
-        { status: 409 },
-      );
-    const { error } = await auth.supabase
-      .from("subscriptions")
-      .insert({
-        customer_id: customerId,
-        plan_id: planId,
-        status: "active",
-        start_date: startDate,
-        end_date: endDate,
-      });
-    return error
-      ? data({ ok: false, message: error.message }, { status: 400 })
-      : data({ ok: true, message: "Subscription created." });
+      .from('subscriptions')
+      .select('id')
+      .eq('customer_id', customerId)
+      .eq('status', 'active')
+      .maybeSingle()
+    if (existing) return data({ ok: false, message: 'Customer already has an active subscription.' }, { status: 409 })
+    const { error } = await auth.supabase.from('subscriptions').insert({
+      customer_id: customerId,
+      plan_id: planId,
+      status: 'active',
+      start_date: startDate,
+      end_date: endDate,
+    })
+    return error ? data({ ok: false, message: error.message }, { status: 400 }) : data({ ok: true, message: 'Subscription created.' })
   }
-  return data({ ok: false, message: "Unknown action." }, { status: 400 });
+  return data({ ok: false, message: 'Unknown action.' }, { status: 400 })
 }
 
 function CopyField({ label, value }: { label: string; value: string | null }) {
   const copy = async () => {
     if (value && navigator.clipboard) {
-      await navigator.clipboard.writeText(value);
-      toast.success(`${label} copied`);
+      await navigator.clipboard.writeText(value)
+      toast.success(`${label} copied`)
     }
-  };
+  }
   return (
     <div>
-      <label className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-        {label}
-      </label>
+      <label className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}</label>
       <div className="mt-1 flex gap-2">
         <input
           name={label.toLowerCase()}
-          defaultValue={value ?? ""}
+          defaultValue={value ?? ''}
           className="h-10 min-w-0 flex-1 rounded-lg border border-slate-200 px-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
         />
         {value && (
@@ -388,60 +320,42 @@ function CopyField({ label, value }: { label: string; value: string | null }) {
         )}
       </div>
     </div>
-  );
+  )
 }
 
-function UserStats({ stats }: { stats: UserDetailsData["stats"] }) {
+function UserStats({ stats }: { stats: UserDetailsData['stats'] }) {
   const cards = [
-    ["Total orders", stats.totalOrders],
-    ["Completed", stats.completedOrders],
-    /* ['Cancelled', stats.cancelledOrders], */ [
-      "Total spent",
-      money(stats.totalSpent),
-    ],
-    ["Active subscriptions", stats.activeSubscriptions],
-  ] as const;
+    ['Total orders', stats.totalOrders],
+    ['Completed', stats.completedOrders],
+    ['Total spent', money(stats.totalSpent)],
+    ['Active subscriptions', stats.activeSubscriptions],
+  ] as const
   return (
     <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
       {cards.map(([label, value]) => (
-        <div
-          key={label}
-          className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm"
-        >
-          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">
-            {label}
-          </p>
+        <div key={label} className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">{label}</p>
           <p className="mt-2 text-xl font-bold text-slate-900">{value}</p>
         </div>
       ))}
     </section>
-  );
+  )
 }
 
-function ManualSubscription({
-  plans,
-  isSaving,
-}: {
-  plans: UserDetailsData["plans"];
-  isSaving: boolean;
-}) {
-  const today = dateInput(new Date());
-  const [planId, setPlanId] = useState("");
-  const [startDate, setStartDate] = useState(today);
-  const [endDate, setEndDate] = useState("");
+function ManualSubscription({ plans, isSaving }: { plans: UserDetailsData['plans']; isSaving: boolean }) {
+  const today = dateInput(new Date())
+  const [planId, setPlanId] = useState('')
+  const [startDate, setStartDate] = useState(today)
+  const [endDate, setEndDate] = useState('')
   const updatePlanDates = (nextPlanId: string, nextStartDate = startDate) => {
-    const plan = plans.find((candidate) => candidate.id === nextPlanId);
-    setPlanId(nextPlanId);
+    const plan = plans.find((candidate) => candidate.id === nextPlanId)
+    setPlanId(nextPlanId)
     if (!plan) {
-      setEndDate("");
-      return;
+      setEndDate('')
+      return
     }
-    setEndDate(
-      plan.type === "semester"
-        ? (plan.semesterEndDate ?? "")
-        : addMonth(nextStartDate),
-    );
-  };
+    setEndDate(plan.type === 'semester' ? (plan.semesterEndDate ?? '') : addMonth(nextStartDate))
+  }
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5">
       <h3 className="font-bold text-slate-900">Manual subscription</h3>
@@ -469,9 +383,8 @@ function ManualSubscription({
             type="date"
             value={startDate}
             onChange={(event) => {
-              setStartDate(event.target.value);
-              if (plans.find((plan) => plan.id === planId)?.type === "monthly")
-                setEndDate(addMonth(event.target.value));
+              setStartDate(event.target.value)
+              if (plans.find((plan) => plan.id === planId)?.type === 'monthly') setEndDate(addMonth(event.target.value))
             }}
             className="h-10 rounded-lg border border-slate-200 px-3 text-sm"
           />
@@ -492,43 +405,30 @@ function ManualSubscription({
         </button>
       </Form>
     </div>
-  );
+  )
 }
 
 export default function UserDetails() {
-  const details = useLoaderData<typeof loader>();
-  const actionData = useActionData<typeof action>();
-  const navigation = useNavigation();
-  if (!details)
-    return (
-      <div className="rounded-2xl border border-slate-200 bg-white p-8 text-sm text-slate-500">
-        Customer not found.
-      </div>
-    );
-  const isSaving = navigation.state !== "idle";
+  const details = useLoaderData<typeof loader>()
+  const actionData = useActionData<typeof action>()
+  const navigation = useNavigation()
+  if (!details) return <div className="rounded-2xl border border-slate-200 bg-white p-8 text-sm text-slate-500">Customer not found.</div>
+  const isSaving = navigation.state !== 'idle'
   return (
     <div className="space-y-6">
-      <Link
-        to="/admin/users"
-        className="inline-flex items-center gap-2 text-sm font-semibold text-slate-500 hover:text-brand-primary"
-      >
+      <Link to="/admin/users" className="inline-flex items-center gap-2 text-sm font-semibold text-slate-500 hover:text-brand-primary">
         <ArrowLeft size={15} />
         Back to users
       </Link>
       <header>
-        <h2 className="mt-2 text-3xl font-bold tracking-tight text-slate-900">
-          {details.profile.name ?? "Unnamed customer"}
-        </h2>
+        <h2 className="mt-2 text-3xl font-bold tracking-tight text-slate-900">{details.profile.name ?? 'Unnamed customer'}</h2>
         <p className="mt-1 text-sm text-slate-500">
-          {details.profile.qaffyId ?? "Qaffy ID unavailable"} || Joined{" "}
-          {date(details.profile.createdAt)}
+          {details.profile.qaffyId ?? 'Qaffy ID unavailable'} || Joined {date(details.profile.createdAt)}
         </p>
       </header>
       <UserStats stats={details.stats} />
       {actionData?.message && (
-        <p
-          className={`rounded-lg px-3 py-2 text-sm ${actionData.ok ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"}`}
-        >
+        <p className={`rounded-lg px-3 py-2 text-sm ${actionData.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
           {actionData.message}
         </p>
       )}
@@ -540,12 +440,10 @@ export default function UserDetails() {
         <Form method="post" className="grid gap-4 md:grid-cols-3">
           <input type="hidden" name="intent" value="profile" />
           <div>
-            <label className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-              Name
-            </label>
+            <label className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Name</label>
             <input
               name="name"
-              defaultValue={details.profile.name ?? ""}
+              defaultValue={details.profile.name ?? ''}
               className="mt-1 h-10 w-full rounded-lg border border-slate-200 px-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
             />
           </div>
@@ -553,10 +451,7 @@ export default function UserDetails() {
           <CopyField label="Phone" value={details.profile.phone} />
           <div className="md:col-span-3">
             <p className="text-xs text-slate-500">
-              Roles:{" "}
-              <strong className="capitalize text-slate-700">
-                {details.roles.join(", ") || "customer"}
-              </strong>
+              Roles: <strong className="capitalize text-slate-700">{details.roles.join(', ') || 'customer'}</strong>
             </p>
             <button
               type="submit"
@@ -572,27 +467,20 @@ export default function UserDetails() {
         <div className="rounded-2xl border border-brand-border bg-brand-soft p-5">
           <div className="mb-4 flex items-center gap-2">
             <WalletCards size={17} className="text-brand-primary" />
-            <h3 className="font-bold text-slate-900">Wallet balances</h3>
+            <h3 className="font-bold text-slate-900">Wallet balance</h3>
           </div>
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            <div>
-              <p className="text-xs text-slate-500">One-off</p>
-              <strong>{money(details.wallet.oneOff)}</strong>
-            </div>
-            <div>
-              <p className="text-xs text-slate-500">Subscription</p>
-              <strong>{money(details.wallet.subscription)}</strong>
-            </div>
+          <div className="text-sm">
+            <p className="text-xs text-slate-500">One-off balance</p>
+            <strong>{money(details.wallet.oneOff)}</strong>
           </div>
           <Form method="post" className="mt-5 space-y-3">
             <input type="hidden" name="intent" value="wallet" />
-            <input type="hidden" name="balanceType" value="one_off" />
             <input
               name="amount"
               type="number"
               step="1"
               inputMode="numeric"
-              placeholder="+ or - whole amount"
+              placeholder="Adjust one-off balance (+ or -)"
               required
               className="h-10 w-full rounded-lg border border-brand-border bg-white px-3 text-sm outline-none focus:border-brand-primary"
             />
@@ -627,16 +515,12 @@ export default function UserDetails() {
                   </td>
                   <td className="py-3 capitalize">{subscription.status}</td>
                   <td className="py-3">{subscription.startDate}</td>
-                  <td className="py-3">
-                    {subscription.endDate ?? "Open ended"}
-                  </td>
+                  <td className="py-3">{subscription.endDate ?? 'Open ended'}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-          {details.subscriptions.length === 0 && (
-            <p className="text-sm text-slate-500">No subscriptions recorded.</p>
-          )}
+          {details.subscriptions.length === 0 && <p className="text-sm text-slate-500">No subscriptions recorded.</p>}
         </div>
       </section>
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -657,29 +541,18 @@ export default function UserDetails() {
               {details.orders.map((order) => (
                 <tr key={order.id} className="border-t border-slate-100">
                   <td className="py-3 font-semibold">{order.id}</td>
-                  <td className="py-3 capitalize">
-                    {order.status.replaceAll("_", " ")}
-                  </td>
+                  <td className="py-3 capitalize">{order.status.replaceAll('_', ' ')}</td>
                   <td className="py-3">
-                    {order.customerCount} /{" "}
-                    {order.vendorCount ?? "Not confirmed"}
+                    {order.customerCount} / {order.vendorCount ?? 'Not confirmed'}
                   </td>
-                  <td className="py-3">
-                    {order.invoiceAmount === null
-                      ? "Not created"
-                      : money(order.invoiceAmount)}
-                  </td>
-                  <td className="py-3 capitalize">
-                    {order.invoiceStatus ?? "Pending"}
-                  </td>
+                  <td className="py-3">{order.invoiceAmount === null ? 'Not created' : money(order.invoiceAmount)}</td>
+                  <td className="py-3 capitalize">{order.invoiceStatus ?? 'Pending'}</td>
                   <td className="py-3">{date(order.createdAt)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-          {details.orders.length === 0 && (
-            <p className="text-sm text-slate-500">No orders recorded.</p>
-          )}
+          {details.orders.length === 0 && <p className="text-sm text-slate-500">No orders recorded.</p>}
         </div>
       </section>
       <section className="grid gap-5 lg:grid-cols-3">
@@ -690,14 +563,19 @@ export default function UserDetails() {
               <p className="text-sm text-slate-500">No payments recorded.</p>
             ) : (
               details.payments.map((payment) => (
-                <div
-                  key={payment.id}
-                  className="flex justify-between gap-3 border-b border-slate-100 pb-2 text-sm"
-                >
-                  <span>
-                    {payment.provider} | {payment.reference}
+                <div key={payment.id} className="flex justify-between gap-3 border-b border-slate-100 pb-2 text-sm">
+                  <span className="min-w-0">
+                    <span className="block font-medium text-slate-800">
+                      {payment.planName ? `${payment.planName} subscription` : 'Wallet top-up'}
+                    </span>
+                    <span className="block truncate text-xs text-slate-500">
+                      {payment.provider} | {payment.reference}
+                    </span>
+                    <span className="block text-xs text-slate-500">
+                      {payment.succeededAt ? `Paid ${date(payment.succeededAt)}` : `Created ${date(payment.createdAt)}`}
+                    </span>
                   </span>
-                  <strong>
+                  <strong className="shrink-0 text-right">
                     {money(payment.amount)} | {payment.status}
                   </strong>
                 </div>
@@ -709,21 +587,15 @@ export default function UserDetails() {
           <h3 className="font-bold text-slate-900">Wallet ledger</h3>
           <div className="mt-4 space-y-2">
             {details.transactions.length === 0 ? (
-              <p className="text-sm text-slate-500">
-                No wallet transactions recorded.
-              </p>
+              <p className="text-sm text-slate-500">No wallet transactions recorded.</p>
             ) : (
               details.transactions.map((transaction) => (
-                <div
-                  key={transaction.id}
-                  className="flex justify-between gap-3 border-b border-slate-100 pb-2 text-sm"
-                >
+                <div key={transaction.id} className="flex justify-between gap-3 border-b border-slate-100 pb-2 text-sm">
                   <span className="capitalize">
                     {transaction.txnType} | {transaction.balanceType}
                   </span>
                   <strong>
-                    {money(transaction.amount)} |{" "}
-                    {money(transaction.balanceAfter)}
+                    {money(transaction.amount)} | {money(transaction.balanceAfter)}
                   </strong>
                 </div>
               ))
@@ -737,16 +609,11 @@ export default function UserDetails() {
               <p className="text-sm text-slate-500">No referrals recorded.</p>
             ) : (
               details.referrals.map((referral) => (
-                <div
-                  key={referral.id}
-                  className="border-b border-slate-100 pb-2 text-sm"
-                >
+                <div key={referral.id} className="border-b border-slate-100 pb-2 text-sm">
                   <p className="font-semibold">{referral.referredId}</p>
                   <p className="capitalize text-slate-500">
                     {referral.status}
-                    {referral.rewardValue === null
-                      ? ""
-                      : ` | ${money(referral.rewardValue)}`}
+                    {referral.rewardValue === null ? '' : ` | ${money(referral.rewardValue)}`}
                   </p>
                 </div>
               ))
@@ -755,5 +622,5 @@ export default function UserDetails() {
         </div>
       </section>
     </div>
-  );
+  )
 }

@@ -6,12 +6,14 @@ import QaffyLogo from '../../components/QaffyLogo'
 import { requireRole } from '../../lib/auth.server'
 import { supabase } from '../../lib/supabase.client'
 
-// Route loaders must be exported from the layout module for React Router.
 // eslint-disable-next-line react-refresh/only-export-components
 export async function loader({ request }: Route.LoaderArgs) {
   const auth = await requireRole(request, 'logistics')
   if (!auth) {
-    return data({ orders: [], logisticsEvents: [], agent: { id: null, name: 'Logistics agent', email: null, qaffyId: null } }, { status: 200 })
+    return data(
+      { orders: [], logisticsEvents: [], agent: { id: null, name: 'Logistics agent', email: null, qaffyId: null } },
+      { status: 200 },
+    )
   }
 
   const { supabase: serverSupabase, headers, profile } = auth
@@ -41,10 +43,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   const profileMap = new Map<string, { name: string | null; uid: string | null }>()
 
   if (customerIds.length > 0) {
-    const { data: profiles } = await serverSupabase
-      .from('profiles')
-      .select('id, name, qaffy_id')
-      .in('id', customerIds)
+    const { data: profiles } = await serverSupabase.from('profiles').select('id, name, qaffy_id').in('id', customerIds)
 
     for (const profile of profiles ?? []) {
       if (profile.id) {
@@ -53,18 +52,15 @@ export async function loader({ request }: Route.LoaderArgs) {
     }
   }
 
-  const locationIds = [...new Set(
-    (ordersData ?? [])
-      .map((order) => order.pickup_location_id)
-      .filter((id): id is string => typeof id === 'string' && id.length > 0),
-  )]
+  const locationIds = [
+    ...new Set(
+      (ordersData ?? []).map((order) => order.pickup_location_id).filter((id): id is string => typeof id === 'string' && id.length > 0),
+    ),
+  ]
   const locationMap = new Map<string, string>()
 
   if (locationIds.length > 0) {
-    const { data: locations } = await serverSupabase
-      .from('pickup_locations')
-      .select('id, name')
-      .in('id', locationIds)
+    const { data: locations } = await serverSupabase.from('pickup_locations').select('id, name').in('id', locationIds)
 
     for (const location of locations ?? []) {
       if (location.id && location.name) {
@@ -77,7 +73,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     ...order,
     customer_name: profileMap.get(order.customer_id)?.name ?? 'Customer',
     customer_uid: profileMap.get(order.customer_id)?.uid ?? null,
-    pickup_location_name: order.pickup_location_id ? locationMap.get(order.pickup_location_id) ?? null : null,
+    pickup_location_name: order.pickup_location_id ? (locationMap.get(order.pickup_location_id) ?? null) : null,
   }))
 
   return data({ orders: expandedOrders, logisticsEvents, agent: agentProfile }, { headers, status: 200 })
@@ -129,7 +125,15 @@ export default function LogisticsLayout() {
             </div>
           </div>
 
-          <button type="button" onClick={() => void handleLogout()} aria-label="Log out" title="Log out" className="inline-flex items-center gap-1.5 text-sm font-semibold text-red-600 hover:text-red-700"><LogOut className="h-4 w-4" /></button>
+          <button
+            type="button"
+            onClick={() => void handleLogout()}
+            aria-label="Log out"
+            title="Log out"
+            className="inline-flex items-center gap-1.5 text-sm font-semibold text-red-600 hover:text-red-700"
+          >
+            <LogOut className="h-4 w-4" />
+          </button>
         </div>
       </header>
 
