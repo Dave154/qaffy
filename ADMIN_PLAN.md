@@ -109,7 +109,7 @@ These items are **not complete yet**:
 - Admin Categories and Rates now supports category creation, updates, activation, archival-safe deletion behavior, and customer/vendor pricing controls.
 - Admin Mismatch Review is a read-only accountability view with search, direction filtering, compact/truncated rows, a detail modal, and a modal-only link to the exact Admin order detail.
 - Admin Finance loads live payout summaries and settlement creation data from live orders and rates. Existing admin withdrawal entries in `admin_finance_transactions` remain included in profit calculations, but new withdrawal submissions are disabled until an actual payout flow is implemented. Settlement item snapshots preserve historical vendor rates and amounts.
-- Admin Finance can release eligible settlements, reconcile queued/processing transfers, retry failed/rejected transfers, and display provider references and actionable failure states. The server keeps settlements pending until confirmed transfer success.
+- Admin Finance immediately attempts payouts after settlement creation, handles Paystack transfer success/failure/reversal webhooks, revalidates settlement data through Realtime, and offers an icon refresh fallback. Processing transfers remain reconcilable; failed/rejected transfers remain retryable; reversed transfers require review. Settlements become paid only after confirmed success.
 - Finance now renders Paystack balance failures as `Unavailable` with an explanatory state instead of silently showing `₦0`.
 - Finance cards and payout panels have responsive containment; million-level amounts use compact notation such as `₦7.36M`.
 - Admin Plans supports plan edits and semester configuration settings.
@@ -293,11 +293,11 @@ Vendor-side finance preparation is complete; Admin payout execution remains the 
 
 ### Next Admin Workstream: Payout Validation and Rollout
 
-The trusted payout release, reconciliation, retry, transfer ledger, and audit path are implemented. Do not enable production transfers until the remaining checks below pass:
+The trusted payout release, reconciliation, retry, transfer ledger, and audit path are implemented. Settlement creation immediately attempts each payout. Do not enable production transfers until the remaining checks below pass:
 
 - Confirm the approved vendor payout-rate formula; do not change the implemented rate-card calculation without product sign-off.
-- Complete repeatable fake-provider tests for persisted success, rejection, timeout/unknown, duplicate request, reconciliation by transfer code and reference, reversal, database failure, and retry-after-confirmed-failure.
-- Apply and verify the payout-transfer migration in staging, then run Paystack test-mode transfers and reconciliation against a verified test recipient.
+- Add disposable-Postgres integration coverage for the production SQL adapter; current transactional fake-store workflow tests cover persisted outcomes, duplicate prevention, reference reuse, reconciliation by code/reference, reversal, database/audit rollback, and retry-after-failure, but do not execute the SQL adapter.
+- Staging migration verification and a Paystack test-mode ₦200 transfer have passed. The test transfer was confirmed by Paystack and the local ledger; an asynchronous provider-pending reconciliation was not exercised against Paystack.
 - Keep settlement reversal and partial payment disabled until explicitly approved.
 
 #### Payout Error Handling Contract

@@ -1,6 +1,7 @@
 import { CheckCircle2, Loader2, Plus, ShieldCheck } from 'lucide-react'
 import { createClient } from '@supabase/supabase-js'
 import { data, useFetcher, useLoaderData } from 'react-router'
+import { useEffect, useRef } from 'react'
 import type { Route } from './+types/Admins'
 import type { Database } from '../../../types/database.types'
 import { requireRole } from '../../../lib/auth.server'
@@ -122,6 +123,12 @@ export default function Admins() {
   const { admins } = useLoaderData<typeof loader>()
   const fetcher = useFetcher<typeof action>()
   const isSaving = fetcher.state !== 'idle'
+  const emailInput = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (fetcher.state !== 'idle' || !fetcher.data || !('ok' in fetcher.data) || !fetcher.data.ok) return
+    emailInput.current?.form?.reset()
+  }, [fetcher.data, fetcher.state])
 
   return (
     <div className="space-y-6">
@@ -150,6 +157,7 @@ export default function Admins() {
           <label className="min-w-0 flex-1">
             <span className="sr-only">Admin email address</span>
             <input
+              ref={emailInput}
               name="email"
               type="email"
               required

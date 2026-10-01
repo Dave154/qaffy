@@ -2,6 +2,7 @@ import { sql } from '@/lib/db.server'
 import type { WalletBalanceType } from '@/types/database.types'
 import type { TransactionSql } from 'postgres'
 import { sendCustomerNotification } from './notifications.server'
+import { getSubscriptionWeekStart } from './subscription-week'
 
 class InsufficientBalanceError extends Error {
   constructor() {
@@ -425,9 +426,7 @@ export async function finalizeVendorOrder(
 
     let invoiceAmount = Math.round(finalAmount * 100) / 100
     if (order.is_subscription_order) {
-      const weekStart = new Date()
-      weekStart.setHours(0, 0, 0, 0)
-      weekStart.setDate(weekStart.getDate() - weekStart.getDay())
+      const weekStart = getSubscriptionWeekStart()
       const [subscriptionPlan] = await tx`
         select p.weekly_limit
         from subscriptions s
@@ -437,6 +436,7 @@ export async function finalizeVendorOrder(
           and (s.end_date is null or s.end_date >= current_date)
         order by s.created_at desc
         limit 1
+        for update of s
       `
       const [usage] = await tx`
         select coalesce(sum(subscription_units_applied), 0) as used_units
@@ -445,7 +445,7 @@ export async function finalizeVendorOrder(
           and is_subscription_order = true
           and subscription_units_applied is not null
           and status <> 'cancelled'
-          and created_at >= ${weekStart}
+          and subscription_units_applied_at >= ${weekStart}
           and id <> ${orderId}
       `
       const remainingUnits = Math.max(0, Number(subscriptionPlan?.weekly_limit ?? 0) - Number(usage?.used_units ?? 0))
@@ -469,7 +469,11 @@ export async function finalizeVendorOrder(
         invoiceAmount += (quantity - coveredQuantity) * unitPrice
       }
       invoiceAmount = Math.round(invoiceAmount * 100) / 100
-      await tx`update orders set subscription_units_applied = ${subscriptionUnitsApplied} where id = ${orderId}`
+      await tx`
+        update orders
+        set subscription_units_applied = ${subscriptionUnitsApplied}, subscription_units_applied_at = now()
+        where id = ${orderId}
+      `
     }
 
     await tx`
@@ -585,7 +589,12 @@ export async function creditWallet(customerId: string, balanceType: WalletBalanc
       set one_off_balance = ${oneOffBalance}, subscription_balance = ${subscriptionBalance}, updated_at = ${new Date()}
       where customer_id = ${customerId}
     `
-    const [payment] = await tx`update payments set status = 'success' where reference = ${paymentReference} returning id`
+    const [payment] = await tx`
+      update payments
+      set status = 'success', succeeded_at = coalesce(succeeded_at, now())
+      where reference = ${paymentReference}
+      returning id
+    `
     if (subscriptionCredit > 0) {
       await tx`
         insert into wallet_transactions (customer_id, balance_type, txn_type, amount, balance_after, related_payment_id)

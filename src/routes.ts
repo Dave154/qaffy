@@ -2,6 +2,7 @@ import { type RouteConfig, index, layout, prefix, route } from '@react-router/de
 
 export default [
   route('api/paystack/webhook', 'routes/paystack-webhook.ts'),
+  route('api/paystack-webhook', 'routes/paystack-webhook.ts', { id: 'paystack-webhook-legacy' }),
   route('api/referrals/attribute', 'routes/referral-attribution.ts'),
   route('api/push-subscriptions', 'routes/push-subscriptions.ts'),
   route('api/notifications/subscriptions', 'routes/subscription-notifications.ts'),

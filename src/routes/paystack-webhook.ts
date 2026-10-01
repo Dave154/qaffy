@@ -3,6 +3,8 @@ import { data } from 'react-router'
 import { sql } from '../lib/db.server'
 import { activateSubscriptionFromPayment, creditWallet } from '../lib/wallet.server'
 import { sendCustomerNotification } from '../lib/notifications.server'
+import { processPaystackTransferWebhook } from '../lib/payouts.server'
+import { TransferWebhookValidationError } from '../lib/payout-webhooks'
 
 // Paystack calls this endpoint independently of the customer's browser.
 export async function action({ request }: { request: Request }) {
@@ -16,19 +18,33 @@ export async function action({ request }: { request: Request }) {
     signature.length === expectedSignature.length && timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))
   if (!signaturesMatch) return data({ ok: false, message: 'Invalid webhook signature.' }, { status: 401 })
 
-  let payload: { event?: string; data?: { reference?: string; amount?: number; status?: string } }
+  let payload: { event?: string; data?: Record<string, unknown> }
   try {
     payload = JSON.parse(rawBody) as typeof payload
   } catch {
     return data({ ok: false, message: 'Invalid webhook payload.' }, { status: 400 })
   }
 
-  if (payload.event !== 'charge.success' || payload.data?.status !== 'success' || !payload.data.reference) {
+  if (payload.event?.startsWith('transfer.')) {
+    try {
+      const result = await processPaystackTransferWebhook(payload as Parameters<typeof processPaystackTransferWebhook>[0])
+      return data(result.handled ? { ok: true, ...result } : { ok: true, ignored: true, reason: result.reason }, { status: 200 })
+    } catch (error) {
+      if (error instanceof TransferWebhookValidationError) {
+        return data({ ok: false, message: error.message }, { status: 409 })
+      }
+      console.error('Paystack transfer webhook processing failed:', error)
+      return data({ ok: false, message: 'Transfer status could not be recorded.' }, { status: 500 })
+    }
+  }
+
+  const paymentData = payload.data
+  const reference = typeof paymentData?.reference === 'string' ? paymentData.reference : ''
+  if (payload.event !== 'charge.success' || paymentData?.status !== 'success' || !reference) {
     return data({ ok: true, ignored: true }, { status: 200 })
   }
 
-  const reference = payload.data.reference
-  const amountInKobo = Number(payload.data.amount ?? 0)
+  const amountInKobo = Number(paymentData.amount ?? 0)
   const [payment] = await sql`
     select customer_id, amount, status, plan_id
     from payments

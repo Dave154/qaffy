@@ -336,6 +336,7 @@ function OrderReviewDialog({
   onClaim: () => void
   saving: boolean
 }) {
+  const [isConfirmationOpen, setIsConfirmationOpen] = useState(false)
   const customerItemCount = order.items.reduce((total, item) => total + item.quantity, 0)
   const formattedDate = (value: string | null) => (value ? new Date(value).toLocaleString() : 'Not recorded')
 
@@ -537,12 +538,67 @@ function OrderReviewDialog({
         {(isPreClaim || canEdit) && (
           <button
             type="button"
-            onClick={isPreClaim ? onClaim : onSave}
+            onClick={isPreClaim ? onClaim : () => setIsConfirmationOpen(true)}
             disabled={saving || (!isPreClaim && hasMismatch && !notes.trim())}
             className="mt-6 w-full rounded-2xl bg-brand-primary px-4 py-3 font-semibold text-white shadow-sm transition hover:bg-brand-primary-hover hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
           >
             {saving ? (isPreClaim ? 'Claiming...' : 'Confirming count...') : isPreClaim ? 'Claim order' : 'Confirm final count'}
           </button>
+        )}
+        {isConfirmationOpen && !isPreClaim && (
+          <div
+            className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 p-4"
+            role="presentation"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget && !saving) setIsConfirmationOpen(false)
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape' && !saving) setIsConfirmationOpen(false)
+            }}
+          >
+            <section
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="confirm-vendor-count-title"
+              aria-describedby="confirm-vendor-count-description"
+              onMouseDown={(event) => event.stopPropagation()}
+              className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl sm:p-6"
+            >
+              <h4 id="confirm-vendor-count-title" className="text-lg font-bold text-slate-900">
+                Are you sure you want to confirm this count?
+              </h4>
+              <p id="confirm-vendor-count-description" className="mt-2 text-sm text-slate-600">
+                Confirming finalizes the received quantities and updates the customer&apos;s invoice. You won&apos;t be able to edit this review afterward.
+              </p>
+              <div className="mt-4 grid grid-cols-2 gap-3 rounded-xl bg-slate-50 p-3">
+                <Detail label="Customer declared" value={customerItemCount} />
+                <Detail label="Vendor received" value={receivedTotal} />
+              </div>
+              {hasMismatch && (
+                <p className="mt-3 text-xs font-medium text-amber-700">
+                  The count difference and your note will be shared with the customer.
+                </p>
+              )}
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsConfirmationOpen(false)}
+                  disabled={saving}
+                  className="h-10 rounded-lg border border-slate-200 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Go back
+                </button>
+                <button
+                  type="button"
+                  onClick={onSave}
+                  disabled={saving || (hasMismatch && !notes.trim())}
+                  className="h-10 rounded-lg bg-brand-primary px-4 text-sm font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {saving ? 'Confirming...' : 'Yes, confirm count'}
+                </button>
+              </div>
+            </section>
+          </div>
         )}
       </div>
     </div>

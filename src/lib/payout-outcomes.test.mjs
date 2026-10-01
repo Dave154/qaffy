@@ -103,7 +103,7 @@ test('attempts every new settlement once and preserves each payout outcome', asy
   ])
   assert.deepEqual(outcomes.map(({ status }) => status), ['success', 'processing'])
   assert.equal(outcomes[1].reference, 'qsettle-b')
-  assert.equal(summarizeSettlementPayouts(outcomes), 'Created 2 settlements; 1 payout confirmed, 1 processing.')
+  assert.equal(summarizeSettlementPayouts(outcomes), 'Created 2 settlements; 1 payout confirmed, 1 pending confirmation.')
 })
 
 test('treats unexpected payout errors as unknown and continues the batch', async () => {

@@ -48,7 +48,7 @@ export function summarizeSettlementPayouts(outcomes: readonly CreatedSettlementP
   const reversed = outcomes.filter((outcome) => outcome.status === 'reversed').length
   const details = [`${paid} payout${paid === 1 ? '' : 's'} confirmed`]
 
-  if (processing > 0) details.push(`${processing} processing`)
+  if (processing > 0) details.push(`${processing} pending confirmation`)
   if (failed > 0) details.push(`${failed} need attention`)
   if (reversed > 0) details.push(`${reversed} reversed for review`)
 

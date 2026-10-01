@@ -467,27 +467,20 @@ export default function UserDetails() {
         <div className="rounded-2xl border border-brand-border bg-brand-soft p-5">
           <div className="mb-4 flex items-center gap-2">
             <WalletCards size={17} className="text-brand-primary" />
-            <h3 className="font-bold text-slate-900">Wallet balances</h3>
+            <h3 className="font-bold text-slate-900">Wallet balance</h3>
           </div>
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            <div>
-              <p className="text-xs text-slate-500">One-off</p>
-              <strong>{money(details.wallet.oneOff)}</strong>
-            </div>
-            <div>
-              <p className="text-xs text-slate-500">Subscription</p>
-              <strong>{money(details.wallet.subscription)}</strong>
-            </div>
+          <div className="text-sm">
+            <p className="text-xs text-slate-500">One-off balance</p>
+            <strong>{money(details.wallet.oneOff)}</strong>
           </div>
           <Form method="post" className="mt-5 space-y-3">
             <input type="hidden" name="intent" value="wallet" />
-            <input type="hidden" name="balanceType" value="one_off" />
             <input
               name="amount"
               type="number"
               step="1"
               inputMode="numeric"
-              placeholder="+ or - whole amount"
+              placeholder="Adjust one-off balance (+ or -)"
               required
               className="h-10 w-full rounded-lg border border-brand-border bg-white px-3 text-sm outline-none focus:border-brand-primary"
             />

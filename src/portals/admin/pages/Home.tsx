@@ -1024,15 +1024,16 @@ export default function Home() {
               <p className="text-sm text-slate-500">No vendors registered.</p>
             ) : (
               recentVendors.map((vendor) => (
-                <div
+                <Link
                   key={vendor.id}
+                  to={`/admin/partners/vendor/${vendor.id}`}
                   className="flex items-center justify-between gap-3 border-b border-slate-100 pb-3 last:border-0 last:pb-0"
                 >
-                  <p className="truncate text-sm font-semibold text-slate-800">{vendor.name}</p>
+                  <p className="truncate text-sm font-semibold text-slate-800 transition-colors hover:text-brand-primary">{vendor.name}</p>
                   <span className="shrink-0 rounded-full bg-brand-soft px-2 py-1 text-[10px] font-semibold capitalize text-brand-primary">
                     {vendor.status}
                   </span>
-                </div>
+                </Link>
               ))
             )}
           </div>
@@ -1047,16 +1048,17 @@ export default function Home() {
               <p className="text-sm text-slate-500">No customers registered.</p>
             ) : (
               recentCustomers.map((customer) => (
-                <div
+                <Link
                   key={customer.id}
+                  to={`/admin/users/${customer.id}`}
                   className="flex items-center justify-between gap-3 border-b border-slate-100 pb-3 last:border-0 last:pb-0"
                 >
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-slate-800">{customer.name}</p>
+                    <p className="truncate text-sm font-semibold text-slate-800 transition-colors hover:text-brand-primary">{customer.name}</p>
                     <p className="truncate text-xs text-slate-500">{customer.email ?? 'Email unavailable'}</p>
                   </div>
                   <span className="shrink-0 text-xs font-semibold text-slate-500">Customer</span>
-                </div>
+                </Link>
               ))
             )}
           </div>

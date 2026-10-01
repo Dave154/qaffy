@@ -18,6 +18,7 @@ playwright-report
 test-results
 *.local
 supabase/.temp/
+.kilo/worktrees/
 
 # Environment variables
 .env

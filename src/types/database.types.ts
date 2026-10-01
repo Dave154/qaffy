@@ -177,6 +177,7 @@ export interface Order {
   clothes_count_vendor: number | null
   clothes_count_vendor_units: number | null
   subscription_units_applied: number | null
+  subscription_units_applied_at: string | null
   status: OrderStatus
   pickup_otp: string | null
   delivery_otp: string | null

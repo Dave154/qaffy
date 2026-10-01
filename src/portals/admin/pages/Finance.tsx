@@ -1,10 +1,11 @@
-import { ArrowRight, Banknote, CheckCircle2, CircleDollarSign, Eye, Loader2, MoreVertical, Plus, TrendingUp, X } from 'lucide-react'
+import { ArrowRight, Banknote, CheckCircle2, CircleDollarSign, Eye, Loader2, MoreVertical, Plus, RefreshCw, TrendingUp, X } from 'lucide-react'
 import { createPortal } from 'react-dom'
-import { data, useFetcher, useLoaderData } from 'react-router'
-import { useEffect, useState } from 'react'
+import { data, useFetcher, useLoaderData, useRevalidator } from 'react-router'
+import { useEffect, useRef, useState } from 'react'
 import type { Route } from './+types/Finance'
 import { requireRole } from '../../../lib/auth.server'
 import { sql } from '../../../lib/db.server'
+import { toast } from '../../../lib/toast'
 import { buildSettlementVendorPreviews, getRateValueFromItem } from '../../../lib/rate-card'
 import type { SettlementCandidateItem, SettlementCandidateOrder } from '../../../lib/rate-card'
 import { reconcileSettlement, releaseSettlement } from '../../../lib/payouts.server'
@@ -12,6 +13,7 @@ import { createBulkSettlements } from '../../../lib/settlements.server'
 import { releaseCreatedSettlements, summarizeSettlementPayouts } from '../../../lib/settlement-payouts'
 import AdminSideDrawer from '../../../components/AdminSideDrawer'
 import { sumSuccessfulPlanPayments } from '../../../lib/revenue-reporting'
+import { supabase } from '../../../lib/supabase.client'
 
 type SettlementRow = {
   id: string
@@ -355,10 +357,15 @@ export async function action({ request }: Route.ActionArgs) {
       intent === 'release-settlement'
         ? await releaseSettlement(settlementId, auth.profile.id)
         : await reconcileSettlement(settlementId, auth.profile.id)
+    if (result.status === 'processing')
+      return data(
+        { ok: true, message: 'Payout pending confirmation.', payoutStatus: result.status, reference: result.reference ?? null },
+        { headers, status: 200 },
+      )
     if (!result.ok)
       return data(
         { error: result.message, payoutStatus: result.status, reference: result.reference ?? null },
-        { headers, status: result.status === 'processing' ? 202 : result.status === 'rejected' ? 400 : 502 },
+        { headers, status: result.status === 'rejected' ? 400 : 502 },
       )
     return data(
       { ok: true, message: result.message, payoutStatus: result.status, reference: result.reference ?? null },
@@ -483,7 +490,8 @@ export async function action({ request }: Route.ActionArgs) {
         {
           ok: true,
           message: summarizeSettlementPayouts(payoutOutcomes),
-          payoutOutcomes: payoutOutcomes.map(({ vendorId, vendorName, status, message, reference }) => ({
+          payoutOutcomes: payoutOutcomes.map(({ settlementId, vendorId, vendorName, status, message, reference }) => ({
+            settlementId,
             vendorId,
             vendorName,
             status,
@@ -508,6 +516,7 @@ export async function action({ request }: Route.ActionArgs) {
 
 export default function Finance() {
   const { summary, vendors, settlements } = useLoaderData<typeof loader>()
+  const revalidator = useRevalidator()
   const vendorsWithBalance = vendors.filter((vendor) => vendor.vendorPayout > 0)
   const owedVendorCount = vendorsWithBalance.length
   const fetcher = useFetcher<typeof action>()
@@ -517,8 +526,15 @@ export default function Finance() {
   const [endDate, setEndDate] = useState(new Date().toISOString().slice(0, 10))
   const [selectedVendorIds, setSelectedVendorIds] = useState<string[]>([])
   const [selectedSettlement, setSelectedSettlement] = useState<SettlementRow | null>(null)
-  const [openSettlementMenu, setOpenSettlementMenu] = useState<{ settlement: SettlementRow; top: number; left: number } | null>(null)
+  const [openSettlementMenu, setOpenSettlementMenu] = useState<{
+    settlement: SettlementRow
+    anchor: HTMLButtonElement
+    top: number
+    left: number
+  } | null>(null)
   const [isCreateDrawerOpen, setIsCreateDrawerOpen] = useState(false)
+  const handledPayoutResponse = useRef<unknown>(null)
+  const handledCreationResponse = useRef<unknown>(null)
 
   const dateRangeIsValid = Boolean(startDate && endDate && new Date(startDate) <= new Date(endDate))
   const previewData =
@@ -555,6 +571,7 @@ export default function Finance() {
           payoutOutcomes: Array<{
             vendorId: string
             vendorName: string
+            settlementId: string
             status: 'success' | 'processing' | 'failed' | 'reversed' | 'rejected'
             message: string
             reference: string | null
@@ -578,39 +595,90 @@ export default function Finance() {
     !createSucceeded
 
   useEffect(() => {
+    const supabaseClient = supabase
+    if (!supabaseClient) return
+    const refreshFinance = () => revalidator.revalidate()
+    const channel = supabaseClient
+      .channel('admin-finance-settlement-updates')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'vendor_settlements' }, refreshFinance)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'vendor_settlement_transfers' }, refreshFinance)
+      .subscribe()
+    return () => {
+      void supabaseClient.removeChannel(channel)
+    }
+  }, [revalidator.revalidate])
+
+  useEffect(() => {
     if (!isCreateDrawerOpen || !startDate || !endDate || !dateRangeIsValid) return
     previewFetcher.submit({ intent: 'preview-bulk-settlement', periodStart: startDate, periodEnd: endDate }, { method: 'post' })
   }, [isCreateDrawerOpen, startDate, endDate, dateRangeIsValid])
 
+  useEffect(() => {
+    if (fetcher.state !== 'idle' || !fetcher.data || fetcher.data === handledPayoutResponse.current) return
+    handledPayoutResponse.current = fetcher.data
+    if ('error' in fetcher.data) {
+      toast.error(String(fetcher.data.error))
+      return
+    }
+    if ('message' in fetcher.data) {
+      const message = String(fetcher.data.message)
+      if ('payoutStatus' in fetcher.data && fetcher.data.payoutStatus === 'processing') {
+        toast(message, { description: 'It will remain pending until Paystack confirms it.', duration: 8000 })
+      } else {
+        toast.success(message)
+      }
+    }
+  }, [fetcher.data, fetcher.state])
+
+  useEffect(() => {
+    if (settlementFetcher.state !== 'idle' || !creationResult || settlementFetcher.data === handledCreationResponse.current) return
+    handledCreationResponse.current = settlementFetcher.data
+    const hasAttentionItems = creationResult.payoutOutcomes.some((outcome) => outcome.status !== 'success')
+    if (hasAttentionItems) toast(creationResult.message, { duration: 8000 })
+    else toast.success(creationResult.message)
+
+    for (const outcome of creationResult.payoutOutcomes) {
+      if (outcome.status === 'processing') {
+        toast(`Payout pending: ${outcome.vendorName}`, {
+          description: 'Paystack has not confirmed it yet.',
+          duration: 15000,
+          action: {
+            label: 'Reconcile',
+            onClick: () => fetcher.submit({ intent: 'reconcile-settlement', settlementId: outcome.settlementId }, { method: 'post' }),
+          },
+        })
+      } else if (outcome.status === 'failed' || outcome.status === 'rejected' || outcome.status === 'reversed') {
+        toast.error(`${outcome.vendorName}: ${outcome.message}`, { duration: 10000 })
+      }
+    }
+  }, [creationResult, fetcher, settlementFetcher.data, settlementFetcher.state])
+
+  useEffect(() => {
+    if (!openSettlementMenu) return
+    const reposition = () => {
+      if (!openSettlementMenu.anchor.isConnected) {
+        setOpenSettlementMenu(null)
+        return
+      }
+      const bounds = openSettlementMenu.anchor.getBoundingClientRect()
+      const menuHeight = Math.min(240, window.innerHeight - 16)
+      const top =
+        bounds.bottom + menuHeight + 8 <= window.innerHeight
+          ? window.scrollY + bounds.bottom + 4
+          : window.scrollY + Math.max(8, bounds.top - menuHeight - 4)
+      const left = window.scrollX + Math.max(8, Math.min(bounds.right - 208, window.innerWidth - 216))
+      setOpenSettlementMenu((current) => (current?.anchor === openSettlementMenu.anchor ? { ...current, top, left } : current))
+    }
+    window.addEventListener('scroll', reposition, true)
+    window.addEventListener('resize', reposition)
+    return () => {
+      window.removeEventListener('scroll', reposition, true)
+      window.removeEventListener('resize', reposition)
+    }
+  }, [openSettlementMenu])
+
   return (
     <div className="space-y-6">
-      {fetcher.state === 'idle' && fetcher.data && 'error' in fetcher.data && (
-        <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
-          {fetcher.data.error}
-        </div>
-      )}
-      {fetcher.state === 'idle' && fetcher.data && 'message' in fetcher.data && (
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
-          {String(fetcher.data.message)}
-        </div>
-      )}
-      {createSucceeded && creationResult && (
-        <div
-          role={creationResult.payoutOutcomes.some((outcome) => outcome.status !== 'success') ? 'alert' : 'status'}
-          className={`rounded-xl border p-3 text-sm font-medium ${creationResult.payoutOutcomes.some((outcome) => ['failed', 'rejected', 'reversed'].includes(outcome.status)) ? 'border-red-200 bg-red-50 text-red-700' : creationResult.payoutOutcomes.some((outcome) => outcome.status === 'processing') ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}
-        >
-          <p>{creationResult.message}</p>
-          {creationResult.payoutOutcomes
-            .filter((outcome) => outcome.status !== 'success')
-            .map((outcome) => (
-              <p key={outcome.vendorId} className="mt-1 font-normal">
-                {outcome.vendorName}: {outcome.message}
-                {outcome.reference ? ` Reference: ${outcome.reference}` : ''}
-              </p>
-            ))}
-        </div>
-      )}
-
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <div className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <p className="truncate text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Paystack balance</p>
@@ -869,28 +937,40 @@ export default function Finance() {
 
       <section className="grid gap-5">
         <div className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-4 flex items-center justify-between">
+          <div className="mb-4 flex items-center justify-between gap-3">
             <h3 className="text-lg font-bold text-slate-900">Settlement history</h3>
-            <span className="text-sm text-slate-500">{settlements.length} records</span>
+            <div className="flex shrink-0 items-center gap-2">
+              <span className="text-sm text-slate-500">{settlements.length} records</span>
+              <button
+                type="button"
+                aria-label="Refresh Finance data"
+                title="Refresh Finance data"
+                onClick={() => revalidator.revalidate()}
+                disabled={revalidator.state !== 'idle'}
+                className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-brand-primary hover:text-brand-primary disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <RefreshCw size={16} className={revalidator.state !== 'idle' ? 'animate-spin' : ''} />
+              </button>
+            </div>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1040px] table-fixed text-left">
+            <table className="w-full min-w-[900px] table-fixed text-left">
               <colgroup>
-                <col style={{ width: '16%' }} />
-                <col style={{ width: '20%' }} />
-                <col style={{ width: '22%' }} />
-                <col style={{ width: '12%' }} />
+                <col style={{ width: '15%' }} />
+                <col style={{ width: '18%' }} />
+                <col style={{ width: '21%' }} />
+                <col style={{ width: '10%' }} />
                 <col style={{ width: '13%' }} />
-                <col style={{ width: '17%' }} />
+                <col style={{ width: '23%' }} />
               </colgroup>
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50 text-[10px] uppercase tracking-[0.12em] text-slate-500">
-                  <th className="px-4 py-3 font-semibold">Vendor</th>
-                  <th className="px-4 py-3 font-semibold">Created</th>
-                  <th className="px-4 py-3 font-semibold">Period</th>
-                  <th className="px-4 py-3 font-semibold">Amount</th>
-                  <th className="px-4 py-3 font-semibold">Status</th>
-                  <th className="px-3 py-3 font-semibold">Payout action</th>
+                  <th className="px-2 py-3 font-semibold">Vendor</th>
+                  <th className="px-2 py-3 font-semibold">Created</th>
+                  <th className="px-2 py-3 font-semibold">Period</th>
+                  <th className="px-2 py-3 font-semibold">Amount</th>
+                  <th className="px-2 py-3 font-semibold">Status</th>
+                  <th className="px-2 py-3 font-semibold">Payout action</th>
                 </tr>
               </thead>
               <tbody>
@@ -915,22 +995,26 @@ export default function Finance() {
                       }}
                       className="cursor-pointer border-b border-slate-100 outline-none transition-colors hover:bg-slate-50 focus-visible:bg-slate-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-primary last:border-0"
                     >
-                      <td className="truncate px-4 py-4 text-sm font-semibold text-slate-900">{settlement.vendorName}</td>
-                      <td className="whitespace-nowrap px-4 py-4 text-sm text-slate-600">{formatTimestamp(settlement.createdAt)}</td>
-                      <td className="whitespace-nowrap px-4 py-4 text-sm text-slate-600">
+                      <td className="truncate px-2 py-4 text-sm font-semibold text-slate-900">{settlement.vendorName}</td>
+                      <td className="whitespace-nowrap px-2 py-4 text-sm text-slate-600">{formatTimestamp(settlement.createdAt)}</td>
+                      <td className="px-2 py-4 text-sm text-slate-600">
                         {formatDate(settlement.periodStart)} — {formatDate(settlement.periodEnd)}
                       </td>
-                      <td className="whitespace-nowrap px-4 py-4 text-sm font-semibold text-slate-900">{money(settlement.amountDue)}</td>
-                      <td className="px-4 py-4">
+                      <td className="whitespace-nowrap px-2 py-4 text-sm font-semibold text-slate-900">{money(settlement.amountDue)}</td>
+                      <td className="px-2 py-4">
                         <div className="flex items-center gap-2 whitespace-nowrap">
                           <span
                             title={settlement.transferFailureReason ?? undefined}
-                            className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${settlement.status === 'paid' || settlement.transferStatus === 'success' ? 'bg-emerald-50 text-emerald-700' : !settlement.eligibleForPayout ? 'bg-orange-50 text-orange-700' : settlement.transferStatus === 'failed' || settlement.transferStatus === 'rejected' || settlement.transferStatus === 'reversed' ? 'bg-red-50 text-red-700' : settlement.transferStatus === 'processing' ? 'bg-blue-50 text-blue-700' : 'bg-amber-50 text-amber-700'}`}
+                            className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${settlement.transferStatus === 'reversed' || settlement.transferStatus === 'failed' || settlement.transferStatus === 'rejected' ? 'bg-red-50 text-red-700' : settlement.status === 'paid' || settlement.transferStatus === 'success' ? 'bg-emerald-50 text-emerald-700' : !settlement.eligibleForPayout ? 'bg-orange-50 text-orange-700' : settlement.transferStatus === 'processing' || settlement.transferStatus === 'queued' ? 'bg-blue-50 text-blue-700' : 'bg-amber-50 text-amber-700'}`}
                           >
-                            {settlement.status === 'paid'
+                            {settlement.transferStatus === 'reversed'
+                              ? 'reversed · review'
+                              : settlement.status === 'paid'
                               ? 'paid'
                               : settlement.status === 'pending' && !settlement.eligibleForPayout
-                                ? 'awaiting customer payment'
+                                ? 'payment pending'
+                                : settlement.transferStatus === 'processing' || settlement.transferStatus === 'queued'
+                                  ? 'pending'
                                 : (settlement.transferStatus ?? 'unreleased')}
                           </span>
                           {settlement.status === 'pending' && settlement.eligibleForPayout && !settlement.payoutAccountReady && (
@@ -938,9 +1022,11 @@ export default function Finance() {
                           )}
                         </div>
                       </td>
-                      <td className="px-3 py-3" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
+                      <td className="px-2 py-3" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
                         <div className="flex items-center justify-between gap-2">
-                          {settlement.status === 'pending' &&
+                          {settlement.transferStatus === 'reversed' ? (
+                            <span className="text-xs font-semibold text-red-700">Review reversal</span>
+                          ) : settlement.status === 'pending' &&
                           (settlement.transferStatus === 'queued' || settlement.transferStatus === 'processing') ? (
                             <fetcher.Form method="post">
                               <input type="hidden" name="intent" value="reconcile-settlement" />
@@ -948,13 +1034,11 @@ export default function Finance() {
                               <button
                                 type="submit"
                                 disabled={fetcher.state !== 'idle'}
-                                className="inline-flex h-9 items-center justify-center rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                className="inline-flex h-9 items-center justify-center whitespace-nowrap rounded-lg border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                               >
                                 Reconcile payout
                               </button>
                             </fetcher.Form>
-                          ) : settlement.status === 'pending' && settlement.transferStatus === 'reversed' ? (
-                            <span className="text-xs font-semibold text-red-700">Review reversal</span>
                           ) : settlement.status === 'pending' &&
                             (settlement.transferStatus === null ||
                               settlement.transferStatus === 'failed' ||
@@ -972,7 +1056,7 @@ export default function Finance() {
                                       ? 'Verify the vendor payout account before releasing payment.'
                                       : undefined
                                 }
-                                className="inline-flex h-9 items-center justify-center whitespace-nowrap rounded-lg bg-brand-primary px-2.5 text-xs font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-45"
+                                className="inline-flex h-9 items-center justify-center whitespace-nowrap rounded-lg bg-brand-primary px-2 text-xs font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-45"
                               >
                                 {settlement.transferStatus === 'failed' || settlement.transferStatus === 'rejected'
                                   ? 'Retry payout'
@@ -990,14 +1074,15 @@ export default function Finance() {
                             title="More actions"
                             onClick={(event) => {
                               const bounds = event.currentTarget.getBoundingClientRect()
+                              const anchor = event.currentTarget
                               const menuHeight = Math.min(240, window.innerHeight - 16)
                               const top =
                                 bounds.bottom + menuHeight + 8 <= window.innerHeight
-                                  ? bounds.bottom + 4
-                                  : Math.max(8, bounds.top - menuHeight - 4)
-                              const left = Math.max(8, Math.min(bounds.right - 208, window.innerWidth - 216))
+                                  ? window.scrollY + bounds.bottom + 4
+                                  : window.scrollY + Math.max(8, bounds.top - menuHeight - 4)
+                              const left = window.scrollX + Math.max(8, Math.min(bounds.right - 208, window.innerWidth - 216))
                               setOpenSettlementMenu((current) =>
-                                current?.settlement.id === settlement.id ? null : { settlement, top, left },
+                                current?.settlement.id === settlement.id ? null : { settlement, anchor, top, left },
                               )
                             }}
                             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
@@ -1034,7 +1119,7 @@ export default function Finance() {
                 if (event.key === 'Escape') setOpenSettlementMenu(null)
               }}
               style={{ top: openSettlementMenu.top, left: openSettlementMenu.left }}
-              className="fixed z-[61] max-h-[calc(100vh-16px)] w-52 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 text-left shadow-xl"
+              className="absolute z-[61] max-h-[calc(100vh-16px)] w-52 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 text-left shadow-xl"
             >
               <button
                 type="button"
@@ -1081,9 +1166,11 @@ export default function Finance() {
                     {selectedSettlement.vendorName}
                   </h2>
                   <span
-                    className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] ${selectedSettlement.status === 'paid' || selectedSettlement.transferStatus === 'success' ? 'bg-emerald-50 text-emerald-700' : selectedSettlement.transferStatus === 'failed' || selectedSettlement.transferStatus === 'rejected' || selectedSettlement.transferStatus === 'reversed' ? 'bg-red-50 text-red-700' : selectedSettlement.transferStatus === 'processing' ? 'bg-blue-50 text-blue-700' : !selectedSettlement.eligibleForPayout ? 'bg-orange-50 text-orange-700' : 'bg-amber-50 text-amber-700'}`}
+                    className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] ${selectedSettlement.transferStatus === 'reversed' || selectedSettlement.transferStatus === 'failed' || selectedSettlement.transferStatus === 'rejected' ? 'bg-red-50 text-red-700' : selectedSettlement.status === 'paid' || selectedSettlement.transferStatus === 'success' ? 'bg-emerald-50 text-emerald-700' : selectedSettlement.transferStatus === 'processing' ? 'bg-blue-50 text-blue-700' : !selectedSettlement.eligibleForPayout ? 'bg-orange-50 text-orange-700' : 'bg-amber-50 text-amber-700'}`}
                   >
-                    {selectedSettlement.status === 'paid'
+                    {selectedSettlement.transferStatus === 'reversed'
+                      ? 'Reversed · review'
+                      : selectedSettlement.status === 'paid'
                       ? 'Paid'
                       : selectedSettlement.status === 'pending' && !selectedSettlement.eligibleForPayout
                         ? 'Awaiting customer payment'

@@ -26,6 +26,7 @@ import type { CustomerReferral, MismatchLine, PersistedOrderItem, PickupLocation
 import { useCustomerStore } from './customer-store-hook'
 import type { Invoice, Order, Payment, Plan, Subscription, Wallet, WalletTransaction } from '../../types/database.types'
 import { ensurePushSubscription, savePushSubscription } from '../../lib/push.client'
+import { calculateSubscriptionUnitsUsed } from '../../lib/subscription-week'
 
 const navItems = [
   { to: '/', label: 'Overview', icon: Home, end: true },
@@ -98,18 +99,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     ...item,
     category_name: categoryNameById.get(item.category_id) ?? 'Laundry item',
   }))
-  const weekStart = new Date()
-  weekStart.setHours(0, 0, 0, 0)
-  weekStart.setDate(weekStart.getDate() - weekStart.getDay())
-  const subscriptionUsedUnits = (orders ?? [])
-    .filter(
-      (order) =>
-        order.is_subscription_order &&
-        order.status !== 'cancelled' &&
-        order.clothes_count_vendor !== null &&
-        new Date(order.created_at) >= weekStart,
-    )
-    .reduce((total, order) => total + (order.subscription_units_applied ?? 0), 0)
+  const subscriptionUsedUnits = calculateSubscriptionUnitsUsed(orders ?? [])
 
   const { data: wallet } = await serverSupabase.from('wallets').select('*').eq('customer_id', userData.user.id).maybeSingle()
 

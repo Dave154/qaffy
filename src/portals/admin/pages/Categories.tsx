@@ -1,6 +1,7 @@
-import { Archive, CheckCircle2, Loader2, MoreVertical, Package, Pencil, Plus, Save, Tag, Trash2, X, XCircle } from 'lucide-react'
+import { Archive, CheckCircle2, Loader2, Minus, MoreVertical, Package, Pencil, Plus, Save, Tag, Trash2, X, XCircle } from 'lucide-react'
+import { createPortal } from 'react-dom'
 import { data, useFetcher, useLoaderData } from 'react-router'
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import type { Route } from './+types/Categories'
 import { requireRole } from '../../../lib/auth.server'
 
@@ -20,6 +21,16 @@ type CategoryRow = {
 }
 
 type CategoriesData = { categories: CategoryRow[] }
+type OpenCategoryMenu = { category: CategoryRow; top: number; left: number }
+type PriceFieldProps = {
+  label: string
+  name: string
+  defaultValue: number
+  max?: number
+  isVendor?: boolean
+  className?: string
+  onInput?: React.FormEventHandler<HTMLInputElement>
+}
 
 function money(value: number) {
   return `₦${value.toLocaleString()}`
@@ -41,9 +52,9 @@ function validateVendorPrices(prices: {
       prices.vendorWashPrice,
       prices.vendorIronPrice,
       prices.vendorWashIronPrice,
-    ].some((price) => !Number.isFinite(price) || price < 0)
+    ].some((price) => !Number.isSafeInteger(price) || price < 0)
   )
-    return 'Prices cannot be negative or invalid.'
+    return 'Prices must be non-negative whole numbers.'
   if (prices.vendorWashPrice > prices.washPrice) return 'Vendor Wash payout cannot exceed the customer Wash price.'
   if (prices.vendorIronPrice > prices.ironPrice) return 'Vendor Iron payout cannot exceed the customer Iron price.'
   if (prices.vendorWashIronPrice > prices.washIronPrice) return 'Vendor Wash + Iron payout cannot exceed the customer Wash + Iron price.'
@@ -58,6 +69,65 @@ function syncVendorCap(event: React.FormEvent<HTMLInputElement>, customerField: 
   vendorInput.max = customerInput.value
   vendorInput.setCustomValidity(
     Number(vendorInput.value) > Number(customerInput.value) ? 'Vendor payout cannot exceed the customer price.' : '',
+  )
+}
+
+function PriceField({ label, name, defaultValue, max, isVendor = false, className = 'block min-w-0', onInput }: PriceFieldProps) {
+  const id = useId()
+  const inputRef = useRef<HTMLInputElement>(null)
+  const adjustPrice = (amount: number) => {
+    const input = inputRef.current
+    if (!input) return
+    const minimum = input.min === '' ? Number.NEGATIVE_INFINITY : Number(input.min)
+    const maximum = input.max === '' ? Number.POSITIVE_INFINITY : Number(input.max)
+    const nextValue = Math.max(minimum, Math.min(maximum, Math.round(Number(input.value || 0)) + amount))
+    input.value = String(nextValue)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  }
+  const inputClasses = isVendor
+    ? 'border-emerald-100 focus:border-brand-primary'
+    : 'border-slate-200 focus:border-brand-primary'
+
+  return (
+    <div className={className}>
+      <label htmlFor={id} className={`mb-2 block text-xs font-semibold ${isVendor ? 'text-emerald-700' : 'text-slate-500'}`}>
+        {label}
+      </label>
+      <div className="relative">
+        <input
+          ref={inputRef}
+          id={id}
+          type="number"
+          min="0"
+          max={max}
+          step="1"
+          name={name}
+          defaultValue={defaultValue}
+          onInput={onInput}
+          className={`h-11 w-full rounded-xl border bg-white px-3 pr-[4.5rem] text-sm text-slate-900 outline-none transition focus:ring-2 focus:ring-brand-focus [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none ${inputClasses}`}
+        />
+        <div className="absolute inset-y-1 right-1 flex overflow-hidden rounded-lg border border-slate-200 bg-white">
+          <button
+            type="button"
+            aria-label={`Decrease ${label} price by 50`}
+            title="Decrease by 50"
+            onClick={() => adjustPrice(-50)}
+            className="flex w-7 items-center justify-center text-slate-500 transition hover:bg-slate-50 hover:text-slate-900"
+          >
+            <Minus size={13} />
+          </button>
+          <button
+            type="button"
+            aria-label={`Increase ${label} price by 50`}
+            title="Increase by 50"
+            onClick={() => adjustPrice(50)}
+            className="flex w-7 items-center justify-center border-l border-slate-200 text-slate-500 transition hover:bg-slate-50 hover:text-slate-900"
+          >
+            <Plus size={13} />
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -235,8 +305,7 @@ export default function Categories() {
   const { categories } = useLoaderData<typeof loader>()
   const fetcher = useFetcher<typeof action>()
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [openMenuId, setOpenMenuId] = useState<string | null>(null)
-  const [menuPlacement, setMenuPlacement] = useState<'up' | 'down'>('up')
+  const [openCategoryMenu, setOpenCategoryMenu] = useState<OpenCategoryMenu | null>(null)
   const [editingCategory, setEditingCategory] = useState<CategoryRow | null>(null)
   const [deletingCategory, setDeletingCategory] = useState<CategoryRow | null>(null)
   const [isAddOpen, setIsAddOpen] = useState(false)
@@ -248,7 +317,7 @@ export default function Categories() {
 
   useEffect(() => {
     if (fetcher.state !== 'idle' || !fetcher.data || !('ok' in fetcher.data)) return
-    setOpenMenuId(null)
+    setOpenCategoryMenu(null)
     setEditingCategory(null)
     setDeletingCategory(null)
     setIsAddOpen(false)
@@ -256,11 +325,11 @@ export default function Categories() {
   }, [fetcher.state, fetcher.data])
 
   useEffect(() => {
-    if (openMenuId === null) return
-    const closeMenu = () => setOpenMenuId(null)
+    if (openCategoryMenu === null) return
+    const closeMenu = () => setOpenCategoryMenu(null)
     window.addEventListener('click', closeMenu)
     return () => window.removeEventListener('click', closeMenu)
-  }, [openMenuId])
+  }, [openCategoryMenu])
 
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     if (isSubmitting) {
@@ -331,42 +400,14 @@ export default function Categories() {
                 className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
               />
             </label>
-            <label className="block min-w-0">
-              <span className="mb-2.5 block text-xs font-semibold capitalize text-slate-500">Wash</span>
-              <input
-                type="number"
-                min="0"
-                step="50"
-                name="washPrice"
-                defaultValue={350}
-                onInput={(event) => syncVendorCap(event, 'washPrice', 'vendorWashPrice')}
-                className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
-              />
-            </label>
-            <label className="block min-w-0">
-              <span className="mb-2.5 block text-xs font-semibold capitalize text-slate-500">Iron</span>
-              <input
-                type="number"
-                min="0"
-                step="50"
-                name="ironPrice"
-                defaultValue={350}
-                onInput={(event) => syncVendorCap(event, 'ironPrice', 'vendorIronPrice')}
-                className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
-              />
-            </label>
-            <label className="block min-w-0">
-              <span className="mb-2.5 block text-xs font-semibold capitalize text-slate-500">Wash + Iron</span>
-              <input
-                type="number"
-                min="0"
-                step="50"
-                name="washIronPrice"
-                defaultValue={350}
-                onInput={(event) => syncVendorCap(event, 'washIronPrice', 'vendorWashIronPrice')}
-                className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
-              />
-            </label>
+            <PriceField label="Wash" name="washPrice" defaultValue={350} onInput={(event) => syncVendorCap(event, 'washPrice', 'vendorWashPrice')} />
+            <PriceField label="Iron" name="ironPrice" defaultValue={350} onInput={(event) => syncVendorCap(event, 'ironPrice', 'vendorIronPrice')} />
+            <PriceField
+              label="Wash + Iron"
+              name="washIronPrice"
+              defaultValue={350}
+              onInput={(event) => syncVendorCap(event, 'washIronPrice', 'vendorWashIronPrice')}
+            />
             <label className="block min-w-0">
               <span className="mb-2.5 block text-xs font-semibold capitalize text-slate-500">Subscription weight</span>
               <input
@@ -382,45 +423,30 @@ export default function Categories() {
               <h4 className="text-sm font-bold text-slate-900">Vendor payouts</h4>
               <p className="mt-1 text-xs text-slate-500">What vendors receive for each service.</p>
             </div>
-            <label className="block min-w-0">
-              <span className="mb-2 block text-xs font-semibold capitalize text-emerald-700">Wash</span>
-              <input
-                type="number"
-                min="0"
-                max="350"
-                step="50"
-                name="vendorWashPrice"
-                defaultValue={200}
-                onInput={(event) => syncVendorCap(event, 'washPrice', 'vendorWashPrice')}
-                className="h-11 w-full rounded-xl border border-emerald-100 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
-              />
-            </label>
-            <label className="block min-w-0">
-              <span className="mb-2 block text-xs font-semibold capitalize text-emerald-700">Iron</span>
-              <input
-                type="number"
-                min="0"
-                max="350"
-                step="50"
-                name="vendorIronPrice"
-                defaultValue={200}
-                onInput={(event) => syncVendorCap(event, 'ironPrice', 'vendorIronPrice')}
-                className="h-11 w-full rounded-xl border border-emerald-100 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
-              />
-            </label>
-            <label className="block min-w-0">
-              <span className="mb-2 block text-xs font-semibold capitalize text-emerald-700">Wash + Iron</span>
-              <input
-                type="number"
-                min="0"
-                max="350"
-                step="50"
-                name="vendorWashIronPrice"
-                defaultValue={350}
-                onInput={(event) => syncVendorCap(event, 'washIronPrice', 'vendorWashIronPrice')}
-                className="h-11 w-full rounded-xl border border-emerald-100 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
-              />
-            </label>
+            <PriceField
+              label="Wash"
+              name="vendorWashPrice"
+              defaultValue={200}
+              max={350}
+              isVendor
+              onInput={(event) => syncVendorCap(event, 'washPrice', 'vendorWashPrice')}
+            />
+            <PriceField
+              label="Iron"
+              name="vendorIronPrice"
+              defaultValue={200}
+              max={350}
+              isVendor
+              onInput={(event) => syncVendorCap(event, 'ironPrice', 'vendorIronPrice')}
+            />
+            <PriceField
+              label="Wash + Iron"
+              name="vendorWashIronPrice"
+              defaultValue={350}
+              max={350}
+              isVendor
+              onInput={(event) => syncVendorCap(event, 'washIronPrice', 'vendorWashIronPrice')}
+            />
           </div>
           <div className="sticky bottom-0 mt-auto border-t border-slate-100 bg-white pt-6">
             <button
@@ -472,10 +498,23 @@ export default function Categories() {
           </fetcher.Form>
         )}
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1450px] text-left">
+          <table className="w-full min-w-[880px] table-fixed text-left">
+            <colgroup>
+              <col style={{ width: '4%' }} />
+              <col style={{ width: '21%' }} />
+              <col style={{ width: '8.5%' }} />
+              <col style={{ width: '8.5%' }} />
+              <col style={{ width: '8.5%' }} />
+              <col style={{ width: '8.5%' }} />
+              <col style={{ width: '8.5%' }} />
+              <col style={{ width: '8.5%' }} />
+              <col style={{ width: '7%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '7%' }} />
+            </colgroup>
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50 text-[10px] uppercase tracking-[0.12em] text-slate-500">
-                <th rowSpan={2} className="px-5 py-3 align-middle">
+                <th rowSpan={2} className="px-2 py-3 align-middle">
                   <input
                     type="checkbox"
                     aria-label="Select all categories"
@@ -483,30 +522,30 @@ export default function Categories() {
                     onChange={(event) => setSelectedIds(event.target.checked ? categories.map((category) => category.id) : [])}
                   />
                 </th>
-                <th rowSpan={2} className="px-5 py-3 text-left align-middle font-semibold">
+                <th rowSpan={2} className="px-2 py-3 text-left align-middle font-semibold">
                   Category
                 </th>
-                <th colSpan={3} className="border-l border-slate-200 bg-cyan-50/60 px-5 py-3 text-center font-semibold text-cyan-800">
+                <th colSpan={3} className="border-l border-slate-200 bg-cyan-50/60 px-2 py-3 text-center font-semibold text-cyan-800">
                   Customer charges
                 </th>
-                <th colSpan={3} className="border-l border-slate-200 bg-emerald-50/60 px-5 py-3 text-center font-semibold text-emerald-800">
+                <th colSpan={3} className="border-l border-slate-200 bg-emerald-50/60 px-2 py-3 text-center font-semibold text-emerald-800">
                   Vendor payouts
                 </th>
-                <th rowSpan={2} className="px-5 py-3 align-middle font-semibold">
+                <th rowSpan={2} className="px-2 py-3 align-middle font-semibold">
                   Sub weight
                 </th>
-                <th rowSpan={2} className="px-5 py-3 align-middle font-semibold">
+                <th rowSpan={2} className="px-2 py-3 align-middle font-semibold">
                   Status
                 </th>
-                <th rowSpan={2} aria-label="Category actions" className="px-5 py-3 align-middle font-semibold" />
+                <th rowSpan={2} aria-label="Category actions" className="px-2 py-3 align-middle font-semibold" />
               </tr>
               <tr className="border-b border-slate-200 bg-slate-50 text-[10px] uppercase tracking-[0.12em] text-slate-500">
-                <th className="border-l border-slate-200 px-5 py-2 font-semibold">Wash</th>
-                <th className="px-5 py-2 font-semibold">Iron</th>
-                <th className="px-5 py-2 font-semibold">Wash + Iron</th>
-                <th className="border-l border-slate-200 px-5 py-2 font-semibold">Wash</th>
-                <th className="px-5 py-2 font-semibold">Iron</th>
-                <th className="px-5 py-2 font-semibold">Wash + Iron</th>
+                <th className="border-l border-slate-200 px-1.5 py-2 font-semibold">Wash</th>
+                <th className="px-1.5 py-2 font-semibold">Iron</th>
+                <th className="px-1.5 py-2 font-semibold">Wash + Iron</th>
+                <th className="border-l border-slate-200 px-1.5 py-2 font-semibold">Wash</th>
+                <th className="px-1.5 py-2 font-semibold">Iron</th>
+                <th className="px-1.5 py-2 font-semibold">Wash + Iron</th>
               </tr>
             </thead>
             <tbody>
@@ -521,7 +560,7 @@ export default function Categories() {
                   .sort((first, second) => Number(second.isMain) - Number(first.isMain))
                   .map((category) => (
                     <tr key={category.id} className="border-b border-slate-100 last:border-0">
-                      <td className="px-5 py-4">
+                      <td className="px-2 py-4">
                         <input
                           type="checkbox"
                           aria-label={`Select ${category.name}`}
@@ -533,7 +572,7 @@ export default function Categories() {
                           }
                         />
                       </td>
-                      <td className="px-5 py-4">
+                      <td className="px-2 py-4">
                         <div className="flex items-center gap-3">
                           <span className="flex h-9 w-9 items-center justify-center rounded-full bg-brand-soft text-brand-primary">
                             <Package size={16} />
@@ -551,99 +590,44 @@ export default function Categories() {
                           </div>
                         </div>
                       </td>
-                      <td className="px-5 py-4 text-sm font-semibold text-slate-800">{money(category.washPrice)}</td>
-                      <td className="px-5 py-4 text-sm font-semibold text-slate-800">{money(category.ironPrice)}</td>
-                      <td className="px-5 py-4 text-sm font-semibold text-slate-800">{money(category.washIronPrice)}</td>
-                      <td className="px-5 py-4 text-sm font-semibold text-emerald-700">{money(category.vendorWashPrice)}</td>
-                      <td className="px-5 py-4 text-sm font-semibold text-emerald-700">{money(category.vendorIronPrice)}</td>
-                      <td className="px-5 py-4 text-sm font-semibold text-emerald-700">{money(category.vendorWashIronPrice)}</td>
-                      <td className="px-5 py-4 text-sm font-semibold text-slate-800">{category.subscriptionUnits}x</td>
-                      <td className="px-5 py-4">
+                      <td className="whitespace-nowrap px-1.5 py-4 text-sm font-semibold text-slate-800">{money(category.washPrice)}</td>
+                      <td className="whitespace-nowrap px-1.5 py-4 text-sm font-semibold text-slate-800">{money(category.ironPrice)}</td>
+                      <td className="whitespace-nowrap px-1.5 py-4 text-sm font-semibold text-slate-800">{money(category.washIronPrice)}</td>
+                      <td className="whitespace-nowrap px-1.5 py-4 text-sm font-semibold text-emerald-700">{money(category.vendorWashPrice)}</td>
+                      <td className="whitespace-nowrap px-1.5 py-4 text-sm font-semibold text-emerald-700">{money(category.vendorIronPrice)}</td>
+                      <td className="whitespace-nowrap px-1.5 py-4 text-sm font-semibold text-emerald-700">{money(category.vendorWashIronPrice)}</td>
+                      <td className="whitespace-nowrap px-2 py-4 text-sm font-semibold text-slate-800">{category.subscriptionUnits}x</td>
+                      <td className="px-1.5 py-4">
                         <span
-                          className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${category.active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}
+                          className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full px-1.5 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${category.active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}
                         >
                           {category.active ? <CheckCircle2 size={12} /> : <XCircle size={12} />}
                           {category.active ? 'Active' : 'Archived'}
                         </span>
                       </td>
-                      <td className="px-5 py-4">
+                      <td className="px-1.5 py-4">
                         <div className="relative flex justify-end">
                           <button
                             type="button"
                             onClick={(event) => {
                               event.stopPropagation()
-                              const viewport = event.currentTarget.closest('.overflow-x-auto')
-                              const buttonTop = event.currentTarget.getBoundingClientRect().top
-                              const viewportTop = viewport?.getBoundingClientRect().top ?? 0
-                              setMenuPlacement(buttonTop - viewportTop < 150 ? 'down' : 'up')
-                              setOpenMenuId((current) => (current === category.id ? null : category.id))
+                              const bounds = event.currentTarget.getBoundingClientRect()
+                              const menuWidth = 176
+                              const menuHeight = category.isMain ? 144 : 184
+                              const top =
+                                bounds.bottom + menuHeight + 8 <= window.innerHeight
+                                  ? bounds.bottom + 4
+                                  : Math.max(8, bounds.top - menuHeight - 4)
+                              const left = Math.max(8, Math.min(bounds.right - menuWidth, window.innerWidth - menuWidth - 8))
+                              setOpenCategoryMenu((current) =>
+                                current?.category.id === category.id ? null : { category, top, left },
+                              )
                             }}
                             className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:border-brand-primary hover:text-brand-primary"
                             aria-label={`More actions for ${category.name}`}
                           >
                             <MoreVertical size={16} />
                           </button>
-
-                          {openMenuId === category.id && (
-                            <div
-                              onClick={(event) => event.stopPropagation()}
-                              className={`absolute right-0 z-10 w-40 rounded-xl border border-slate-200 bg-white p-1 shadow-lg ${menuPlacement === 'down' ? 'top-11' : 'bottom-11'}`}
-                            >
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setEditingCategory(category)
-                                  setOpenMenuId(null)
-                                }}
-                                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-                              >
-                                <Pencil size={14} />
-                                Edit
-                              </button>
-                              {!category.isMain && (
-                                <fetcher.Form method="post">
-                                  <input type="hidden" name="intent" value="set-main" />
-                                  <input type="hidden" name="id" value={category.id} />
-                                  <button
-                                    type="submit"
-                                    disabled={fetcher.state !== 'idle'}
-                                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm font-medium text-amber-700 transition hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-60"
-                                  >
-                                    Set as main
-                                  </button>
-                                </fetcher.Form>
-                              )}
-                              <fetcher.Form method="post">
-                                <input type="hidden" name="intent" value="toggle" />
-                                <input type="hidden" name="id" value={category.id} />
-                                <button
-                                  type="submit"
-                                  disabled={fetcher.state !== 'idle'}
-                                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-                                >
-                                  {fetcher.state !== 'idle' ? (
-                                    <Loader2 size={14} className="animate-spin" />
-                                  ) : category.active ? (
-                                    <Archive size={14} />
-                                  ) : (
-                                    <CheckCircle2 size={14} />
-                                  )}
-                                  {category.active ? 'Archive' : 'Restore'}
-                                </button>
-                              </fetcher.Form>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setDeletingCategory(category)
-                                  setOpenMenuId(null)
-                                }}
-                                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm font-medium text-red-700 transition hover:bg-red-50"
-                              >
-                                <Trash2 size={14} />
-                                Delete
-                              </button>
-                            </div>
-                          )}
                         </div>
                       </td>
                     </tr>
@@ -653,6 +637,87 @@ export default function Categories() {
           </table>
         </div>
       </section>
+
+      {openCategoryMenu &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <>
+            <button
+              type="button"
+              aria-label="Close category actions"
+              onClick={() => setOpenCategoryMenu(null)}
+              className="fixed inset-0 z-[60] cursor-default bg-transparent"
+            />
+            <div
+              role="menu"
+              onClick={(event) => event.stopPropagation()}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') setOpenCategoryMenu(null)
+              }}
+              style={{ top: openCategoryMenu.top, left: openCategoryMenu.left }}
+              className="fixed z-[61] max-h-[calc(100vh-16px)] w-44 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1 text-left shadow-xl"
+            >
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setEditingCategory(openCategoryMenu.category)
+                  setOpenCategoryMenu(null)
+                }}
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+              >
+                <Pencil size={14} />
+                Edit
+              </button>
+              {!openCategoryMenu.category.isMain && (
+                <fetcher.Form method="post" onSubmit={() => setOpenCategoryMenu(null)}>
+                  <input type="hidden" name="intent" value="set-main" />
+                  <input type="hidden" name="id" value={openCategoryMenu.category.id} />
+                  <button
+                    type="submit"
+                    role="menuitem"
+                    disabled={fetcher.state !== 'idle'}
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm font-medium text-amber-700 transition hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Set as main
+                  </button>
+                </fetcher.Form>
+              )}
+              <fetcher.Form method="post" onSubmit={() => setOpenCategoryMenu(null)}>
+                <input type="hidden" name="intent" value="toggle" />
+                <input type="hidden" name="id" value={openCategoryMenu.category.id} />
+                <button
+                  type="submit"
+                  role="menuitem"
+                  disabled={fetcher.state !== 'idle'}
+                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {fetcher.state !== 'idle' ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : openCategoryMenu.category.active ? (
+                    <Archive size={14} />
+                  ) : (
+                    <CheckCircle2 size={14} />
+                  )}
+                  {openCategoryMenu.category.active ? 'Archive' : 'Restore'}
+                </button>
+              </fetcher.Form>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setDeletingCategory(openCategoryMenu.category)
+                  setOpenCategoryMenu(null)
+                }}
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm font-medium text-red-700 transition hover:bg-red-50"
+              >
+                <Trash2 size={14} />
+                Delete
+              </button>
+            </div>
+          </>,
+          document.body,
+        )}
 
       {editingCategory && (
         <>
@@ -691,42 +756,25 @@ export default function Categories() {
                 </div>
 
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <label className="block min-w-0">
-                    <span className="mb-2.5 block text-xs font-semibold capitalize text-slate-500">Wash</span>
-                    <input
-                      type="number"
-                      min="0"
-                      step="50"
-                      name="washPrice"
-                      defaultValue={editingCategory.washPrice}
-                      onInput={(event) => syncVendorCap(event, 'washPrice', 'vendorWashPrice')}
-                      className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
-                    />
-                  </label>
-                  <label className="block min-w-0">
-                    <span className="mb-2.5 block text-xs font-semibold capitalize text-slate-500">Iron</span>
-                    <input
-                      type="number"
-                      min="0"
-                      step="50"
-                      name="ironPrice"
-                      defaultValue={editingCategory.ironPrice}
-                      onInput={(event) => syncVendorCap(event, 'ironPrice', 'vendorIronPrice')}
-                      className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
-                    />
-                  </label>
-                  <label className="block min-w-0 sm:col-span-2">
-                    <span className="mb-2.5 block text-xs font-semibold capitalize text-slate-500">Wash + Iron</span>
-                    <input
-                      type="number"
-                      min="0"
-                      step="50"
-                      name="washIronPrice"
-                      defaultValue={editingCategory.washIronPrice}
-                      onInput={(event) => syncVendorCap(event, 'washIronPrice', 'vendorWashIronPrice')}
-                      className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
-                    />
-                  </label>
+                  <PriceField
+                    label="Wash"
+                    name="washPrice"
+                    defaultValue={editingCategory.washPrice}
+                    onInput={(event) => syncVendorCap(event, 'washPrice', 'vendorWashPrice')}
+                  />
+                  <PriceField
+                    label="Iron"
+                    name="ironPrice"
+                    defaultValue={editingCategory.ironPrice}
+                    onInput={(event) => syncVendorCap(event, 'ironPrice', 'vendorIronPrice')}
+                  />
+                  <PriceField
+                    label="Wash + Iron"
+                    name="washIronPrice"
+                    defaultValue={editingCategory.washIronPrice}
+                    className="block min-w-0 sm:col-span-2"
+                    onInput={(event) => syncVendorCap(event, 'washIronPrice', 'vendorWashIronPrice')}
+                  />
                 </div>
 
                 <div className="border-b border-slate-100 pb-3 pt-2">
@@ -735,45 +783,31 @@ export default function Categories() {
                 </div>
 
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <label className="block min-w-0">
-                    <span className="mb-2 block text-xs font-semibold capitalize text-emerald-700">Wash</span>
-                    <input
-                      type="number"
-                      min="0"
-                      max={editingCategory.washPrice}
-                      step="50"
-                      name="vendorWashPrice"
-                      defaultValue={editingCategory.vendorWashPrice}
-                      onInput={(event) => syncVendorCap(event, 'washPrice', 'vendorWashPrice')}
-                      className="h-11 w-full rounded-xl border border-emerald-100 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
-                    />
-                  </label>
-                  <label className="block min-w-0">
-                    <span className="mb-2 block text-xs font-semibold capitalize text-emerald-700">Iron</span>
-                    <input
-                      type="number"
-                      min="0"
-                      max={editingCategory.ironPrice}
-                      step="50"
-                      name="vendorIronPrice"
-                      defaultValue={editingCategory.vendorIronPrice}
-                      onInput={(event) => syncVendorCap(event, 'ironPrice', 'vendorIronPrice')}
-                      className="h-11 w-full rounded-xl border border-emerald-100 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
-                    />
-                  </label>
-                  <label className="block min-w-0 sm:col-span-2">
-                    <span className="mb-2 block text-xs font-semibold capitalize text-emerald-700">Wash + Iron</span>
-                    <input
-                      type="number"
-                      min="0"
-                      max={editingCategory.washIronPrice}
-                      step="50"
-                      name="vendorWashIronPrice"
-                      defaultValue={editingCategory.vendorWashIronPrice}
-                      onInput={(event) => syncVendorCap(event, 'washIronPrice', 'vendorWashIronPrice')}
-                      className="h-11 w-full rounded-xl border border-emerald-100 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
-                    />
-                  </label>
+                  <PriceField
+                    label="Wash"
+                    name="vendorWashPrice"
+                    defaultValue={editingCategory.vendorWashPrice}
+                    max={editingCategory.washPrice}
+                    isVendor
+                    onInput={(event) => syncVendorCap(event, 'washPrice', 'vendorWashPrice')}
+                  />
+                  <PriceField
+                    label="Iron"
+                    name="vendorIronPrice"
+                    defaultValue={editingCategory.vendorIronPrice}
+                    max={editingCategory.ironPrice}
+                    isVendor
+                    onInput={(event) => syncVendorCap(event, 'ironPrice', 'vendorIronPrice')}
+                  />
+                  <PriceField
+                    label="Wash + Iron"
+                    name="vendorWashIronPrice"
+                    defaultValue={editingCategory.vendorWashIronPrice}
+                    max={editingCategory.washIronPrice}
+                    isVendor
+                    className="block min-w-0 sm:col-span-2"
+                    onInput={(event) => syncVendorCap(event, 'washIronPrice', 'vendorWashIronPrice')}
+                  />
                 </div>
 
                 <label className="block min-w-0">
