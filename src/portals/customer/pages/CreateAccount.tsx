@@ -134,7 +134,7 @@ export default function CreateAccount() {
           </div>
 
           <div
-            className="w-full max-w-[430px] rounded-[36px] bg-white/95 p-5 shadow-[0_30px_80px_rgba(0,0,0,0.28)] backdrop-blur-sm sm:p-7"
+            className="mx-auto w-full max-w-[430px] rounded-[36px] bg-white/95 p-5 shadow-[0_30px_80px_rgba(0,0,0,0.28)] backdrop-blur-sm sm:p-7 lg:mx-0"
             style={{ fontFamily: 'Inter, sans-serif' }}
           >
             <div className="mb-7 text-center">
@@ -231,8 +231,8 @@ export default function CreateAccount() {
               {showEmailAuth && (
                 <div className="mt-5 flex items-center justify-between gap-2 text-sm text-slate-500">
                   <label className="inline-flex items-center gap-2">
-                    <input type="checkbox" className="h-4 w-4 rounded border-slate-300 text-brand-primary focus:ring-brand-primary" />I
-                    agree to the terms
+                    <input type="checkbox" className="h-4 w-4 rounded border-slate-300 text-brand-primary focus:ring-brand-primary" />
+                    I agree to the terms
                   </label>
                 </div>
               )}

@@ -261,14 +261,14 @@ export default function Plans() {
                 key={plan.id}
                 className={`relative flex flex-col rounded-2xl border p-5 shadow-sm ${plan.featured ? 'border-brand-strong bg-brand-surface' : 'border-[#e7e7e7] bg-white'}`}
               >
-                {plan.featured && (
-                  <span className="absolute right-5 top-5 rounded-full bg-brand-strong px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-white">
-                    Popular
-                  </span>
-                )}
-                <div className="pr-16">
-                  <p className="text-sm font-semibold text-brand-strong">{plan.name}</p>
-                  <div className="mt-3 flex items-baseline gap-1.5">
+                <div className="min-w-0">
+                  {plan.featured && (
+                    <span className="mb-3 inline-flex rounded-full bg-brand-strong px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-white">
+                      Popular
+                    </span>
+                  )}
+                  <p className="break-words text-sm font-semibold text-brand-strong">{plan.name}</p>
+                  <div className="mt-3 flex flex-wrap items-baseline gap-x-1.5 gap-y-1">
                     <span className="text-3xl font-bold text-[#121212]">{formatPrice(plan.price)}</span>
                     <span className="text-sm text-slate-500">/{plan.billingPeriod}</span>
                   </div>

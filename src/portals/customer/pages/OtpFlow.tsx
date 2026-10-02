@@ -64,16 +64,16 @@ export default function OtpFlow() {
         </section>
       )}
 
-      <section className="rounded-[28px] bg-gradient-to-br from-brand-primary via-brand-primary to-brand-primary-hover p-5 text-white shadow-lg shadow-brand-border sm:p-6">
-        <div className="flex items-start justify-between gap-4">
-          <div className="w-full">
+      <section className="rounded-[28px] bg-gradient-to-br from-brand-primary via-brand-primary to-brand-primary-hover p-4 text-white shadow-lg shadow-brand-border sm:p-6">
+        <div className="flex min-w-0 flex-col items-start justify-between gap-3 sm:flex-row sm:gap-4">
+          <div className="w-full min-w-0">
             <p className="text-xs font-medium uppercase tracking-[0.18em] text-white/80">Current code</p>
             <div className="mt-3">
               {currentStep.value ? (
                 <ProtectedOtp
                   value={currentStep.value}
                   className="gap-2 sm:gap-3"
-                  digitClassName="h-14 w-14 rounded-md border-2 text-2xl sm:h-16 sm:w-16"
+                  digitClassName="h-12 w-12 rounded-md border-2 text-xl sm:h-14 sm:w-14 sm:text-2xl"
                   containerClassName="inline-block"
                 />
               ) : (
@@ -87,7 +87,7 @@ export default function OtpFlow() {
             type="button"
             disabled={!currentStep.value}
             onClick={() => currentStep.value && navigator.clipboard?.writeText(currentStep.value)}
-            className="rounded-2xl bg-white/10 px-3 py-2 text-sm font-medium text-white backdrop-blur-sm disabled:cursor-not-allowed disabled:opacity-50"
+            className="shrink-0 self-start rounded-2xl bg-white/10 px-3 py-2 text-sm font-medium text-white backdrop-blur-sm disabled:cursor-not-allowed disabled:opacity-50 sm:self-auto"
           >
             Copy
           </button>

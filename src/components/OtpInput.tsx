@@ -6,9 +6,10 @@ type OtpInputProps = {
   idPrefix: string
   length: number
   inputClassName: string
+  compactOnMobile?: boolean
 }
 
-export default function OtpInput({ value, onChange, idPrefix, length, inputClassName }: OtpInputProps) {
+export default function OtpInput({ value, onChange, idPrefix, length, inputClassName, compactOnMobile = false }: OtpInputProps) {
   const inputRefs = useRef<Array<HTMLInputElement | null>>([])
 
   const focusInput = (index: number) => {
@@ -82,7 +83,7 @@ export default function OtpInput({ value, onChange, idPrefix, length, inputClass
   }
 
   return (
-    <div className="grid grid-cols-8 gap-2 pt-3 sm:gap-3">
+    <div className={`grid ${compactOnMobile ? 'grid-cols-4 min-[472px]:grid-cols-8' : 'grid-cols-8'} gap-2 pt-3 sm:gap-3`}>
       {value.map((digit, index) => (
         <input
           key={index}
