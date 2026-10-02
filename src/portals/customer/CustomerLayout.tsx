@@ -675,13 +675,13 @@ export default function CustomerLayout() {
             aria-modal="true"
             aria-labelledby="logout-title"
             onMouseDown={(event) => event.stopPropagation()}
-            className="w-full max-w-sm rounded-2xl border border-[#e7e7e7] bg-white p-6 shadow-2xl"
+            className="w-full max-w-sm rounded-2xl border border-[#e7e7e7] bg-white p-6 text-center shadow-2xl"
           >
             <h2 id="logout-title" className="text-xl font-bold text-slate-900">
               Log out of Qaffy?
             </h2>
             <p className="mt-2 text-sm leading-6 text-slate-500">You will need to sign in again to access your laundry account.</p>
-            <div className="mt-6 flex gap-3">
+            <div className="mx-auto mt-6 flex max-w-xs gap-3">
               <button
                 type="button"
                 onClick={() => setLogoutConfirmationOpen(false)}

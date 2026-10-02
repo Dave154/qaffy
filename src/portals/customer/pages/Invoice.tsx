@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Printer } from 'lucide-react'
 import { data, Link } from 'react-router'
 import type { Route } from './+types/Invoice'
 import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
@@ -124,9 +125,11 @@ export default function Invoice() {
             <button
               type="button"
               onClick={() => window.print()}
-              className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-600"
+              aria-label="Print invoice"
+              title="Print invoice"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-600 transition hover:border-slate-300 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
             >
-              Print invoice
+              <Printer className="h-4 w-4" aria-hidden="true" />
             </button>
           </div>
 
@@ -157,8 +160,9 @@ export default function Invoice() {
                   <strong>{invoice.mismatch.direction === 'over' ? 'Extra billing due to over-count' : 'Under-count adjustment'}</strong>
                   <p className="mt-1 min-w-0 [overflow-wrap:anywhere]">{invoice.mismatch.detail}</p>
                   {Array.isArray(invoice.mismatch.lines) && invoice.mismatch.lines.length > 0 && (
-                    <div className="mt-3 overflow-x-auto rounded-xl border border-amber-200 bg-white">
-                      <table className="w-full min-w-[620px] text-left text-xs">
+                    <>
+                      <div className="mt-3 hidden overflow-x-auto rounded-xl border border-amber-200 bg-white sm:block">
+                        <table className="w-full min-w-[620px] text-left text-xs">
                         <thead className="border-b border-amber-100 bg-amber-50 text-[10px] uppercase tracking-[0.08em] text-amber-700">
                           <tr>
                             <th className="px-3 py-2 font-semibold">Item</th>
@@ -188,8 +192,47 @@ export default function Invoice() {
                             </tr>
                           ))}
                         </tbody>
-                      </table>
-                    </div>
+                        </table>
+                      </div>
+                      <div className="mt-3 divide-y divide-amber-100 rounded-xl border border-amber-200 bg-white sm:hidden">
+                        {invoice.mismatch.lines.map((line, index) => (
+                          <div key={`${line.category}-${line.service}-${index}`} className="space-y-3 p-3">
+                            <div className="flex min-w-0 items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="break-words font-semibold text-slate-800">{line.category}</p>
+                                <p className="mt-0.5 text-xs text-slate-500">
+                                  {line.service === 'wash_iron' ? 'Wash + Iron' : line.service === 'wash' ? 'Wash' : 'Iron'}
+                                </p>
+                              </div>
+                              <p className="shrink-0 text-right text-xs font-semibold text-amber-700">
+                                Extra: ₦{line.extraAmount.toLocaleString()}
+                              </p>
+                            </div>
+                            <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
+                              <div>
+                                <p className="text-slate-500">Declared</p>
+                                <p className="mt-0.5 font-semibold text-slate-800">{line.originalQuantity}</p>
+                              </div>
+                              <div>
+                                <p className="text-slate-500">Confirmed</p>
+                                <p className="mt-0.5 font-semibold text-slate-800">{line.confirmedQuantity}</p>
+                              </div>
+                              <div>
+                                <p className="text-slate-500">Difference</p>
+                                <p className="mt-0.5 font-semibold text-amber-700">
+                                  {line.difference > 0 ? '+' : ''}
+                                  {line.difference}
+                                </p>
+                              </div>
+                              <div>
+                                <p className="text-slate-500">Unit price</p>
+                                <p className="mt-0.5 font-semibold text-slate-800">₦{line.unitPrice.toLocaleString()}</p>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </>
                   )}
                 </div>
               )}

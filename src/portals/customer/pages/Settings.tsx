@@ -125,14 +125,14 @@ export default function Settings() {
 
       <section className="rounded-[28px] bg-gradient-to-br from-brand-primary via-brand-primary to-brand-primary-hover p-5 text-white shadow-lg shadow-brand-border sm:p-6">
         <div className="flex items-start justify-between gap-4">
-          <div>
+          <div className="min-w-0 flex-1">
             <p className="text-xs font-medium uppercase tracking-[0.18em] text-white/80">Profile</p>
-            <h3 className="mt-3 text-3xl font-bold">{customerName}</h3>
-            <p className="mt-2 text-sm text-white/80">
+            <h3 className="mt-3 break-words text-3xl font-bold">{customerName}</h3>
+            <p className="mt-2 break-all text-sm text-white/80">
               {customerEmail} • {customerId}
             </p>
           </div>
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/15 text-2xl backdrop-blur-sm">A</div>
+          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-white/15 text-2xl backdrop-blur-sm">A</div>
         </div>
       </section>
 

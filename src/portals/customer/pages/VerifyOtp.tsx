@@ -131,7 +131,7 @@ export default function VerifyOtp() {
             ? 'This email is not registered to an approved logistics account.'
             : expectedRole === 'admin'
               ? 'This email is not approved for admin access.'
-              : 'This email belongs to a different Qaffy portal.',
+                : "We couldn't find a customer profile for this account. Try your assigned portal or contact support.",
       )
       setIsSubmitting(false)
       return
@@ -206,7 +206,7 @@ export default function VerifyOtp() {
           </p>
         </div>
 
-        <div className="w-full max-w-130 rounded-[20px] bg-white p-4 shadow-[0_30px_80px_rgba(0,0,0,0.28)] backdrop-blur-sm sm:p-7">
+        <div className="mx-auto w-full max-w-130 rounded-[20px] bg-white p-4 shadow-[0_30px_80px_rgba(0,0,0,0.28)] backdrop-blur-sm sm:p-7 lg:mx-0">
           <button
             type="button"
             onClick={() => navigate(mode === 'create-account' ? '/create-account' : '/login')}
@@ -216,10 +216,10 @@ export default function VerifyOtp() {
             <span>Back to login</span>
           </button>
 
-          <div className="space-y-5">
+          <div className="space-y-5 text-center">
             <div>
-              <h2 className="text-[2.2rem] font-semibold tracking-[-0.04em] text-slate-900">Enter OTP</h2>
-              <p className="mt-2 text-base text-[#8e9a9a]">
+              <h2 className="text-3xl font-semibold tracking-[-0.04em] text-slate-900 sm:text-[2.2rem]">Enter OTP</h2>
+              <p className="mt-2 text-base text-[#8e9a9a] [overflow-wrap:anywhere]">
                 Please provide the OTP sent to <span className="font-semibold text-slate-700">{email}</span>
               </p>
             </div>
@@ -235,6 +235,7 @@ export default function VerifyOtp() {
               onChange={setCode}
               idPrefix="otp"
               length={8}
+              compactOnMobile
               inputClassName="aspect-square min-w-0 w-full rounded-lg border border-brand-border bg-white p-0 text-center text-lg font-semibold leading-none text-black shadow-sm outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus sm:text-xl"
             />
 
