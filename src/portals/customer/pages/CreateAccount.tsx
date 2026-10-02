@@ -229,6 +229,15 @@ export default function CreateAccount() {
               )}
 
               {showEmailAuth && (
+                <div className="mt-5 flex items-center justify-between gap-2 text-sm text-slate-500">
+                  <label className="inline-flex items-center gap-2">
+                    <input type="checkbox" className="h-4 w-4 rounded border-slate-300 text-brand-primary focus:ring-brand-primary" />
+                    I agree to the terms
+                  </label>
+                </div>
+              )}
+
+              {showEmailAuth && (
                 <button
                   type="submit"
                   disabled={isSubmitting}

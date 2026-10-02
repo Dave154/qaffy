@@ -129,9 +129,9 @@ export default function VerifyOtp() {
           ? 'This email is not registered to an approved vendor account.'
           : expectedRole === 'logistics'
             ? 'This email is not registered to an approved logistics account.'
-            : expectedRole === 'admin'
-              ? 'This email is not approved for admin access.'
-                : "We couldn't find a customer profile for this account. Try your assigned portal or contact support.",
+          : expectedRole === 'admin'
+            ? 'This email is not approved for admin access.'
+              : "We couldn't find a customer profile for this account. Try your assigned portal or contact support.",
       )
       setIsSubmitting(false)
       return
