@@ -3,6 +3,7 @@ import type { Route } from './+types/root'
 import stylesheetUrl from './index.css?url'
 import { Toaster } from 'sonner'
 import RouteLoadingScreen from './components/RouteLoadingScreen'
+import NotFoundPage from './components/NotFoundPage'
 import { useEffect } from 'react'
 import { initializePwaInstall } from './lib/pwa-install.client'
 
@@ -81,6 +82,8 @@ export default function App() {
 }
 
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
+  if (isRouteErrorResponse(error) && error.status === 404) return <NotFoundPage />
+
   const message = isRouteErrorResponse(error)
     ? `${error.status} ${error.statusText}`
     : error instanceof Error
