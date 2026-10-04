@@ -535,7 +535,7 @@ export default function UserDetails() {
                 <tr key={order.id} className="border-t border-slate-100">
                   <td className="py-3 font-semibold">{order.id}</td>
                   <td className="py-3 capitalize">{order.status.replaceAll('_', ' ')}</td>
-                  <td className="py-3">
+                  <td className="py-3" title="Customer-declared item count / vendor-confirmed item count">
                     {order.customerCount} / {order.vendorCount ?? 'Not confirmed'}
                   </td>
                   <td className="py-3">{order.invoiceAmount === null ? 'Not created' : money(order.invoiceAmount)}</td>

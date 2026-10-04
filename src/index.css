@@ -29,10 +29,10 @@
   --color-brand-surface: #f0fcfd;
   --color-brand-border: #a8eaf0;
   --color-brand-focus: #d9f8fb;
-  --color-field-border: #f24d4d;
-  --color-field-focus: #2563eb;
-  --color-field-focus-hover: #1d4ed8;
-  --color-field-focus-soft: #dbeafe;
+  --color-field-border: #00b7d4;
+  --color-field-focus: #00b7d4;
+  --color-field-focus-hover: #007f99;
+  --color-field-focus-soft: #d9f8fb;
   --color-field-placeholder: #8e9a9a;
   --color-field-disabled: #dfe2e2;
   --color-field-disabled-text: #8e9a9a;
