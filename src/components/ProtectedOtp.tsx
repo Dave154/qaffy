@@ -4,6 +4,7 @@ type ProtectedOtpProps = {
   digitClassName?: string
   length?: number
   containerClassName?: string
+  masked?: boolean
 }
 
 export default function ProtectedOtp({
@@ -12,6 +13,7 @@ export default function ProtectedOtp({
   digitClassName = '',
   length = 4,
   containerClassName = '',
+  masked = false,
 }: ProtectedOtpProps) {
   const digits = (value ?? '').replace(/\D/g, '').slice(0, length)
 
@@ -32,7 +34,7 @@ export default function ProtectedOtp({
             key={`${value}-${index}`}
             className={`flex h-11 w-11 items-center justify-center rounded-md border border-brand-primary bg-white text-lg font-bold text-brand-primary shadow-[inset_0_0_0_1px_rgba(0,183,212,0.08)] ${digitClassName}`}
           >
-            {digits[index] ?? ''}
+            {masked ? '*' : (digits[index] ?? '')}
           </span>
         ))}
       </div>

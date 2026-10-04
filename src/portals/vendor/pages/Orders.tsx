@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { data, Link, useFetcher, useOutletContext, useRevalidator } from 'react-router'
 import { Search } from 'lucide-react'
 import { requireRole } from '../../../lib/auth.server'
 import { sql } from '../../../lib/db.server'
-import { useRef } from 'react'
 import { sendCustomerNotification } from '../../../lib/notifications.server'
+import { toast } from '../../../lib/toast'
+import VendorOrderReviewDialog, { type VendorReviewOrder } from '../VendorOrderReviewDialog'
+import type { action as vendorHomeAction } from './Home'
 
 // eslint-disable-next-line react-refresh/only-export-components
 export async function action({ request }: { request: Request }) {
@@ -15,7 +17,7 @@ export async function action({ request }: { request: Request }) {
   const intent = String(formData.get('intent') ?? '')
   const orderIds = [...new Set(formData.getAll('orderId').map(String).filter(Boolean))]
 
-  if (!['claim', 'dispatch'].includes(intent) || orderIds.length === 0) {
+  if ((intent !== 'claim' && intent !== 'dispatch') || orderIds.length === 0) {
     return data({ ok: false, message: 'Invalid order action.' }, { status: 400, headers: auth.headers })
   }
 
@@ -80,7 +82,7 @@ export async function action({ request }: { request: Request }) {
       { status: 400, headers: auth.headers },
     )
   }
-  return data({ ok: true }, { headers: auth.headers })
+  return data({ ok: true, intent }, { headers: auth.headers })
 }
 
 type VendorOrder = {
@@ -89,34 +91,45 @@ type VendorOrder = {
   publicOrderNumber: string
   customer_id: string
   order_type: 'wash' | 'wash_iron' | 'mixed'
-  clothes_count_customer: number
   status: 'pending_pickup' | 'picked_up' | 'at_vendor' | 'invoiced' | 'paid' | 'out_for_delivery' | 'delivered' | 'cancelled'
   created_at: string
   picked_up_date: string | null
-  customer: { name: string | null; qaffy_id: string | null } | null
+  notes: string | null
+  customer: { name: string | null; qaffy_id: string | null; email: string | null; phone: string | null } | null
   location: { name: string } | null
-  items: Array<{ service: 'wash' | 'iron' | 'wash_iron' }>
+  items: Array<{
+    id: string
+    category_id: string
+    quantity: number
+    confirmed_quantity: number | null
+    service: 'wash' | 'iron' | 'wash_iron'
+    unit_price: number
+    category: { name: string } | null
+  }>
+  mismatches: Array<{ id: string; direction: 'over' | 'under'; detail: string | null; created_at: string }>
 }
 
-type VendorLayoutData = { orders: VendorOrder[] }
+type VendorLayoutData = {
+  orders: VendorOrder[]
+  rateCard: Array<{ name: string; wash: number | null; iron: number | null; wash_iron: number | null }>
+}
 
 const statusLabels: Record<VendorOrder['status'], string> = {
   pending_pickup: 'Pending pickup',
   picked_up: 'Pending claim',
-  at_vendor: 'Vendor processing',
-  invoiced: 'Awaiting payment',
-  paid: 'Processing',
-  out_for_delivery: 'Out for delivery',
+  at_vendor: 'Processing',
+  invoiced: 'Invoiced',
+  paid: 'Ready to dispatch',
+  out_for_delivery: 'Dispatched',
   delivered: 'Completed',
   cancelled: 'Cancelled',
 }
 
 const statusStyle: Record<string, string> = {
   'Pending claim': 'bg-amber-50 text-amber-700',
-  'Vendor processing': 'bg-brand-soft text-brand-primary',
   Processing: 'bg-brand-soft text-brand-primary',
-  'Out for delivery': 'bg-teal-50 text-teal-700',
-  'Awaiting payment': 'bg-sky-50 text-sky-700',
+  'Ready to dispatch': 'bg-sky-50 text-sky-700',
+  Dispatched: 'bg-teal-50 text-teal-700',
   Completed: 'bg-emerald-50 text-emerald-700',
   Cancelled: 'bg-red-50 text-red-700',
 }
@@ -132,22 +145,44 @@ function formatDate(value: string | null) {
 }
 
 export default function Orders() {
-  const { orders } = useOutletContext<VendorLayoutData>()
+  const { orders, rateCard } = useOutletContext<VendorLayoutData>()
   const fetcher = useFetcher<typeof action>()
+  const reviewFetcher = useFetcher<typeof vendorHomeAction>()
   const { revalidate } = useRevalidator()
   const handledFetcherData = useRef<typeof fetcher.data>(null)
+  const handledReviewData = useRef<typeof reviewFetcher.data>(null)
   const [query, setQuery] = useState('')
-  const [activeTab, setActiveTab] = useState<'unclaimed' | 'claimed' | 'processing' | 'delivered'>('processing')
+  const [activeTab, setActiveTab] = useState<'unclaimed' | 'processing' | 'ready' | 'dispatched' | 'delivered'>('processing')
   const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([])
+  const [reviewOrderId, setReviewOrderId] = useState<string | null>(null)
+  const [received, setReceived] = useState<Record<string, Record<string, number | undefined>>>({})
+  const [reviewAddedItems, setReviewAddedItems] = useState<Array<{ categoryName: string; service: 'wash' | 'iron' | 'wash_iron'; quantity: number }>>([])
+  const [reviewNotes, setReviewNotes] = useState('')
 
   useEffect(() => {
     if (!fetcher.data || handledFetcherData.current === fetcher.data) return
     handledFetcherData.current = fetcher.data
     if (fetcher.data.ok) {
       setSelectedOrderIds([])
+      if ('intent' in fetcher.data && fetcher.data.intent === 'claim') setActiveTab('processing')
       revalidate()
     }
   }, [fetcher.data, revalidate])
+
+  useEffect(() => {
+    if (!reviewFetcher.data || handledReviewData.current === reviewFetcher.data) return
+    handledReviewData.current = reviewFetcher.data
+    if (reviewFetcher.data.ok && 'amount' in reviewFetcher.data) {
+      setReviewOrderId(null)
+      setReviewAddedItems([])
+      setReviewNotes('')
+      toast.success('Order review submitted.')
+      if ('invoiceStatus' in reviewFetcher.data && reviewFetcher.data.invoiceStatus === 'paid') setActiveTab('ready')
+      revalidate()
+    } else if ('message' in reviewFetcher.data) {
+      toast.error(String(reviewFetcher.data.message))
+    }
+  }, [reviewFetcher.data, revalidate])
 
   const rows = useMemo(
     () =>
@@ -162,6 +197,33 @@ export default function Orders() {
     [orders],
   )
 
+  const reviewOrder = useMemo<VendorReviewOrder | null>(() => {
+    const order = orders.find((candidate) => candidate.id === reviewOrderId)
+    if (!order) return null
+    return {
+      id: order.id,
+      publicOrderNumber: order.publicOrderNumber,
+      customer: order.customer?.name ?? 'Customer',
+      orderType: order.order_type,
+      orderStatus: order.status,
+      notes: order.notes ?? '',
+      items: order.items.map((item) => ({
+        id: item.id,
+        name: item.category?.name ?? 'Laundry item',
+        quantity: Number(item.quantity),
+        confirmedQuantity: item.confirmed_quantity,
+        service: item.service,
+        unitPrice: Number(item.unit_price),
+      })),
+      mismatches: order.mismatches.map((mismatch) => ({
+        id: mismatch.id,
+        direction: mismatch.direction,
+        detail: mismatch.detail ?? 'Mismatch recorded',
+        createdAt: mismatch.created_at,
+      })),
+    }
+  }, [orders, reviewOrderId])
+
   const filteredOrders = rows.filter((order) => {
     const searchText =
       `${order.publicOrderNumber} ${order.customer} ${order.customerId} ${order.location} ${orderTypeLabels[order.order_type]}`.toLowerCase()
@@ -169,10 +231,12 @@ export default function Orders() {
       activeTab === 'unclaimed'
         ? order.status === 'picked_up'
         : activeTab === 'processing'
-          ? order.status === 'paid'
-          : activeTab === 'claimed'
-            ? ['at_vendor', 'invoiced', 'out_for_delivery'].includes(order.status)
-            : order.status === 'delivered'
+          ? order.status === 'at_vendor'
+          : activeTab === 'ready'
+            ? order.status === 'paid'
+            : activeTab === 'dispatched'
+              ? order.status === 'out_for_delivery'
+              : order.status === 'delivered'
     return searchText.includes(query.toLowerCase()) && inTab
   })
   const selectableOrders = filteredOrders.filter((order) => order.status === 'paid')
@@ -190,13 +254,54 @@ export default function Orders() {
     )
   }
 
-  const dispatchSelectedOrders = () => {
-    if (selectedOrderIds.length === 0 || fetcher.state !== 'idle') return
+  const dispatchOrders = (orderIds: string[]) => {
+    if (orderIds.length === 0 || fetcher.state !== 'idle') return
     const formData = new FormData()
     formData.set('intent', 'dispatch')
-    selectedOrderIds.forEach((orderId) => formData.append('orderId', orderId))
+    orderIds.forEach((orderId) => formData.append('orderId', orderId))
     fetcher.submit(formData, { method: 'post' })
   }
+
+  const dispatchSelectedOrders = () => dispatchOrders(selectedOrderIds)
+
+  const openCountReview = (orderId: string) => {
+    const order = orders.find((candidate) => candidate.id === orderId)
+    if (!order || order.status !== 'at_vendor') return
+    setReviewOrderId(orderId)
+    setReceived({
+      [orderId]: Object.fromEntries(
+        order.items.map((item) => [item.id, item.confirmed_quantity == null ? undefined : Math.max(1, item.confirmed_quantity)]),
+      ),
+    })
+    setReviewAddedItems([])
+    setReviewNotes('')
+  }
+
+  const saveCountReview = () => {
+    if (!reviewOrder || reviewFetcher.state !== 'idle') return
+    const formData = new FormData()
+    formData.set('intent', 'review')
+    formData.set('orderId', reviewOrder.id)
+    formData.set(
+      'receivedItems',
+      JSON.stringify(
+        Object.entries(received[reviewOrder.id] ?? {}).map(([itemId, quantity]) => ({ itemId, quantity })),
+      ),
+    )
+    formData.set('addedItems', JSON.stringify(reviewAddedItems))
+    formData.set('mismatchDetail', reviewNotes)
+    reviewFetcher.submit(formData, { method: 'post', action: '/vendor' })
+  }
+
+  const reviewReceived = reviewOrder ? (received[reviewOrder.id] ?? {}) : {}
+  const reviewReceivedTotal =
+    Object.values(reviewReceived).reduce<number>((total, quantity) => total + (quantity ?? 0), 0) +
+    reviewAddedItems.reduce((total, item) => total + item.quantity, 0)
+  const reviewHasMismatch =
+    (reviewOrder?.items.some((item) => {
+      const receivedCount = reviewReceived[item.id]
+      return receivedCount !== undefined && receivedCount !== item.quantity
+    }) ?? false) || reviewAddedItems.length > 0
 
   const changeTab = (tab: typeof activeTab) => {
     setActiveTab(tab)
@@ -212,18 +317,17 @@ export default function Orders() {
         <p className="mt-2 text-sm text-slate-500">Review live customer orders and continue processing work.</p>
       </header>
 
-      <section className="grid gap-3 min-[375px]:grid-cols-2 sm:grid-cols-3 xl:grid-cols-6">
+      <section className="grid grid-cols-3 gap-2 sm:gap-3 xl:grid-cols-5">
         {[
           ['Available', count('Pending claim')],
-          ['Vendor processing', count('Vendor processing')],
           ['Processing', count('Processing')],
-          ['Awaiting payment', count('Awaiting payment')],
-          ['Out for delivery', count('Out for delivery')],
+          ['Ready to dispatch', count('Ready to dispatch')],
+          ['Dispatched', count('Dispatched')],
           ['Completed', count('Completed')],
         ].map(([label, value]) => (
-          <div key={label} className="rounded-[10px] border border-[#e9e9e9] bg-white p-4">
-            <p className="text-xs text-slate-500">{label}</p>
-            <p className="mt-3 text-2xl font-bold text-slate-900">{value}</p>
+          <div key={label} className="min-h-24 min-w-0 rounded-[10px] border border-[#e9e9e9] bg-white p-2.5 sm:min-h-0 sm:p-4">
+            <p className="break-words text-[10px] leading-4 text-slate-500 sm:text-xs">{label}</p>
+            <p className="mt-1.5 text-xl font-bold text-slate-900 sm:mt-3 sm:text-2xl">{value}</p>
           </div>
         ))}
       </section>
@@ -242,12 +346,9 @@ export default function Orders() {
           <div className="scrollbar-hidden flex flex-nowrap gap-2 overflow-x-auto pb-1">
             {[
               ['unclaimed', 'Unclaimed', rows.filter((order) => order.status === 'picked_up').length],
-              ['processing', 'Processing', rows.filter((order) => order.status === 'paid').length],
-              [
-                'claimed',
-                'Dispatched',
-                rows.filter((order) => ['at_vendor', 'invoiced', 'out_for_delivery'].includes(order.status)).length,
-              ],
+              ['processing', 'Processing', rows.filter((order) => order.status === 'at_vendor').length],
+              ['ready', 'Ready to dispatch', rows.filter((order) => order.status === 'paid').length],
+              ['dispatched', 'Dispatched', rows.filter((order) => order.status === 'out_for_delivery').length],
               ['delivered', 'Delivered', rows.filter((order) => order.status === 'delivered').length],
             ].map(([value, label, count]) => (
               <button
@@ -274,8 +375,34 @@ export default function Orders() {
               role="status"
               className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm font-medium text-emerald-700"
             >
-              Selected orders dispatched successfully.
+              {'intent' in fetcher.data && fetcher.data.intent === 'claim' ? 'Order claimed successfully.' : 'Dispatch complete.'}
             </p>
+          )}
+          {selectableOrders.length > 0 && (
+            <div className="mb-4 space-y-3 rounded-xl border border-brand-border bg-brand-soft p-3">
+              <label className="flex items-center gap-2 text-sm font-semibold text-brand-strong">
+                <input
+                  type="checkbox"
+                  checked={allSelectableOrdersSelected}
+                  onChange={toggleAllSelectableOrders}
+                  aria-label="Select all orders ready for dispatch"
+                  className="h-4 w-4 accent-brand-primary"
+                />
+                Select all ready for dispatch ({selectableOrders.length})
+              </label>
+              <button
+                type="button"
+                onClick={dispatchSelectedOrders}
+                disabled={selectedOrderIds.length === 0 || fetcher.state !== 'idle'}
+                className="w-full rounded-lg bg-brand-primary px-3 py-2.5 text-sm font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {fetcher.state !== 'idle'
+                  ? 'Dispatching...'
+                  : selectedOrderIds.length > 0
+                    ? `Dispatch ${selectedOrderIds.length} selected`
+                    : 'Dispatch selected orders'}
+              </button>
+            </div>
           )}
           <div className="space-y-3">
             {filteredOrders.map((order) => (
@@ -294,10 +421,6 @@ export default function Orders() {
                     <dt className="text-slate-400">Service</dt>
                     <dd className="mt-0.5 truncate font-medium text-slate-700">{orderTypeLabels[order.order_type]}</dd>
                   </div>
-                  <div>
-                    <dt className="text-slate-400">Items</dt>
-                    <dd className="mt-0.5 font-medium text-slate-700">{order.clothes_count_customer}</dd>
-                  </div>
                   <div className="col-span-2">
                     <dt className="text-slate-400">Pickup location</dt>
                     <dd className="mt-0.5 truncate font-medium text-slate-700">{order.location}</dd>
@@ -307,8 +430,8 @@ export default function Orders() {
                     <dd className="mt-0.5 truncate font-medium text-slate-700">{formatDate(order.picked_up_date)}</dd>
                   </div>
                 </dl>
-                <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3">
-                  {order.status === 'paid' ? (
+                <div className="mt-4 space-y-3 border-t border-slate-100 pt-3">
+                  {order.status === 'paid' && (
                     <label className="flex items-center gap-2 text-xs font-semibold text-slate-600">
                       <input
                         type="checkbox"
@@ -319,25 +442,45 @@ export default function Orders() {
                       />
                       Select for dispatch
                     </label>
-                  ) : (
-                    <span />
                   )}
-                  {order.status === 'picked_up' ? (
+                  {order.status === 'at_vendor' ? (
                     <button
                       type="button"
-                      onClick={() => fetcher.submit({ intent: 'claim', orderId: order.id }, { method: 'post' })}
-                      disabled={fetcher.state !== 'idle'}
-                      className="rounded-[7px] border border-[#dedede] px-3 py-2 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary disabled:cursor-wait disabled:opacity-60"
+                      onClick={() => openCountReview(order.id)}
+                      className="w-full rounded-[7px] bg-brand-primary px-3 py-2.5 text-xs font-semibold text-white hover:bg-brand-primary-hover"
                     >
-                      {fetcher.state !== 'idle' ? 'Claiming...' : 'Claim'}
+                      Review final count
                     </button>
                   ) : (
-                    <Link
-                      to={`/vendor?orderId=${encodeURIComponent(order.id)}&returnTo=orders`}
-                      className="rounded-[7px] border border-[#dedede] px-3 py-2 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary"
-                    >
-                      View details
-                    </Link>
+                    <div className="flex gap-2">
+                      {order.status === 'picked_up' ? (
+                      <button
+                        type="button"
+                        onClick={() => fetcher.submit({ intent: 'claim', orderId: order.id }, { method: 'post' })}
+                        disabled={fetcher.state !== 'idle'}
+                        className="flex-1 rounded-[7px] border border-[#dedede] px-3 py-2.5 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary disabled:cursor-wait disabled:opacity-60"
+                      >
+                        {fetcher.state !== 'idle' ? 'Claiming...' : 'Claim'}
+                      </button>
+                      ) : order.status === 'paid' ? (
+                        <button
+                          type="button"
+                          onClick={() => dispatchOrders([order.id])}
+                          disabled={fetcher.state !== 'idle'}
+                          className="flex-1 rounded-[7px] bg-brand-primary px-3 py-2.5 text-xs font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-wait disabled:opacity-60"
+                        >
+                          {fetcher.state !== 'idle' ? 'Dispatching...' : 'Dispatch'}
+                        </button>
+                      ) : null}
+                      {order.status !== 'picked_up' && (
+                        <Link
+                          to={`/vendor?orderId=${encodeURIComponent(order.id)}&returnTo=orders`}
+                          className="flex-1 rounded-[7px] border border-[#dedede] px-3 py-2.5 text-center text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary"
+                        >
+                          View details
+                        </Link>
+                      )}
+                    </div>
                   )}
                 </div>
               </article>
@@ -356,7 +499,7 @@ export default function Orders() {
               role="status"
               className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm font-medium text-emerald-700"
             >
-              Selected orders dispatched successfully.
+              {'intent' in fetcher.data && fetcher.data.intent === 'claim' ? 'Order claimed successfully.' : 'Dispatch complete.'}
             </p>
           )}
           {selectableOrders.length > 0 && (
@@ -386,14 +529,13 @@ export default function Orders() {
           )}
           <table className="w-full min-w-[1240px] table-fixed text-left">
             <thead>
-              <tr className="border-b border-[#ededed] bg-[#f8f8f8] text-[10px] uppercase tracking-[0.12em] text-slate-500">
+              <tr className="border-b border-[#ededed] bg-[#f8f8f8] text-[10px] capitalize tracking-[0.12em] text-slate-500">
                 <th className="w-12 px-4 py-3 font-semibold">
                   <span className="sr-only">Select</span>
                 </th>
                 <th className="w-36 px-4 py-3 font-semibold">Order</th>
                 <th className="w-56 px-4 py-3 font-semibold">Customer</th>
                 <th className="w-36 px-4 py-3 font-semibold">Service</th>
-                <th className="w-24 px-4 py-3 font-semibold">Items</th>
                 <th className="w-40 px-4 py-3 font-semibold">Pickup location</th>
                 <th className="w-40 px-4 py-3 font-semibold">Picked up</th>
                 <th className="w-40 px-4 py-3 font-semibold">Status</th>
@@ -426,7 +568,6 @@ export default function Orders() {
                   >
                     {orderTypeLabels[order.order_type]}
                   </td>
-                  <td className="whitespace-nowrap px-4 py-4 text-sm text-slate-600">{order.clothes_count_customer}</td>
                   <td className="max-w-40 truncate whitespace-nowrap px-4 py-4 text-sm text-slate-600" title={order.location}>
                     {order.location}
                   </td>
@@ -444,7 +585,15 @@ export default function Orders() {
                     </span>
                   </td>
                   <td className="whitespace-nowrap px-4 py-4 text-right">
-                    {order.status === 'picked_up' ? (
+                    {order.status === 'at_vendor' ? (
+                      <button
+                        type="button"
+                        onClick={() => openCountReview(order.id)}
+                        className="rounded-[7px] bg-brand-primary px-3 py-2 text-xs font-semibold text-white hover:bg-brand-primary-hover"
+                      >
+                        Review count
+                      </button>
+                    ) : order.status === 'picked_up' ? (
                       <button
                         type="button"
                         onClick={() => fetcher.submit({ intent: 'claim', orderId: order.id }, { method: 'post' })}
@@ -469,6 +618,28 @@ export default function Orders() {
           {filteredOrders.length === 0 && <p className="py-8 text-center text-sm text-slate-500">No matching orders.</p>}
         </div>
       </section>
+      {reviewOrder && (
+        <VendorOrderReviewDialog
+          order={reviewOrder}
+          received={reviewReceived}
+          receivedTotal={reviewReceivedTotal}
+          hasMismatch={reviewHasMismatch}
+          notes={reviewNotes}
+          addedItems={reviewAddedItems}
+          categoryNames={rateCard.map((rate) => rate.name)}
+          isPreClaim={false}
+          canEdit={reviewOrder.orderStatus === 'at_vendor'}
+          onReceivedChange={(itemId, value) =>
+            setReceived((current) => ({ ...current, [reviewOrder.id]: { ...current[reviewOrder.id], [itemId]: value } }))
+          }
+          onNotesChange={setReviewNotes}
+          onAddedItemsChange={setReviewAddedItems}
+          onClose={() => setReviewOrderId(null)}
+          onSave={saveCountReview}
+          onClaim={() => {}}
+          saving={reviewFetcher.state !== 'idle'}
+        />
+      )}
     </div>
   )
 }

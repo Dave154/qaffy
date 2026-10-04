@@ -108,7 +108,7 @@ export default function VerifyOtp() {
       <div className="w-full max-w-130 rounded-[28px] border border-[#e7e7e7] bg-white p-4 shadow-[0_24px_80px_rgba(17,24,39,0.08)] sm:p-7">
         <div className="mb-6 flex items-center justify-between gap-3">
           <QaffyLogo />
-          <span className="rounded-full bg-brand-soft px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-brand-primary">
+          <span className="rounded-full bg-brand-soft px-2.5 py-1 text-[10px] font-semibold capitalize tracking-[0.18em] text-brand-primary">
             Logistics
           </span>
         </div>

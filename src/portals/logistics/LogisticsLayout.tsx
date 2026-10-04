@@ -117,7 +117,7 @@ export default function LogisticsLayout() {
           <div className="flex items-center gap-3 sm:gap-4">
             <div className="flex shrink-0 flex-col items-start justify-center gap-3 pt-0.5">
               <QaffyLogo className="inline-flex" />
-              <p className="pl-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-brand-primary">Logistics</p>
+              <p className="pl-0.5 text-[10px] font-semibold capitalize tracking-[0.18em] text-brand-primary">Logistics</p>
             </div>
             <div className="min-w-0 max-w-[180px] text-left sm:max-w-[260px]">
               <p className="truncate text-[11px] font-semibold text-slate-800 sm:text-sm">{currentAgent.name}</p>

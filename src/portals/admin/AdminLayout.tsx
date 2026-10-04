@@ -122,7 +122,7 @@ export default function AdminLayout() {
             ) : (
               <QaffyLogo className="mt-2 origin-left px-3 scale-[0.78]" />
             )}
-            <p className={`text-[10px] font-semibold uppercase tracking-[0.22em] text-brand-primary ${isCollapsed ? 'sr-only' : 'px-3'}`}>
+            <p className={`text-[10px] font-semibold capitalize tracking-[0.22em] text-brand-primary ${isCollapsed ? 'sr-only' : 'px-3'}`}>
               Admin
             </p>
           </div>
@@ -241,7 +241,7 @@ export default function AdminLayout() {
         </button>
         <div className="flex flex-col items-center justify-center gap-3">
           <QaffyLogo className="scale-[0.82]" />
-          <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-brand-primary">Admin</span>
+          <span className="text-[10px] font-semibold capitalize tracking-[0.18em] text-brand-primary">Admin</span>
         </div>
         <div className="w-9" aria-hidden="true" />
       </div>
@@ -257,7 +257,7 @@ export default function AdminLayout() {
             <div className="mb-6 flex items-center justify-between">
               <div className="flex flex-1 flex-col items-start gap-3">
                 <QaffyLogo className="scale-[0.78] origin-left px-0" />
-                <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-brand-primary">Admin</p>
+                <p className="text-[10px] font-semibold capitalize tracking-[0.22em] text-brand-primary">Admin</p>
               </div>
               <button
                 type="button"

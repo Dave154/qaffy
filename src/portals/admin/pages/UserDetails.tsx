@@ -4,6 +4,7 @@ import { useState } from 'react'
 import type { Route } from './+types/UserDetails'
 import { requireRole } from '../../../lib/auth.server'
 import { adjustWallet } from '../../../lib/wallet.server'
+import { createManualSubscriptionWithSnapshot } from '../../../lib/subscriptions.server'
 import { toast } from '../../../lib/toast'
 import { sumSuccessfulPlanPayments } from '../../../lib/revenue-reporting'
 
@@ -273,21 +274,13 @@ export async function action({ request, params }: Route.ActionArgs) {
     const startDate = String(formData.get('startDate') ?? new Date().toISOString().slice(0, 10))
     const endDate = String(formData.get('endDate') ?? '') || null
     if (!planId) return data({ ok: false, message: 'Select a plan.' }, { status: 400 })
-    const { data: existing } = await auth.supabase
-      .from('subscriptions')
-      .select('id')
-      .eq('customer_id', customerId)
-      .eq('status', 'active')
-      .maybeSingle()
-    if (existing) return data({ ok: false, message: 'Customer already has an active subscription.' }, { status: 409 })
-    const { error } = await auth.supabase.from('subscriptions').insert({
-      customer_id: customerId,
-      plan_id: planId,
-      status: 'active',
-      start_date: startDate,
-      end_date: endDate,
-    })
-    return error ? data({ ok: false, message: error.message }, { status: 400 }) : data({ ok: true, message: 'Subscription created.' })
+    try {
+      await createManualSubscriptionWithSnapshot({ customerId, planId, startDate, endDate })
+      return data({ ok: true, message: 'Subscription created.' })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Subscription could not be created.'
+      return data({ ok: false, message }, { status: message.includes('already has an active subscription') ? 409 : 400 })
+    }
   }
   return data({ ok: false, message: 'Unknown action.' }, { status: 400 })
 }
@@ -301,7 +294,7 @@ function CopyField({ label, value }: { label: string; value: string | null }) {
   }
   return (
     <div>
-      <label className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}</label>
+      <label className="text-[10px] font-semibold capitalize tracking-[0.14em] text-slate-500">{label}</label>
       <div className="mt-1 flex gap-2">
         <input
           name={label.toLowerCase()}
@@ -334,7 +327,7 @@ function UserStats({ stats }: { stats: UserDetailsData['stats'] }) {
     <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
       {cards.map(([label, value]) => (
         <div key={label} className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">{label}</p>
+          <p className="text-[10px] font-semibold capitalize tracking-[0.12em] text-slate-400">{label}</p>
           <p className="mt-2 text-xl font-bold text-slate-900">{value}</p>
         </div>
       ))}
@@ -440,7 +433,7 @@ export default function UserDetails() {
         <Form method="post" className="grid gap-4 md:grid-cols-3">
           <input type="hidden" name="intent" value="profile" />
           <div>
-            <label className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Name</label>
+            <label className="text-[10px] font-semibold capitalize tracking-[0.14em] text-slate-500">Name</label>
             <input
               name="name"
               defaultValue={details.profile.name ?? ''}
@@ -499,7 +492,7 @@ export default function UserDetails() {
         <h3 className="font-bold text-slate-900">Subscriptions</h3>
         <div className="mt-4 overflow-x-auto">
           <table className="w-full min-w-[620px] text-left text-sm">
-            <thead className="text-xs uppercase tracking-[0.12em] text-slate-500">
+            <thead className="text-xs capitalize tracking-[0.12em] text-slate-500">
               <tr>
                 <th className="pb-3">Plan</th>
                 <th className="pb-3">Status</th>
@@ -527,7 +520,7 @@ export default function UserDetails() {
         <h3 className="font-bold text-slate-900">Orders and invoices</h3>
         <div className="mt-4 overflow-x-auto">
           <table className="w-full min-w-[760px] text-left text-sm">
-            <thead className="text-xs uppercase tracking-[0.12em] text-slate-500">
+            <thead className="text-xs capitalize tracking-[0.12em] text-slate-500">
               <tr>
                 <th className="pb-3">Order</th>
                 <th className="pb-3">Status</th>

@@ -3,6 +3,9 @@ import type { WalletBalanceType } from '@/types/database.types'
 import type { TransactionSql } from 'postgres'
 import { sendCustomerNotification } from './notifications.server'
 import { getSubscriptionWeekStart } from './subscription-week'
+import { insertSubscriptionWithSnapshot, lockCustomerSubscription } from './subscriptions.server'
+import { calculateSubscriptionBilling } from './subscription-billing'
+import { isValidVendorReceivedItems } from './vendor-received-counts'
 
 class InsufficientBalanceError extends Error {
   constructor() {
@@ -321,7 +324,7 @@ export async function finalizeVendorOrder(
     if (order.status !== 'at_vendor') throw new Error('This order is not ready for vendor review')
 
     if (!Array.isArray(receivedItems) || !Array.isArray(addedItems)) throw new Error('Order review details are invalid')
-    if (receivedItems.some((item) => !item.itemId || !Number.isSafeInteger(item.quantity) || item.quantity < 0))
+    if (!isValidVendorReceivedItems(receivedItems))
       throw new Error('Received quantities are invalid')
     if (
       addedItems.some(
@@ -354,7 +357,11 @@ export async function finalizeVendorOrder(
     }
 
     const items = await tx`
-      select oi.id, oi.quantity, oi.service, oi.unit_price, c.name as category_name, r.wash_price, r.iron_price, r.wash_iron_price, r.subscription_units
+      select
+        oi.id, oi.quantity, oi.service, oi.unit_price, oi.subscription_units_snapshot,
+        oi.regular_wash_price_snapshot, oi.regular_iron_price_snapshot, oi.regular_wash_iron_price_snapshot,
+        oi.subscriber_wash_price_snapshot, oi.subscriber_iron_price_snapshot, oi.subscriber_wash_iron_price_snapshot,
+        c.name as category_name, r.wash_price, r.iron_price, r.wash_iron_price, r.subscription_units
       from order_items oi
       join cloth_categories c on c.id = oi.category_id
       left join cloth_category_rates r on r.category_id = oi.category_id
@@ -381,29 +388,17 @@ export async function finalizeVendorOrder(
     if (receivedItems.some((item) => !orderItemIds.has(item.itemId) || !originalItemIds.has(item.itemId)))
       throw new Error('Received item does not belong to the original order')
     const receivedById = new Map(receivedItems.map((item) => [item.itemId, item.quantity]))
-    const mismatchItems = items
-      .map((item) => {
-        const originalQuantity = addedItemIds.includes(item.id) ? 0 : Number(item.quantity)
-        const confirmedQuantity = receivedById.get(item.id) ?? (addedItemIds.includes(item.id) ? Number(item.quantity) : 0)
-        const difference = confirmedQuantity - originalQuantity
-        return {
-          category: item.category_name,
-          service: item.service,
-          originalQuantity,
-          confirmedQuantity,
-          difference,
-          unitPrice: Number(item.unit_price),
-          extraAmount: Math.max(0, difference * Number(item.unit_price)),
-        }
-      })
-      .filter((item) => item.difference !== 0)
+    const originalQuantityById = new Map(items.map((item) => [item.id, addedItemIds.includes(item.id) ? 0 : Number(item.quantity)]))
+    const confirmedQuantityById = new Map(
+      items.map((item) => [item.id, receivedById.get(item.id) ?? (addedItemIds.includes(item.id) ? Number(item.quantity) : 0)]),
+    )
     const finalCount = items.reduce(
       (total, item) => total + (receivedById.get(item.id) ?? (addedItemIds.includes(item.id) ? Number(item.quantity) : 0)),
       0,
     )
     const finalWeightedUnits = items.reduce((total, item) => {
       const quantity = receivedById.get(item.id) ?? (addedItemIds.includes(item.id) ? Number(item.quantity) : 0)
-      return total + quantity * Number(item.subscription_units)
+      return total + quantity * Number(item.subscription_units_snapshot ?? item.subscription_units)
     }, 0)
     const finalAmount = items.reduce((total, item) => {
       const quantity = receivedById.get(item.id) ?? (addedItemIds.includes(item.id) ? Number(item.quantity) : 0)
@@ -416,28 +411,61 @@ export async function finalizeVendorOrder(
         const unitPrice = Number(item.unit_price)
         return total + Number(item.quantity) * unitPrice
       }, 0)
-    const extraAmount = Math.max(0, finalAmount - originalAmount)
+    let extraAmount = Math.max(0, finalAmount - originalAmount)
     const billingCount = order.is_subscription_order ? finalWeightedUnits : finalCount
     const mismatchDirection =
       finalCount > Number(order.clothes_count_customer) ? 'over' : finalCount < Number(order.clothes_count_customer) ? 'under' : null
     if (mismatchDirection && !mismatchDetail.trim()) throw new Error('Mismatch details are required when the final count changes')
 
+    let mismatchItems = items
+      .map((item) => {
+        const originalQuantity = originalQuantityById.get(item.id) ?? 0
+        const confirmedQuantity = confirmedQuantityById.get(item.id) ?? 0
+        const difference = confirmedQuantity - originalQuantity
+        return {
+          category: item.category_name,
+          service: item.service,
+          originalQuantity,
+          confirmedQuantity,
+          difference,
+          unitPrice: Number(item.unit_price),
+          extraAmount: Math.max(0, difference * Number(item.unit_price)),
+        }
+      })
+      .filter((item) => item.difference !== 0)
+
     const referralRewardRecipients: ReferralRewardRecipient[] = []
 
     let invoiceAmount = Math.round(finalAmount * 100) / 100
+    let subscriptionUnitsApplied = 0
+    let billingBreakdown: { coveredUnits: number; subscriberAmount: number; regularAmount: number } | null = null
     if (order.is_subscription_order) {
       const weekStart = getSubscriptionWeekStart()
-      const [subscriptionPlan] = await tx`
-        select p.weekly_limit
-        from subscriptions s
-        join plans p on p.id = s.plan_id
-        where s.customer_id = ${order.customer_id}
-          and s.status = 'active'
-          and (s.end_date is null or s.end_date >= current_date)
-        order by s.created_at desc
-        limit 1
-        for update of s
-      `
+      let weeklyLimit = 0
+      let coverage = { wash: true, iron: true }
+      if (order.subscription_id) {
+        const [snapshot] = await tx`
+          select weekly_limit_snapshot, covers_wash_snapshot, covers_iron_snapshot
+          from subscriptions
+          where id = ${order.subscription_id} and customer_id = ${order.customer_id}
+          for update
+        `
+        if (!snapshot) throw new Error('The subscription terms for this order could not be found')
+        weeklyLimit = Number(snapshot.weekly_limit_snapshot)
+        coverage = { wash: Boolean(snapshot.covers_wash_snapshot), iron: Boolean(snapshot.covers_iron_snapshot) }
+      } else {
+        const [legacyPlan] = await tx`
+          select s.weekly_limit_snapshot as weekly_limit
+          from subscriptions s
+          where s.customer_id = ${order.customer_id}
+            and s.status = 'active'
+            and (s.end_date is null or s.end_date >= current_date)
+          order by s.created_at desc
+          limit 1
+          for update of s
+        `
+        weeklyLimit = Number(legacyPlan?.weekly_limit ?? 0)
+      }
       const [usage] = await tx`
         select coalesce(sum(subscription_units_applied), 0) as used_units
         from orders
@@ -448,25 +476,80 @@ export async function finalizeVendorOrder(
           and subscription_units_applied_at >= ${weekStart}
           and id <> ${orderId}
       `
-      const remainingUnits = Math.max(0, Number(subscriptionPlan?.weekly_limit ?? 0) - Number(usage?.used_units ?? 0))
-      let subscriptionUnitsApplied = 0
+      const remainingUnits = Math.max(0, weeklyLimit - Number(usage?.used_units ?? 0))
       invoiceAmount = 0
-      const subscriptionCoverage = allocateSubscriptionCoverage(
-        items.map((item) => ({
+      if (order.subscription_id) {
+        if (
+          items.some(
+            (item) =>
+              item.subscription_units_snapshot == null ||
+              item.regular_wash_price_snapshot == null ||
+              item.regular_iron_price_snapshot == null ||
+              item.regular_wash_iron_price_snapshot == null ||
+              item.subscriber_wash_price_snapshot == null ||
+              item.subscriber_iron_price_snapshot == null ||
+              item.subscriber_wash_iron_price_snapshot == null,
+          )
+        ) {
+          throw new Error('Order-time subscription rates are missing. This order cannot be finalized safely.')
+        }
+        const billingItems = items.map((item) => ({
           id: item.id,
-          quantity: Number(receivedById.get(item.id) ?? (addedItemIds.includes(item.id) ? Number(item.quantity) : 0)),
-          units: Number(item.subscription_units),
-          unitPrice: Number(item.unit_price),
-        })),
-        remainingUnits,
-      )
-      for (const item of items) {
-        const quantity = receivedById.get(item.id) ?? (addedItemIds.includes(item.id) ? Number(item.quantity) : 0)
-        const units = Number(item.subscription_units)
-        const coveredQuantity = subscriptionCoverage.get(item.id) ?? 0
-        subscriptionUnitsApplied += coveredQuantity * units
-        const unitPrice = Number(item.unit_price)
-        invoiceAmount += (quantity - coveredQuantity) * unitPrice
+          service: item.service as 'wash' | 'iron' | 'wash_iron',
+          quantity: Number(confirmedQuantityById.get(item.id) ?? 0),
+          unitsPerItem: Number(item.subscription_units_snapshot),
+          regularPrice: Number(item.unit_price),
+          regularWashPrice: Number(item.regular_wash_price_snapshot),
+          regularIronPrice: Number(item.regular_iron_price_snapshot),
+          subscriberWashPrice: Number(item.subscriber_wash_price_snapshot),
+          subscriberIronPrice: Number(item.subscriber_iron_price_snapshot),
+          subscriberWashIronPrice: Number(item.subscriber_wash_iron_price_snapshot),
+        }))
+        const billing = calculateSubscriptionBilling(billingItems, coverage, remainingUnits)
+        const originalBilling = calculateSubscriptionBilling(
+          billingItems.map((item) => ({ ...item, quantity: Number(originalQuantityById.get(item.id) ?? 0) })),
+          coverage,
+          remainingUnits,
+        )
+        invoiceAmount = Math.round(billing.totalAmount * 100) / 100
+        subscriptionUnitsApplied = billing.coveredUnits
+        extraAmount = Math.max(0, Math.round((billing.totalAmount - originalBilling.totalAmount) * 100) / 100)
+        billingBreakdown = {
+          coveredUnits: billing.coveredUnits,
+          subscriberAmount: Math.round(billing.subscriberAmount * 100) / 100,
+          regularAmount: Math.round(billing.regularAmount * 100) / 100,
+        }
+        const originalLineAmounts = new Map(originalBilling.lines.map((line) => [line.id, line.totalAmount]))
+        mismatchItems = items
+          .map((item, index) => {
+            const originalQuantity = originalQuantityById.get(item.id) ?? 0
+            const confirmedQuantity = confirmedQuantityById.get(item.id) ?? 0
+            return {
+              category: item.category_name,
+              service: item.service,
+              originalQuantity,
+              confirmedQuantity,
+              difference: confirmedQuantity - originalQuantity,
+              unitPrice: Number(item.unit_price),
+              extraAmount: Math.max(0, billing.lines[index].totalAmount - (originalLineAmounts.get(item.id) ?? 0)),
+            }
+          })
+          .filter((item) => item.difference !== 0)
+      } else {
+        const subscriptionCoverage = allocateSubscriptionCoverage(
+          items.map((item) => ({
+            id: item.id,
+            quantity: Number(confirmedQuantityById.get(item.id) ?? 0),
+            units: Number(item.subscription_units),
+            unitPrice: Number(item.unit_price),
+          })),
+          remainingUnits,
+        )
+        for (const item of items) {
+          const coveredQuantity = subscriptionCoverage.get(item.id) ?? 0
+          subscriptionUnitsApplied += coveredQuantity * Number(item.subscription_units)
+          invoiceAmount += (Number(confirmedQuantityById.get(item.id) ?? 0) - coveredQuantity) * Number(item.unit_price)
+        }
       }
       invoiceAmount = Math.round(invoiceAmount * 100) / 100
       await tx`
@@ -496,9 +579,13 @@ export async function finalizeVendorOrder(
       `
     }
     const [invoice] = await tx`
-      insert into invoices (order_id, amount, status)
-      values (${orderId}, ${invoiceAmount}, 'unpaid')
-      on conflict (order_id) do update set amount = excluded.amount, status = 'unpaid', paid_at = null
+      insert into invoices (order_id, amount, status, billing_breakdown)
+      values (${orderId}, ${invoiceAmount}, 'unpaid', ${billingBreakdown ? JSON.stringify(billingBreakdown) : null}::jsonb)
+      on conflict (order_id) do update set
+        amount = excluded.amount,
+        status = 'unpaid',
+        paid_at = null,
+        billing_breakdown = excluded.billing_breakdown
       returning id, amount, status
     `
 
@@ -662,6 +749,7 @@ export async function creditWallet(customerId: string, balanceType: WalletBalanc
 /** Completes a paid subscription transaction without changing either wallet balance. */
 export async function activateSubscriptionFromPayment(customerId: string, paymentReference: string) {
   return sql.begin(async (tx) => {
+    await lockCustomerSubscription(tx, customerId)
     const [payment] = await tx`
       select p.id, p.plan_id, p.status, p.customer_id, pl.name, pl.type, pl.semester_end_date
       from payments p
@@ -676,7 +764,9 @@ export async function activateSubscriptionFromPayment(customerId: string, paymen
 
     const [existingSubscription] = await tx`
       select id from subscriptions
-      where customer_id = ${customerId} and status = 'active'
+      where customer_id = ${customerId}
+        and status = 'active'
+        and (end_date is null or end_date >= current_date)
       limit 1
     `
     if (existingSubscription) return { alreadyActivated: true }
@@ -692,11 +782,12 @@ export async function activateSubscriptionFromPayment(customerId: string, paymen
           new Date(startDate.getFullYear(), startDate.getMonth() + 6, startDate.getDate()).toISOString().slice(0, 10))
         : new Date(startDate.getFullYear(), startDate.getMonth() + 1, startDate.getDate()).toISOString().slice(0, 10)
 
-    const [subscription] = await tx`
-      insert into subscriptions (customer_id, plan_id, status, start_date, end_date)
-      values (${customerId}, ${payment.plan_id}, 'active', ${startDate.toISOString().slice(0, 10)}, ${endDate})
-      returning id
-    `
+    const subscription = await insertSubscriptionWithSnapshot(tx, {
+      customerId,
+      planId: payment.plan_id,
+      startDate: startDate.toISOString().slice(0, 10),
+      endDate,
+    })
     return { alreadyActivated: false, subscriptionId: subscription.id, planName: payment.name, endDate }
   })
 }

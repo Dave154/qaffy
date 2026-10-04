@@ -467,7 +467,7 @@ export default function Home() {
               <span className="rounded-full bg-brand-soft px-2.5 py-1 text-xs font-medium text-brand-primary">Delivery</span>
             </div>
             <div className="rounded-[24px] border border-[#e7e7e7] bg-[#fafafa] p-4">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400">Customer OTP</p>
+              <p className="text-[10px] font-semibold capitalize tracking-[0.22em] text-slate-400">Customer OTP</p>
               <div className="mt-4 flex justify-center gap-2 sm:gap-3">
                 {otp.map((digit, index) => (
                   <input
@@ -495,7 +495,7 @@ export default function Home() {
                     <p className="text-sm font-semibold text-slate-800">{deliveryMatchedOrder.customer_name ?? 'Customer'}</p>
                     <p className="mt-1 text-xs font-semibold text-brand-primary">{deliveryMatchedOrder.public_order_number}</p>
                     <p className="mt-1 text-xs text-slate-500">{deliveryMatchedOrder.customer_uid ?? 'UID unavailable'}</p>
-                    <p className="mt-1 text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">Ready to complete</p>
+                    <p className="mt-1 text-[11px] font-medium capitalize tracking-[0.12em] text-slate-500">Ready to complete</p>
                   </div>
                   <button
                     type="button"
@@ -545,7 +545,7 @@ export default function Home() {
             </div>
 
             <div className="rounded-[24px] border border-[#e7e7e7] bg-[#fafafa] p-4">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400">Customer OTP</p>
+              <p className="text-[10px] font-semibold capitalize tracking-[0.22em] text-slate-400">Customer OTP</p>
               <div className="mt-4 flex justify-center gap-2 sm:gap-3">
                 {otp.map((digit, index) => (
                   <input
@@ -568,7 +568,7 @@ export default function Home() {
             </div>
 
             <div className="mt-4 rounded-[22px] border border-[#e7e7e7] bg-slate-50 p-4">
-              <p className="text-[10px] uppercase tracking-[0.18em] text-slate-400">Result</p>
+              <p className="text-[10px] capitalize tracking-[0.18em] text-slate-400">Result</p>
               <div className="mt-3 min-h-[72px]">
                 {isSearching ? (
                   <div className="flex items-center gap-2 text-sm text-slate-600">

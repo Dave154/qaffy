@@ -3,6 +3,7 @@ import NewOrder from './NewOrder'
 import OrderDetailModal from './OrderDetailModal'
 import CopyableOrderId from '../../../components/CopyableOrderId'
 import ProtectedOtp from '../../../components/ProtectedOtp'
+import DeliveryOtpPaywall from '../../../components/DeliveryOtpPaywall'
 import { type CustomerOrder } from '../customer-store'
 import { useCustomerStore } from '../customer-store-hook'
 import { data, useNavigate, useSearchParams } from 'react-router'
@@ -151,7 +152,7 @@ export default function Orders() {
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {stats.map((stat) => (
           <div key={stat.label} className="rounded-2xl border border-[#e7e7e7] bg-white p-4">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">{stat.label}</p>
+            <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-slate-400">{stat.label}</p>
             <p className="mt-3 text-2xl font-semibold text-slate-900">{stat.value}</p>
             <p className="mt-1 text-sm text-slate-500">{stat.helper}</p>
           </div>
@@ -211,10 +212,12 @@ export default function Orders() {
                 </div>
 
                 <div className="shrink-0 sm:ml-2">
-                  {getVisibleOtp(order) ? (
+                  {order.status === 'Pending payment' && order.total > 0 ? (
+                    <DeliveryOtpPaywall amount={order.total} onClick={() => navigate('/?topup=1')} />
+                  ) : getVisibleOtp(order) ? (
                     <div className="flex items-start gap-3 sm:flex-col sm:items-end">
                       <div className="min-w-0">
-                        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-primary">
+                        <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-brand-primary">
                           {order.status === 'Awaiting pickup' ? 'Pickup OTP' : 'Delivery OTP'}
                         </p>
                         <div className="mt-2">

@@ -286,7 +286,7 @@ function StatCard({ label: title, value, icon: Icon, tone }: { label: string; va
       <div className={`flex h-9 w-9 items-center justify-center rounded-xl ${tone}`}>
         <Icon size={17} />
       </div>
-      <p className="mt-4 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">{title}</p>
+      <p className="mt-4 text-[10px] font-semibold capitalize tracking-[0.14em] text-slate-500">{title}</p>
       <p className="mt-1 text-2xl font-bold text-slate-900">{value}</p>
     </div>
   )
@@ -436,7 +436,7 @@ export default function PartnerDetails() {
           <div className="mt-4 overflow-x-auto">
             <table className="w-full min-w-[760px] text-left">
               <thead>
-                <tr className="border-b border-slate-200 bg-slate-50 text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                <tr className="border-b border-slate-200 bg-slate-50 text-[10px] capitalize tracking-[0.12em] text-slate-500">
                   <th className="px-4 py-3">Order</th>
                   <th className="px-4 py-3">Created</th>
                   <th className="px-4 py-3">Items</th>

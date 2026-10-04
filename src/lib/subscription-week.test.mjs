@@ -47,3 +47,28 @@ test('meters subscription units by application time, excluding cancelled and one
 
   assert.equal(calculateSubscriptionUnitsUsed(orders, reference), 4)
 })
+
+test('carries this week usage across a midweek subscription change', () => {
+  const orders = [
+    {
+      subscription_id: 'previous-plan',
+      is_subscription_order: true,
+      status: 'invoiced',
+      clothes_count_vendor: 2,
+      subscription_units_applied: 6,
+      created_at: '2026-10-04T10:00:00.000Z',
+      subscription_units_applied_at: '2026-10-04T11:00:00.000Z',
+    },
+    {
+      subscription_id: 'new-plan',
+      is_subscription_order: true,
+      status: 'invoiced',
+      clothes_count_vendor: 1,
+      subscription_units_applied: 3,
+      created_at: '2026-10-06T10:00:00.000Z',
+      subscription_units_applied_at: '2026-10-06T11:00:00.000Z',
+    },
+  ]
+
+  assert.equal(calculateSubscriptionUnitsUsed(orders, new Date('2026-10-07T12:00:00.000Z')), 9)
+})

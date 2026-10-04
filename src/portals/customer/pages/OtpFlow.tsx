@@ -67,7 +67,7 @@ export default function OtpFlow() {
       <section className="rounded-[28px] bg-gradient-to-br from-brand-primary via-brand-primary to-brand-primary-hover p-4 text-white shadow-lg shadow-brand-border sm:p-6">
         <div className="flex min-w-0 flex-col items-start justify-between gap-3 sm:flex-row sm:gap-4">
           <div className="w-full min-w-0">
-            <p className="text-xs font-medium uppercase tracking-[0.18em] text-white/80">Current code</p>
+            <p className="text-xs font-medium capitalize tracking-[0.18em] text-white/80">Current code</p>
             <div className="mt-3">
               {currentStep.value ? (
                 <ProtectedOtp
@@ -117,11 +117,11 @@ export default function OtpFlow() {
         <div className="mt-5 rounded-[24px] bg-slate-50 p-4">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <p className="text-[10px] uppercase tracking-[0.22em] text-slate-400">Status</p>
+              <p className="text-[10px] capitalize tracking-[0.22em] text-slate-400">Status</p>
               <p className="mt-2 text-lg font-bold text-slate-900">{currentStep.value ? 'Ready for handoff' : unavailableMessage}</p>
             </div>
             <span
-              className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${currentStep.value ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}
+              className={`rounded-full px-2.5 py-1 text-[10px] font-semibold capitalize tracking-[0.16em] ${currentStep.value ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}
             >
               {currentStep.value ? 'Active' : 'Unavailable'}
             </span>

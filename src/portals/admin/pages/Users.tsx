@@ -151,7 +151,7 @@ function CopyValue({ value, label }: { value: string | null; label: string }) {
 function Detail({ label, value }: { label: string; value: string | number }) {
   return (
     <div>
-      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}</p>
+      <p className="text-[10px] font-semibold capitalize tracking-[0.14em] text-slate-500">{label}</p>
       <p className="mt-1 break-words text-sm font-semibold text-slate-900">{value}</p>
     </div>
   )
@@ -163,7 +163,7 @@ export function CustomerDetails({ customer, onClose }: { customer: Customer; onC
       <div className="max-h-[calc(100vh-1rem)] w-full max-w-2xl overflow-y-auto rounded-t-3xl bg-white p-5 shadow-2xl sm:max-h-[calc(100vh-2rem)] sm:rounded-3xl sm:p-8">
         <header className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-primary">Customer profile</p>
+            <p className="text-xs font-semibold capitalize tracking-[0.16em] text-brand-primary">Customer profile</p>
             <h3 className="mt-2 text-2xl font-bold text-slate-900">{customer.name}</h3>
             <p className="mt-1 text-sm text-slate-500">{customer.qaffyId ?? 'Qaffy ID unavailable'}</p>
           </div>
@@ -178,13 +178,13 @@ export function CustomerDetails({ customer, onClose }: { customer: Customer; onC
         </header>
         <section className="mt-6 grid gap-4 rounded-2xl bg-slate-50 p-4 sm:grid-cols-2">
           <div>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Email</p>
+            <p className="text-[10px] font-semibold capitalize tracking-[0.14em] text-slate-500">Email</p>
             <div className="mt-1">
               <CopyValue value={customer.email} label="email" />
             </div>
           </div>
           <div>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Phone</p>
+            <p className="text-[10px] font-semibold capitalize tracking-[0.14em] text-slate-500">Phone</p>
             <div className="mt-1">
               <CopyValue value={customer.phone} label="phone number" />
             </div>
@@ -459,7 +459,7 @@ export default function Users() {
         <div className="overflow-x-auto">
           <table className="w-full min-w-[1280px] text-left">
             <thead>
-              <tr className="border-b border-slate-200 bg-slate-50 text-[10px] uppercase tracking-[0.12em] text-slate-500">
+              <tr className="border-b border-slate-200 bg-slate-50 text-[10px] capitalize tracking-[0.12em] text-slate-500">
                 <th className="px-5 py-3 font-semibold">Customer</th>
                 <th className="px-5 py-3 font-semibold">Role</th>
                 <th className="px-5 py-3 font-semibold">Email</th>

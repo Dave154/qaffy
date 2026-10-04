@@ -3,7 +3,15 @@ import { supabase } from '../../lib/supabase.client'
 import { toast } from '../../lib/toast'
 import { getRateValue, type RateCardService } from '../../lib/rate-card'
 import { CustomerStoreContext } from './customer-store-context'
-import type { Invoice, Order, Payment, Plan, Subscription, Wallet, WalletTransaction } from '../../types/database.types'
+import type {
+  Invoice,
+  Order,
+  Payment,
+  Plan,
+  Subscription,
+  Wallet,
+  WalletTransaction,
+} from '../../types/database.types'
 
 export type OrderStatus = 'Awaiting pickup' | 'Picked up' | 'In progress' | 'Pending payment' | 'Ready for delivery' | 'Delivered'
 export type OrderLine = {
@@ -74,6 +82,7 @@ export type CustomerInvoice = {
   originalCount: number | null
   finalCount: number | null
   extraAmount: number
+  billingBreakdown: { coveredUnits: number; subscriberAmount: number; regularAmount: number } | null
   mismatch: { direction: 'over' | 'under'; detail: string; lines: MismatchLine[] } | null
 }
 
@@ -217,6 +226,13 @@ function mapDatabaseInvoice(
     originalCount: invoice.original_count ?? null,
     finalCount: invoice.final_count ?? null,
     extraAmount: Number(invoice.extra_amount ?? 0),
+    billingBreakdown: invoice.billing_breakdown
+      ? {
+          coveredUnits: Number(invoice.billing_breakdown.coveredUnits ?? 0),
+          subscriberAmount: Number(invoice.billing_breakdown.subscriberAmount ?? 0),
+          regularAmount: Number(invoice.billing_breakdown.regularAmount ?? 0),
+        }
+      : null,
     mismatch: invoice.mismatch_direction
       ? {
           direction: invoice.mismatch_direction,
@@ -459,8 +475,8 @@ export function CustomerStoreProvider({
         toast.success(`₦${amount.toLocaleString()} added to your wallet.`)
       },
       addOrder: async ({ items, notes, pickupLocation }) => {
-        const categoryKeys = items.map((item) => item.category.trim().toLowerCase())
-        if (new Set(categoryKeys).size !== categoryKeys.length) throw new Error('Each laundry category can only be added once.')
+        const lineKeys = items.map((item) => JSON.stringify([item.category.trim().toLowerCase(), item.service]))
+        if (new Set(lineKeys).size !== lineKeys.length) throw new Error('Each category and service combination can only be added once.')
         const idNumber = 1042 + orders.length + 1
         const total = items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0)
         const clothes = items.reduce((sum, item) => sum + item.quantity, 0)

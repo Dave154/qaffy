@@ -155,21 +155,21 @@ export default function VendorFinancePage() {
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Total payable</p>
+          <p className="text-[10px] font-semibold capitalize tracking-[0.14em] text-slate-500">Total payable</p>
           <div className="mt-3 flex items-end justify-between">
             <p className="text-2xl font-bold text-slate-900">{money(summary.totalPayable)}</p>
             <Banknote size={18} className="text-emerald-600" />
           </div>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Pending payout</p>
+          <p className="text-[10px] font-semibold capitalize tracking-[0.14em] text-slate-500">Pending payout</p>
           <div className="mt-3 flex items-end justify-between">
             <p className="text-2xl font-bold text-slate-900">{money(summary.pendingAmount)}</p>
             <WalletCards size={18} className="text-amber-600" />
           </div>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Paid to date</p>
+          <p className="text-[10px] font-semibold capitalize tracking-[0.14em] text-slate-500">Paid to date</p>
           <div className="mt-3 flex items-end justify-between">
             <p className="text-2xl font-bold text-slate-900">{money(summary.paidAmount)}</p>
             <WalletCards size={18} className="text-violet-600" />
@@ -184,7 +184,7 @@ export default function VendorFinancePage() {
         <div className="overflow-x-auto">
           <table className="w-full text-left">
             <thead>
-              <tr className="border-b border-slate-200 bg-slate-50 text-[10px] uppercase tracking-[0.12em] text-slate-500">
+              <tr className="border-b border-slate-200 bg-slate-50 text-[10px] capitalize tracking-[0.12em] text-slate-500">
                 <th className="px-5 py-3 font-semibold">Period</th>
                 <th className="px-5 py-3 font-semibold">Amount</th>
                 <th className="px-5 py-3 font-semibold">Status</th>
@@ -204,7 +204,7 @@ export default function VendorFinancePage() {
                     <td className="px-5 py-4 text-sm font-semibold text-slate-900">{money(settlement.amountDue)}</td>
                     <td className="px-5 py-4 text-sm">
                       <span
-                        className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${settlement.status === 'paid' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}
+                        className={`rounded-full px-2.5 py-1 text-[10px] font-semibold capitalize tracking-[0.12em] ${settlement.status === 'paid' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}
                       >
                         {settlement.status}
                       </span>

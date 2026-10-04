@@ -193,7 +193,7 @@ export default function Mismatches() {
         <div className="overflow-x-auto">
           <table className="w-full min-w-[860px] text-left">
             <thead>
-              <tr className="border-b border-slate-200 bg-slate-50 text-[9px] uppercase tracking-[0.12em] text-slate-500">
+              <tr className="border-b border-slate-200 bg-slate-50 text-[9px] capitalize tracking-[0.12em] text-slate-500">
                 <th className="w-[120px] px-3 py-3 font-semibold">Order</th>
                 <th className="w-[150px] px-3 py-3 font-semibold">Customer</th>
                 <th className="w-[120px] px-3 py-3 font-semibold">Location</th>
@@ -241,7 +241,7 @@ export default function Mismatches() {
                     </td>
                     <td className="px-3 py-3">
                       <span
-                        className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.12em] ${directionStyles[mismatch.direction]}`}
+                        className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[9px] font-semibold capitalize tracking-[0.12em] ${directionStyles[mismatch.direction]}`}
                       >
                         <ShieldAlert size={10} />
                         {directionLabels[mismatch.direction]}
@@ -299,15 +299,15 @@ export default function Mismatches() {
             <div className="mt-5 space-y-4">
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="rounded-xl bg-slate-50 p-3">
-                  <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Customer</p>
+                  <p className="text-[10px] capitalize tracking-[0.12em] text-slate-500">Customer</p>
                   <p className="mt-2 text-sm font-semibold text-slate-900">{selectedMismatch.customerName}</p>
                   <p className="mt-1 text-xs text-slate-500">{selectedMismatch.qaffyId ?? 'Qaffy ID unavailable'}</p>
                 </div>
                 <div className="rounded-xl bg-slate-50 p-3">
-                  <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Type</p>
+                  <p className="text-[10px] capitalize tracking-[0.12em] text-slate-500">Type</p>
                   <div className="mt-2">
                     <span
-                      className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${directionStyles[selectedMismatch.direction]}`}
+                      className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold capitalize tracking-[0.12em] ${directionStyles[selectedMismatch.direction]}`}
                     >
                       <ShieldAlert size={12} />
                       {directionLabels[selectedMismatch.direction]}
@@ -317,7 +317,7 @@ export default function Mismatches() {
               </div>
 
               <div className="rounded-xl border border-slate-200 bg-white p-3">
-                <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Count summary</p>
+                <p className="text-[10px] capitalize tracking-[0.12em] text-slate-500">Count summary</p>
                 <div className="mt-2 grid gap-1 text-sm text-slate-700 sm:grid-cols-2">
                   <span>Customer count: {selectedMismatch.customerCount}</span>
                   <span>Vendor count: {selectedMismatch.vendorCount ?? '—'}</span>
@@ -326,7 +326,7 @@ export default function Mismatches() {
               </div>
 
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Detailed note</p>
+                <p className="text-[10px] capitalize tracking-[0.12em] text-slate-500">Detailed note</p>
                 <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
                   {selectedMismatch.detail ?? 'No mismatch notes were supplied.'}
                 </p>

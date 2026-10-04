@@ -24,20 +24,20 @@ export default function TopUpModal({
   const debt = negativeBalance
 
   const suggestedAmount = useMemo(() => {
-    const minimum = 1000
+    const minimum = 100
     const outstanding = Math.max(pendingPaymentTotal, debt)
     const remaining = Math.max(0, outstanding - currentBalance)
-    return remaining > 0 ? remaining : minimum
+    return Math.max(minimum, remaining)
   }, [currentBalance, debt, pendingPaymentTotal])
 
   const [amount, setAmount] = useState(String(suggestedAmount))
   const numericAmount = amount === '' ? 0 : Number(amount)
-  const amountError = amount !== '' && (!Number.isFinite(numericAmount) || numericAmount < 1000) ? 'Minimum top-up is ₦1,000.' : null
+  const amountError = amount !== '' && (!Number.isFinite(numericAmount) || numericAmount < 100) ? 'Minimum top-up is ₦100.' : null
   const appliedToDebt = Math.min(Math.max(numericAmount, 0), negativeBalance)
   const walletCredit = Math.max(0, numericAmount - negativeBalance)
 
   const handleTopUp = async () => {
-    if (numericAmount < 1000) return
+    if (numericAmount < 100) return
     await onTopUp(numericAmount)
   }
 
@@ -73,7 +73,7 @@ export default function TopUpModal({
         <div className="mt-4 rounded-[22px] bg-slate-900 p-4 text-white shadow-lg shadow-slate-200 sm:mt-5 sm:rounded-[26px] sm:p-5">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <p className="text-xs font-medium uppercase tracking-[0.18em] text-sky-200">Available balance</p>
+              <p className="text-xs font-medium capitalize tracking-[0.18em] text-sky-200">Available balance</p>
               <p className="mt-1.5 text-2xl font-bold sm:mt-2 sm:text-3xl">₦{currentBalance.toLocaleString()}</p>
             </div>
           </div>
@@ -84,7 +84,7 @@ export default function TopUpModal({
             <span className="mb-1.5 block text-sm font-semibold text-slate-700">How much would you like to add?</span>
             <input
               type="number"
-              min={1000}
+              min={100}
               value={amount}
               onChange={(event) => setAmount(event.target.value)}
               aria-invalid={Boolean(amountError)}
@@ -105,7 +105,7 @@ export default function TopUpModal({
               </p>
             ) : (
               <p>
-                Minimum top-up is <span className="font-semibold text-sky-700">₦1,000</span>. You can add more if you want a larger balance.
+                Minimum top-up is <span className="font-semibold text-sky-700">₦100</span>. You can add more if you want a larger balance.
               </p>
             )}
           </div>
@@ -135,7 +135,7 @@ export default function TopUpModal({
 
           <button
             type="button"
-            disabled={numericAmount < 1000 || isProcessing}
+            disabled={numericAmount < 100 || isProcessing}
             onClick={() => void handleTopUp()}
             className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-brand-primary px-4 py-3 text-sm font-semibold text-white shadow-md shadow-brand-primary/20 transition hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
           >

@@ -116,7 +116,7 @@ const inputDate = (date: Date) =>
 function Detail({ label, value }: { label: string; value: string | number }) {
   return (
     <div>
-      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}</p>
+      <p className="text-[10px] font-semibold capitalize tracking-[0.14em] text-slate-500">{label}</p>
       <p className="mt-1 break-words text-sm font-semibold text-slate-900">{value}</p>
     </div>
   )
@@ -427,7 +427,7 @@ export default function Orders() {
         <div className="overflow-x-auto p-4 md:p-5">
           <table className="w-full min-w-[1280px] table-fixed text-left">
             <thead>
-              <tr className="border-b border-slate-200 bg-slate-50 text-[10px] uppercase tracking-[0.12em] text-slate-500">
+              <tr className="border-b border-slate-200 bg-slate-50 text-[10px] capitalize tracking-[0.12em] text-slate-500">
                 <th className="w-40 px-4 py-3 font-semibold">Created</th>
                 <th className="w-40 px-4 py-3 font-semibold">Pickup</th>
                 <th className="w-48 px-4 py-3 font-semibold">Customer</th>
@@ -465,7 +465,7 @@ export default function Orders() {
                     <td className="px-4 py-4 text-sm text-slate-700">{order.invoice?.status === 'paid' ? 'Paid' : 'Pending'}</td>
                     <td className="px-4 py-4">
                       <span
-                        className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${statusStyles[order.status]}`}
+                        className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2.5 py-1 text-[10px] font-semibold capitalize tracking-[0.12em] ${statusStyles[order.status]}`}
                       >
                         {statusLabels[order.status]}
                       </span>

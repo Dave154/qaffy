@@ -9,6 +9,7 @@ type PlanRow = {
   id: string
   name: string
   type: 'monthly' | 'semester'
+  serviceCoverage: 'wash' | 'iron' | 'both'
   price: number
   weeklyLimit: number
   active: boolean
@@ -17,6 +18,11 @@ type PlanRow = {
 
 type SemesterSettings = { semesterStartDate: string | null; semesterEndDate: string | null }
 type PlansData = { plans: PlanRow[]; semesterSettings: SemesterSettings }
+
+function getServiceCoverage(coversWash: boolean, coversIron: boolean): PlanRow['serviceCoverage'] {
+  if (coversWash && coversIron) return 'both'
+  return coversWash ? 'wash' : 'iron'
+}
 
 function money(value: number) {
   return `₦${value.toLocaleString()}`
@@ -31,7 +37,10 @@ export async function loader({ request }: Route.LoaderArgs) {
   if (!auth) return data<PlansData>({ plans: [], semesterSettings: { semesterStartDate: null, semesterEndDate: null } }, { status: 200 })
 
   const [{ data: rows, error }, settingsResult] = await Promise.all([
-    auth.supabase.from('plans').select('id, name, type, price, weekly_limit, active, created_at').order('created_at', { ascending: false }),
+    auth.supabase
+      .from('plans')
+      .select('id, name, type, price, weekly_limit, covers_wash, covers_iron, active, created_at')
+      .order('created_at', { ascending: false }),
     auth.supabase
       .from('app_settings' as any)
       .select('semester_start_date, semester_end_date')
@@ -56,6 +65,7 @@ export async function loader({ request }: Route.LoaderArgs) {
         id: row.id,
         name: row.name,
         type: row.type,
+        serviceCoverage: getServiceCoverage(row.covers_wash, row.covers_iron),
         price: Number(row.price),
         weeklyLimit: Number(row.weekly_limit),
         active: Boolean(row.active),
@@ -127,12 +137,14 @@ export async function action({ request }: Route.ActionArgs) {
     const id = String(formData.get('id') ?? '')
     const name = String(formData.get('name') ?? '').trim()
     const rawType = String(formData.get('type') ?? 'monthly')
+    const rawCoverage = String(formData.get('serviceCoverage') ?? 'both')
     const price = Number(formData.get('price') ?? 0)
     const weeklyLimit = Number(formData.get('weeklyLimit') ?? 0)
     if (
       !id ||
       !name ||
       !['monthly', 'semester'].includes(rawType) ||
+      !['wash', 'iron', 'both'].includes(rawCoverage) ||
       !Number.isFinite(price) ||
       price <= 0 ||
       !Number.isFinite(weeklyLimit) ||
@@ -142,7 +154,14 @@ export async function action({ request }: Route.ActionArgs) {
     }
     const { error } = await supabase
       .from('plans')
-      .update({ name, type: rawType as PlanType, price, weekly_limit: weeklyLimit })
+      .update({
+        name,
+        type: rawType as PlanType,
+        price,
+        weekly_limit: weeklyLimit,
+        covers_wash: rawCoverage !== 'iron',
+        covers_iron: rawCoverage !== 'wash',
+      })
       .eq('id', id)
     if (error) return data({ error: error.message }, { headers, status: 400 })
     return data({ ok: true }, { headers, status: 200 })
@@ -151,17 +170,21 @@ export async function action({ request }: Route.ActionArgs) {
   const name = String(formData.get('name') ?? '').trim()
   const rawType = String(formData.get('type') ?? 'monthly')
   const validatedType: PlanType = rawType === 'semester' ? 'semester' : 'monthly'
+  const rawCoverage = String(formData.get('serviceCoverage') ?? 'both')
   const price = Number(formData.get('price') ?? 0)
   const weeklyLimit = Number(formData.get('weeklyLimit') ?? 0)
 
   if (!name) return data({ error: 'Plan name is required.' }, { headers, status: 400 })
   if (!['monthly', 'semester'].includes(rawType)) return data({ error: 'Invalid plan type.' }, { headers, status: 400 })
+  if (!['wash', 'iron', 'both'].includes(rawCoverage)) return data({ error: 'Choose valid service coverage.' }, { headers, status: 400 })
   if (price <= 0) return data({ error: 'Plan price must be greater than zero.' }, { headers, status: 400 })
   if (weeklyLimit <= 0) return data({ error: 'Weekly limit must be greater than zero.' }, { headers, status: 400 })
 
   const { error } = await supabase.from('plans').insert({
     name,
     type: validatedType,
+    covers_wash: rawCoverage !== 'iron',
+    covers_iron: rawCoverage !== 'wash',
     price,
     weekly_limit: weeklyLimit,
     active: true,
@@ -235,9 +258,9 @@ export default function Plans() {
         <fetcher.Form method="post" className="mt-5 space-y-4">
           <input type="hidden" name="intent" value="create" />
 
-          <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr_0.9fr_0.8fr_0.9fr]">
+          <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr_0.9fr_1fr_0.8fr_0.9fr]">
             <label className="min-w-0">
-              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Name</span>
+              <span className="mb-1.5 block text-xs font-semibold capitalize tracking-[0.14em] text-slate-500">Name</span>
               <input
                 name="name"
                 required
@@ -247,7 +270,7 @@ export default function Plans() {
             </label>
 
             <label className="min-w-0">
-              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Type</span>
+              <span className="mb-1.5 block text-xs font-semibold capitalize tracking-[0.14em] text-slate-500">Type</span>
               <select
                 name="type"
                 value={planType}
@@ -260,7 +283,20 @@ export default function Plans() {
             </label>
 
             <label className="min-w-0">
-              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Price</span>
+              <span className="mb-1.5 block text-xs font-semibold capitalize tracking-[0.14em] text-slate-500">Service coverage</span>
+              <select
+                name="serviceCoverage"
+                defaultValue="both"
+                className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
+              >
+                <option value="wash">Wash only</option>
+                <option value="iron">Iron only</option>
+                <option value="both">Wash + Iron (all services)</option>
+              </select>
+            </label>
+
+            <label className="min-w-0">
+              <span className="mb-1.5 block text-xs font-semibold capitalize tracking-[0.14em] text-slate-500">Price</span>
               <input
                 type="number"
                 min="1"
@@ -272,7 +308,7 @@ export default function Plans() {
             </label>
 
             <label className="min-w-0">
-              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Weekly limit</span>
+              <span className="mb-1.5 block text-xs font-semibold capitalize tracking-[0.14em] text-slate-500">Weekly limit</span>
               <input
                 type="number"
                 min="1"
@@ -303,7 +339,7 @@ export default function Plans() {
         <fetcher.Form method="post" className="mt-4 grid gap-4 md:grid-cols-2">
           <input type="hidden" name="intent" value="update-semester-settings" />
           <label className="min-w-0">
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Start date</span>
+            <span className="mb-1.5 block text-xs font-semibold capitalize tracking-[0.14em] text-slate-500">Start date</span>
             <input
               type="date"
               name="semesterStartDate"
@@ -313,7 +349,7 @@ export default function Plans() {
             />
           </label>
           <label className="min-w-0">
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">End date</span>
+            <span className="mb-1.5 block text-xs font-semibold capitalize tracking-[0.14em] text-slate-500">End date</span>
             <input
               type="date"
               name="semesterEndDate"
@@ -375,18 +411,19 @@ export default function Plans() {
         )}
 
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[980px] table-fixed text-left">
+          <table className="w-full min-w-[1120px] table-fixed text-left">
             <colgroup>
               <col className="w-[40px]" />
-              <col className="w-[28%]" />
-              <col className="w-[15%]" />
-              <col className="w-[15%]" />
+              <col className="w-[22%]" />
+              <col className="w-[12%]" />
               <col className="w-[18%]" />
               <col className="w-[12%]" />
+              <col className="w-[18%]" />
+              <col className="w-[10%]" />
               <col className="w-[8%]" />
             </colgroup>
             <thead>
-              <tr className="border-b border-slate-200 bg-slate-50 text-[10px] uppercase tracking-[0.12em] text-slate-500">
+              <tr className="border-b border-slate-200 bg-slate-50 text-[10px] capitalize tracking-[0.12em] text-slate-500">
                 <th className="w-10 px-2 py-3">
                   <input
                     type="checkbox"
@@ -397,6 +434,7 @@ export default function Plans() {
                 </th>
                 <th className="px-5 py-3 text-left font-semibold">Plan</th>
                 <th className="px-5 py-3 text-left font-semibold">Type</th>
+                <th className="px-5 py-3 text-left font-semibold">Service coverage</th>
                 <th className="px-5 py-3 text-left font-semibold">Price</th>
                 <th className="px-5 py-3 text-left font-semibold">Weekly limit</th>
                 <th className="px-5 py-3 text-left font-semibold">Status</th>
@@ -406,7 +444,7 @@ export default function Plans() {
             <tbody>
               {plans.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-5 py-8 text-center text-sm text-slate-500">
+                  <td colSpan={8} className="px-5 py-8 text-center text-sm text-slate-500">
                     No plans configured yet.
                   </td>
                 </tr>
@@ -437,11 +475,14 @@ export default function Plans() {
                       </div>
                     </td>
                     <td className="px-5 py-4 align-middle text-sm font-semibold capitalize text-slate-800">{plan.type}</td>
+                    <td className="px-5 py-4 align-middle text-sm font-semibold text-slate-800">
+                      {plan.serviceCoverage === 'both' ? 'Wash + Iron' : plan.serviceCoverage === 'wash' ? 'Wash only' : 'Iron only'}
+                    </td>
                     <td className="px-5 py-4 align-middle text-sm font-semibold text-slate-800">{money(plan.price)}</td>
                     <td className="px-5 py-4 align-middle text-sm font-semibold text-slate-800">{plan.weeklyLimit} clothes</td>
                     <td className="px-5 py-4 align-middle">
                       <span
-                        className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${plan.active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}
+                        className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold capitalize tracking-[0.12em] ${plan.active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}
                       >
                         {plan.active ? <CheckCircle2 size={12} /> : <ToggleLeft size={12} />}
                         {plan.active ? 'Active' : 'Inactive'}
@@ -528,7 +569,7 @@ export default function Plans() {
               <input type="hidden" name="intent" value="update" />
               <input type="hidden" name="id" value={editingPlan.id} />
               <label className="sm:col-span-2">
-                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Name</span>
+                <span className="mb-1.5 block text-xs font-semibold capitalize tracking-[0.14em] text-slate-500">Name</span>
                 <input
                   name="name"
                   defaultValue={editingPlan.name}
@@ -537,7 +578,7 @@ export default function Plans() {
                 />
               </label>
               <label>
-                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Type</span>
+                <span className="mb-1.5 block text-xs font-semibold capitalize tracking-[0.14em] text-slate-500">Type</span>
                 <select
                   name="type"
                   defaultValue={editingPlan.type}
@@ -548,7 +589,19 @@ export default function Plans() {
                 </select>
               </label>
               <label>
-                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Price</span>
+                <span className="mb-1.5 block text-xs font-semibold capitalize tracking-[0.14em] text-slate-500">Service coverage</span>
+                <select
+                  name="serviceCoverage"
+                  defaultValue={editingPlan.serviceCoverage}
+                  className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
+                >
+                  <option value="wash">Wash only</option>
+                  <option value="iron">Iron only</option>
+                  <option value="both">Wash + Iron (all services)</option>
+                </select>
+              </label>
+              <label>
+                <span className="mb-1.5 block text-xs font-semibold capitalize tracking-[0.14em] text-slate-500">Price</span>
                 <input
                   type="number"
                   min="1"
@@ -559,7 +612,7 @@ export default function Plans() {
                 />
               </label>
               <label>
-                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Weekly limit</span>
+                <span className="mb-1.5 block text-xs font-semibold capitalize tracking-[0.14em] text-slate-500">Weekly limit</span>
                 <input
                   type="number"
                   min="1"

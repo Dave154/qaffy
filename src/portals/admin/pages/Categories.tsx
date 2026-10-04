@@ -17,6 +17,7 @@ type CategoryRow = {
   vendorIronPrice: number
   vendorWashIronPrice: number
   subscriptionUnits: number
+  subscriberRates: { wash: number; iron: number; washIron: number }
   createdAt: string
 }
 
@@ -28,6 +29,7 @@ type PriceFieldProps = {
   defaultValue: number
   max?: number
   isVendor?: boolean
+  isSubscriber?: boolean
   className?: string
   onInput?: React.FormEventHandler<HTMLInputElement>
 }
@@ -72,7 +74,48 @@ function syncVendorCap(event: React.FormEvent<HTMLInputElement>, customerField: 
   )
 }
 
-function PriceField({ label, name, defaultValue, max, isVendor = false, className = 'block min-w-0', onInput }: PriceFieldProps) {
+function syncSubscriberCap(event: React.FormEvent<HTMLInputElement>, customerField: string, subscriberField: string) {
+  const form = event.currentTarget.form
+  const customerInput = form?.elements.namedItem(customerField) as HTMLInputElement | null
+  const subscriberInput = form?.elements.namedItem(subscriberField) as HTMLInputElement | null
+  if (!customerInput || !subscriberInput) return
+  const matchedPreviousRegularPrice = Number(subscriberInput.value) === Number(subscriberInput.max)
+  subscriberInput.max = customerInput.value
+  if (matchedPreviousRegularPrice) subscriberInput.value = customerInput.value
+  subscriberInput.setCustomValidity(
+    Number(subscriberInput.value) > Number(customerInput.value) ? 'Subscriber rate cannot exceed the regular customer price.' : '',
+  )
+}
+
+function parseSubscriberRates(
+  formData: FormData,
+  regularPrices: { wash: number; iron: number; washIron: number },
+) {
+  const submittedValues = [
+    formData.get('subscriberWashPrice'),
+    formData.get('subscriberIronPrice'),
+    formData.get('subscriberWashIronPrice'),
+  ]
+  if (submittedValues.some((value) => typeof value !== 'string' || value.trim() === ''))
+    return { rates: null, error: 'Enter all subscriber extra rates.' }
+  const [wash, iron, washIron] = submittedValues.map(Number)
+  if (![wash, iron, washIron].every((price) => Number.isSafeInteger(price) && price >= 0))
+    return { rates: null, error: 'Subscriber rates must be non-negative whole numbers.' }
+  if (wash > regularPrices.wash || iron > regularPrices.iron || washIron > regularPrices.washIron)
+    return { rates: null, error: 'Subscriber rates cannot exceed the regular customer rates.' }
+  return { rates: { wash, iron, washIron }, error: null }
+}
+
+function PriceField({
+  label,
+  name,
+  defaultValue,
+  max,
+  isVendor = false,
+  isSubscriber = false,
+  className = 'block min-w-0',
+  onInput,
+}: PriceFieldProps) {
   const id = useId()
   const inputRef = useRef<HTMLInputElement>(null)
   const adjustPrice = (amount: number) => {
@@ -86,11 +129,14 @@ function PriceField({ label, name, defaultValue, max, isVendor = false, classNam
   }
   const inputClasses = isVendor
     ? 'border-emerald-100 focus:border-brand-primary'
-    : 'border-slate-200 focus:border-brand-primary'
+    : isSubscriber
+      ? 'border-sky-100 focus:border-brand-primary'
+      : 'border-slate-200 focus:border-brand-primary'
+  const labelClasses = isVendor ? 'text-emerald-700' : isSubscriber ? 'text-sky-700' : 'text-slate-500'
 
   return (
     <div className={className}>
-      <label htmlFor={id} className={`mb-2 block text-xs font-semibold ${isVendor ? 'text-emerald-700' : 'text-slate-500'}`}>
+      <label htmlFor={id} className={`mb-2 block text-xs font-semibold ${labelClasses}`}>
         {label}
       </label>
       <div className="relative">
@@ -131,6 +177,47 @@ function PriceField({ label, name, defaultValue, max, isVendor = false, classNam
   )
 }
 
+function SubscriberRatesSection({
+  rates,
+  regularPrices,
+}: {
+  rates?: CategoryRow['subscriberRates']
+  regularPrices: { wash: number; iron: number; washIron: number }
+}) {
+  return (
+    <section className="space-y-3 border-t border-slate-100 pt-5">
+      <div>
+        <h4 className="text-sm font-bold text-slate-900">Subscriber extra rates</h4>
+        <p className="mt-1 text-xs text-slate-500">Shared by all plans. Charged for covered services beyond the weekly allowance.</p>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <PriceField
+          label="Wash"
+          name="subscriberWashPrice"
+          defaultValue={rates?.wash ?? regularPrices.wash}
+          max={regularPrices.wash}
+          isSubscriber
+        />
+        <PriceField
+          label="Iron"
+          name="subscriberIronPrice"
+          defaultValue={rates?.iron ?? regularPrices.iron}
+          max={regularPrices.iron}
+          isSubscriber
+        />
+        <PriceField
+          label="Wash + Iron"
+          name="subscriberWashIronPrice"
+          defaultValue={rates?.washIron ?? regularPrices.washIron}
+          max={regularPrices.washIron}
+          isSubscriber
+          className="block min-w-0 sm:col-span-2"
+        />
+      </div>
+    </section>
+  )
+}
+
 // eslint-disable-next-line react-refresh/only-export-components
 export async function loader({ request }: Route.LoaderArgs) {
   const auth = await requireRole(request, 'admin')
@@ -141,7 +228,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     supabase
       .from('cloth_category_rates')
       .select(
-        'id, category_id, wash_price, iron_price, wash_iron_price, vendor_wash_price, vendor_iron_price, vendor_wash_iron_price, subscription_units, created_at',
+        'id, category_id, wash_price, iron_price, wash_iron_price, vendor_wash_price, vendor_iron_price, vendor_wash_iron_price, subscriber_wash_price, subscriber_iron_price, subscriber_wash_iron_price, subscription_units, created_at',
       )
       .order('created_at', { ascending: false }),
   ])
@@ -162,6 +249,11 @@ export async function loader({ request }: Route.LoaderArgs) {
           vendorIronPrice: Number(row?.vendor_iron_price ?? 0),
           vendorWashIronPrice: Number(row?.vendor_wash_iron_price ?? 0),
           subscriptionUnits: Number(row?.subscription_units ?? 1),
+          subscriberRates: {
+            wash: Number(row?.subscriber_wash_price ?? row?.wash_price ?? 0),
+            iron: Number(row?.subscriber_iron_price ?? row?.iron_price ?? 0),
+            washIron: Number(row?.subscriber_wash_iron_price ?? row?.wash_iron_price ?? 0),
+          },
           createdAt: String(category.created_at),
         }
       }),
@@ -248,6 +340,9 @@ export async function action({ request }: Route.ActionArgs) {
     }
     const priceError = validateVendorPrices({ washPrice, ironPrice, washIronPrice, vendorWashPrice, vendorIronPrice, vendorWashIronPrice })
     if (priceError) return data({ error: priceError }, { headers, status: 400 })
+    const parsedSubscriberRates = parseSubscriberRates(formData, { wash: washPrice, iron: ironPrice, washIron: washIronPrice })
+    if (parsedSubscriberRates.error) return data({ error: parsedSubscriberRates.error }, { headers, status: 400 })
+    const subscriberRates = parsedSubscriberRates.rates!
     const { error: categoryError } = await supabase.from('cloth_categories').update({ name }).eq('id', id)
     if (categoryError) return data({ error: categoryError.message }, { headers, status: 400 })
     const { error: rateError } = await supabase
@@ -259,6 +354,9 @@ export async function action({ request }: Route.ActionArgs) {
         vendor_wash_price: vendorWashPrice,
         vendor_iron_price: vendorIronPrice,
         vendor_wash_iron_price: vendorWashIronPrice,
+        subscriber_wash_price: subscriberRates.wash,
+        subscriber_iron_price: subscriberRates.iron,
+        subscriber_wash_iron_price: subscriberRates.washIron,
         subscription_units: subscriptionUnits,
       })
       .eq('category_id', id)
@@ -278,6 +376,9 @@ export async function action({ request }: Route.ActionArgs) {
   const priceError = validateVendorPrices({ washPrice, ironPrice, washIronPrice, vendorWashPrice, vendorIronPrice, vendorWashIronPrice })
   if (priceError || !Number.isFinite(subscriptionUnits) || subscriptionUnits <= 0)
     return data({ error: priceError ?? 'Enter valid prices and positive subscription units.' }, { headers, status: 400 })
+  const parsedSubscriberRates = parseSubscriberRates(formData, { wash: washPrice, iron: ironPrice, washIron: washIronPrice })
+  if (parsedSubscriberRates.error) return data({ error: parsedSubscriberRates.error }, { headers, status: 400 })
+  const subscriberRates = parsedSubscriberRates.rates!
 
   const { data: category, error: categoryError } = await supabase
     .from('cloth_categories')
@@ -294,6 +395,9 @@ export async function action({ request }: Route.ActionArgs) {
     vendor_wash_price: vendorWashPrice,
     vendor_iron_price: vendorIronPrice,
     vendor_wash_iron_price: vendorWashIronPrice,
+    subscriber_wash_price: subscriberRates.wash,
+    subscriber_iron_price: subscriberRates.iron,
+    subscriber_wash_iron_price: subscriberRates.washIron,
     subscription_units: subscriptionUnits,
   })
   if (rateError) return data({ error: rateError.message }, { headers, status: 400 })
@@ -400,13 +504,32 @@ export default function Categories() {
                 className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
               />
             </label>
-            <PriceField label="Wash" name="washPrice" defaultValue={350} onInput={(event) => syncVendorCap(event, 'washPrice', 'vendorWashPrice')} />
-            <PriceField label="Iron" name="ironPrice" defaultValue={350} onInput={(event) => syncVendorCap(event, 'ironPrice', 'vendorIronPrice')} />
+            <PriceField
+              label="Wash"
+              name="washPrice"
+              defaultValue={350}
+              onInput={(event) => {
+                syncVendorCap(event, 'washPrice', 'vendorWashPrice')
+                syncSubscriberCap(event, 'washPrice', 'subscriberWashPrice')
+              }}
+            />
+            <PriceField
+              label="Iron"
+              name="ironPrice"
+              defaultValue={350}
+              onInput={(event) => {
+                syncVendorCap(event, 'ironPrice', 'vendorIronPrice')
+                syncSubscriberCap(event, 'ironPrice', 'subscriberIronPrice')
+              }}
+            />
             <PriceField
               label="Wash + Iron"
               name="washIronPrice"
               defaultValue={350}
-              onInput={(event) => syncVendorCap(event, 'washIronPrice', 'vendorWashIronPrice')}
+              onInput={(event) => {
+                syncVendorCap(event, 'washIronPrice', 'vendorWashIronPrice')
+                syncSubscriberCap(event, 'washIronPrice', 'subscriberWashIronPrice')
+              }}
             />
             <label className="block min-w-0">
               <span className="mb-2.5 block text-xs font-semibold capitalize text-slate-500">Subscription weight</span>
@@ -447,6 +570,7 @@ export default function Categories() {
               isVendor
               onInput={(event) => syncVendorCap(event, 'washIronPrice', 'vendorWashIronPrice')}
             />
+            <SubscriberRatesSection regularPrices={{ wash: 350, iron: 350, washIron: 350 }} />
           </div>
           <div className="sticky bottom-0 mt-auto border-t border-slate-100 bg-white pt-6">
             <button
@@ -513,7 +637,7 @@ export default function Categories() {
               <col style={{ width: '7%' }} />
             </colgroup>
             <thead>
-              <tr className="border-b border-slate-200 bg-slate-50 text-[10px] uppercase tracking-[0.12em] text-slate-500">
+              <tr className="border-b border-slate-200 bg-slate-50 text-[10px] capitalize tracking-[0.12em] text-slate-500">
                 <th rowSpan={2} className="px-2 py-3 align-middle">
                   <input
                     type="checkbox"
@@ -539,7 +663,7 @@ export default function Categories() {
                 </th>
                 <th rowSpan={2} aria-label="Category actions" className="px-2 py-3 align-middle font-semibold" />
               </tr>
-              <tr className="border-b border-slate-200 bg-slate-50 text-[10px] uppercase tracking-[0.12em] text-slate-500">
+              <tr className="border-b border-slate-200 bg-slate-50 text-[10px] capitalize tracking-[0.12em] text-slate-500">
                 <th className="border-l border-slate-200 px-1.5 py-2 font-semibold">Wash</th>
                 <th className="px-1.5 py-2 font-semibold">Iron</th>
                 <th className="px-1.5 py-2 font-semibold">Wash + Iron</th>
@@ -599,7 +723,7 @@ export default function Categories() {
                       <td className="whitespace-nowrap px-2 py-4 text-sm font-semibold text-slate-800">{category.subscriptionUnits}x</td>
                       <td className="px-1.5 py-4">
                         <span
-                          className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full px-1.5 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${category.active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}
+                          className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full px-1.5 py-1 text-[10px] font-semibold capitalize tracking-[0.08em] ${category.active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}
                         >
                           {category.active ? <CheckCircle2 size={12} /> : <XCircle size={12} />}
                           {category.active ? 'Active' : 'Archived'}
@@ -760,20 +884,29 @@ export default function Categories() {
                     label="Wash"
                     name="washPrice"
                     defaultValue={editingCategory.washPrice}
-                    onInput={(event) => syncVendorCap(event, 'washPrice', 'vendorWashPrice')}
+                    onInput={(event) => {
+                      syncVendorCap(event, 'washPrice', 'vendorWashPrice')
+                      syncSubscriberCap(event, 'washPrice', 'subscriberWashPrice')
+                    }}
                   />
                   <PriceField
                     label="Iron"
                     name="ironPrice"
                     defaultValue={editingCategory.ironPrice}
-                    onInput={(event) => syncVendorCap(event, 'ironPrice', 'vendorIronPrice')}
+                    onInput={(event) => {
+                      syncVendorCap(event, 'ironPrice', 'vendorIronPrice')
+                      syncSubscriberCap(event, 'ironPrice', 'subscriberIronPrice')
+                    }}
                   />
                   <PriceField
                     label="Wash + Iron"
                     name="washIronPrice"
                     defaultValue={editingCategory.washIronPrice}
                     className="block min-w-0 sm:col-span-2"
-                    onInput={(event) => syncVendorCap(event, 'washIronPrice', 'vendorWashIronPrice')}
+                    onInput={(event) => {
+                      syncVendorCap(event, 'washIronPrice', 'vendorWashIronPrice')
+                      syncSubscriberCap(event, 'washIronPrice', 'subscriberWashIronPrice')
+                    }}
                   />
                 </div>
 
@@ -809,6 +942,15 @@ export default function Categories() {
                     onInput={(event) => syncVendorCap(event, 'washIronPrice', 'vendorWashIronPrice')}
                   />
                 </div>
+
+                <SubscriberRatesSection
+                  rates={editingCategory.subscriberRates}
+                  regularPrices={{
+                    wash: editingCategory.washPrice,
+                    iron: editingCategory.ironPrice,
+                    washIron: editingCategory.washIronPrice,
+                  }}
+                />
 
                 <label className="block min-w-0">
                   <span className="mb-2.5 block text-xs font-semibold capitalize text-slate-500">Subscription weight</span>

@@ -107,7 +107,7 @@ export default function Invoice() {
       <section className="rounded-[28px] bg-gradient-to-br from-brand-primary via-brand-primary to-brand-primary-hover p-5 text-white shadow-lg shadow-brand-border sm:p-6">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-xs font-medium uppercase tracking-[0.18em] text-cyan-50">Order reference</p>
+            <p className="text-xs font-medium capitalize tracking-[0.18em] text-cyan-50">Order reference</p>
             <h3 className="mt-3 text-3xl font-bold">{invoice.orderReference}</h3>
             <p className="mt-2 text-sm text-cyan-50">{invoice.dueDate}</p>
           </div>
@@ -163,7 +163,7 @@ export default function Invoice() {
                     <>
                       <div className="mt-3 hidden overflow-x-auto rounded-xl border border-amber-200 bg-white sm:block">
                         <table className="w-full min-w-[620px] text-left text-xs">
-                        <thead className="border-b border-amber-100 bg-amber-50 text-[10px] uppercase tracking-[0.08em] text-amber-700">
+                        <thead className="border-b border-amber-100 bg-amber-50 text-[10px] capitalize tracking-[0.08em] text-amber-700">
                           <tr>
                             <th className="px-3 py-2 font-semibold">Item</th>
                             <th className="px-3 py-2 font-semibold">Service</th>
@@ -257,6 +257,29 @@ export default function Invoice() {
               </div>
             ))}
           </div>
+
+          {invoice.billingBreakdown && (
+            <div className="mt-4 space-y-2 border-t border-slate-100 pt-3 text-sm text-slate-600">
+              {invoice.billingBreakdown.coveredUnits > 0 && (
+                <div className="flex items-center justify-between gap-3">
+                  <span>Covered by plan</span>
+                  <span className="shrink-0 font-semibold text-slate-900">{invoice.billingBreakdown.coveredUnits} units</span>
+                </div>
+              )}
+              {invoice.billingBreakdown.subscriberAmount > 0 && (
+                <div className="flex items-center justify-between gap-3">
+                  <span>Subscriber-rate extra</span>
+                  <span className="shrink-0 font-semibold text-slate-900">₦{invoice.billingBreakdown.subscriberAmount.toLocaleString()}</span>
+                </div>
+              )}
+              {invoice.billingBreakdown.regularAmount > 0 && (
+                <div className="flex items-center justify-between gap-3">
+                  <span>Uncovered services</span>
+                  <span className="shrink-0 font-semibold text-slate-900">₦{invoice.billingBreakdown.regularAmount.toLocaleString()}</span>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="mt-5 border-t border-slate-200 pt-4">
             <div className="flex items-center justify-between">

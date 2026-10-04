@@ -147,7 +147,7 @@ export default function PickupLocations() {
         <fetcher.Form method="post" onSubmit={handleSubmit} className="mt-5 grid gap-4 md:grid-cols-[1.3fr_1.5fr_auto]">
           <input type="hidden" name="intent" value="create" />
           <label>
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Name</span>
+            <span className="mb-1.5 block text-xs font-semibold capitalize tracking-[0.14em] text-slate-500">Name</span>
             <input
               name="name"
               required
@@ -156,7 +156,7 @@ export default function PickupLocations() {
             />
           </label>
           <label>
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Address</span>
+            <span className="mb-1.5 block text-xs font-semibold capitalize tracking-[0.14em] text-slate-500">Address</span>
             <input
               name="address"
               placeholder="Optional site or landmark"
@@ -227,7 +227,7 @@ export default function PickupLocations() {
         <div className="overflow-x-auto">
           <table className="w-full min-w-[720px] text-left">
             <thead>
-              <tr className="border-b border-slate-200 bg-slate-50 text-[10px] uppercase tracking-[0.12em] text-slate-500">
+              <tr className="border-b border-slate-200 bg-slate-50 text-[10px] capitalize tracking-[0.12em] text-slate-500">
                 <th className="px-5 py-3">
                   <input
                     type="checkbox"
@@ -277,7 +277,7 @@ export default function PickupLocations() {
                     <td className="px-5 py-4 text-sm text-slate-600">{location.address || 'No address supplied'}</td>
                     <td className="px-5 py-4">
                       <span
-                        className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${location.active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}
+                        className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold capitalize tracking-[0.12em] ${location.active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}
                       >
                         {location.active ? <ToggleRight size={12} /> : <ToggleLeft size={12} />}
                         {location.active ? 'Active' : 'Inactive'}

@@ -206,7 +206,7 @@ Manage approved/pending/rejected/suspended logistics users and show pickup/deliv
 
 ### Categories and Rates
 
-Manage cloth categories and active/archive state. Manage wash, iron, wash+iron prices, subscription units, and weight. Avoid hard deletion after a category is referenced by an order.
+Manage cloth categories and active/archive state. Manage Wash, Iron, and Wash + Iron customer rates, vendor payouts, subscription units, and one shared subscriber overage rate per category and service. Plan coverage determines whether that rate applies. Avoid hard deletion after a category is referenced by an order.
 
 ### Pickup Locations
 
@@ -214,7 +214,7 @@ Manage location name, optional address, active state, and usage. Archive instead
 
 ### Plans and Subscriptions
 
-Plans must support name, monthly/semester type, price, weekly limit, semester end date, and active state. Show subscriber counts and expiration warnings. Semester expiration must end affected subscriptions consistently.
+Plans must support name, monthly/semester type, price, weekly limit, Wash-only/Iron-only/Wash + Iron service coverage, semester end date, and active state. Show subscriber counts and expiration warnings. Subscription creation snapshots plan coverage and weekly limit; admin plan edits apply to new subscriptions, not active ones. Subscriber overage rates are global per category/service, not per plan, and are snapshotted on each order at placement. Semester expiration must end affected subscriptions consistently.
 
 ### Finance and Settlements
 

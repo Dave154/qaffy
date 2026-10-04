@@ -681,7 +681,7 @@ export default function Finance() {
     <div className="space-y-6">
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <div className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="truncate text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Paystack balance</p>
+          <p className="truncate text-[10px] font-semibold capitalize tracking-[0.14em] text-slate-500">Paystack balance</p>
           <div className="mt-3 flex min-w-0 items-end justify-between gap-2">
             <p className="min-w-0 truncate text-2xl font-bold text-slate-900 sm:text-3xl">
               {summary.paystackBalance === null ? 'Unavailable' : money(summary.paystackBalance)}
@@ -695,7 +695,7 @@ export default function Finance() {
           )}
         </div>
         <div className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="truncate text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Total collected</p>
+          <p className="truncate text-[10px] font-semibold capitalize tracking-[0.14em] text-slate-500">Total collected</p>
           <div className="mt-3 flex min-w-0 items-end justify-between gap-2">
             <p className="min-w-0 truncate text-2xl font-bold text-slate-900 sm:text-3xl">{money(summary.totalCollected)}</p>
             <Banknote size={18} className="shrink-0 text-emerald-600" />
@@ -703,7 +703,7 @@ export default function Finance() {
           <p className="mt-2 text-xs text-slate-500">Includes {money(summary.subscriptionRevenue)} in subscription sales</p>
         </div>
         <div className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="truncate text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Owed to vendors</p>
+          <p className="truncate text-[10px] font-semibold capitalize tracking-[0.14em] text-slate-500">Owed to vendors</p>
           <div className="mt-3 flex min-w-0 items-end justify-between gap-2">
             <p className="min-w-0 truncate text-2xl font-bold text-slate-900 sm:text-3xl">{money(summary.totalOwedToVendors)}</p>
             <TrendingUp size={18} className="shrink-0 text-violet-600" />
@@ -713,7 +713,7 @@ export default function Finance() {
           </p>
         </div>
         <div className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="truncate text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Platform profit</p>
+          <p className="truncate text-[10px] font-semibold capitalize tracking-[0.14em] text-slate-500">Platform profit</p>
           <div className="mt-3 flex min-w-0 items-end justify-between gap-2">
             <p className="min-w-0 truncate text-2xl font-bold text-slate-900 sm:text-3xl">{money(summary.platformProfit)}</p>
             <CheckCircle2 size={18} className="shrink-0 text-amber-600" />
@@ -742,7 +742,7 @@ export default function Finance() {
           <div className="mt-4 overflow-x-auto">
             <table className="w-full min-w-[680px] text-left">
               <thead>
-                <tr className="border-b border-slate-200 bg-slate-50 text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                <tr className="border-b border-slate-200 bg-slate-50 text-[10px] capitalize tracking-[0.12em] text-slate-500">
                   <th className="px-4 py-3 font-semibold">Vendor</th>
                   <th className="px-4 py-3 font-semibold">Orders</th>
                   <th className="px-4 py-3 font-semibold">Collected</th>
@@ -795,7 +795,7 @@ export default function Finance() {
 
           <div className="grid grid-cols-2 gap-3">
             <label className="block">
-              <span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Start date</span>
+              <span className="mb-1.5 block text-[10px] font-semibold capitalize tracking-[0.14em] text-slate-500">Start date</span>
               <input
                 type="date"
                 value={startDate}
@@ -807,7 +807,7 @@ export default function Finance() {
               />
             </label>
             <label className="block">
-              <span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">End date</span>
+              <span className="mb-1.5 block text-[10px] font-semibold capitalize tracking-[0.14em] text-slate-500">End date</span>
               <input
                 type="date"
                 value={endDate}
@@ -964,7 +964,7 @@ export default function Finance() {
                 <col style={{ width: '23%' }} />
               </colgroup>
               <thead>
-                <tr className="border-b border-slate-200 bg-slate-50 text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                <tr className="border-b border-slate-200 bg-slate-50 text-[10px] capitalize tracking-[0.12em] text-slate-500">
                   <th className="px-2 py-3 font-semibold">Vendor</th>
                   <th className="px-2 py-3 font-semibold">Created</th>
                   <th className="px-2 py-3 font-semibold">Period</th>
@@ -1005,7 +1005,7 @@ export default function Finance() {
                         <div className="flex items-center gap-2 whitespace-nowrap">
                           <span
                             title={settlement.transferFailureReason ?? undefined}
-                            className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${settlement.transferStatus === 'reversed' || settlement.transferStatus === 'failed' || settlement.transferStatus === 'rejected' ? 'bg-red-50 text-red-700' : settlement.status === 'paid' || settlement.transferStatus === 'success' ? 'bg-emerald-50 text-emerald-700' : !settlement.eligibleForPayout ? 'bg-orange-50 text-orange-700' : settlement.transferStatus === 'processing' || settlement.transferStatus === 'queued' ? 'bg-blue-50 text-blue-700' : 'bg-amber-50 text-amber-700'}`}
+                            className={`rounded-full px-2.5 py-1 text-[10px] font-semibold capitalize tracking-[0.12em] ${settlement.transferStatus === 'reversed' || settlement.transferStatus === 'failed' || settlement.transferStatus === 'rejected' ? 'bg-red-50 text-red-700' : settlement.status === 'paid' || settlement.transferStatus === 'success' ? 'bg-emerald-50 text-emerald-700' : !settlement.eligibleForPayout ? 'bg-orange-50 text-orange-700' : settlement.transferStatus === 'processing' || settlement.transferStatus === 'queued' ? 'bg-blue-50 text-blue-700' : 'bg-amber-50 text-amber-700'}`}
                           >
                             {settlement.transferStatus === 'reversed'
                               ? 'reversed · review'
@@ -1166,7 +1166,7 @@ export default function Finance() {
                     {selectedSettlement.vendorName}
                   </h2>
                   <span
-                    className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] ${selectedSettlement.transferStatus === 'reversed' || selectedSettlement.transferStatus === 'failed' || selectedSettlement.transferStatus === 'rejected' ? 'bg-red-50 text-red-700' : selectedSettlement.status === 'paid' || selectedSettlement.transferStatus === 'success' ? 'bg-emerald-50 text-emerald-700' : selectedSettlement.transferStatus === 'processing' ? 'bg-blue-50 text-blue-700' : !selectedSettlement.eligibleForPayout ? 'bg-orange-50 text-orange-700' : 'bg-amber-50 text-amber-700'}`}
+                    className={`rounded-full px-2.5 py-1 text-[10px] font-semibold capitalize tracking-[0.1em] ${selectedSettlement.transferStatus === 'reversed' || selectedSettlement.transferStatus === 'failed' || selectedSettlement.transferStatus === 'rejected' ? 'bg-red-50 text-red-700' : selectedSettlement.status === 'paid' || selectedSettlement.transferStatus === 'success' ? 'bg-emerald-50 text-emerald-700' : selectedSettlement.transferStatus === 'processing' ? 'bg-blue-50 text-blue-700' : !selectedSettlement.eligibleForPayout ? 'bg-orange-50 text-orange-700' : 'bg-amber-50 text-amber-700'}`}
                   >
                     {selectedSettlement.transferStatus === 'reversed'
                       ? 'Reversed · review'
@@ -1192,17 +1192,17 @@ export default function Finance() {
             </header>
             <div className="grid grid-cols-1 divide-y divide-slate-200 border-b border-slate-200 px-5 sm:grid-cols-3 sm:divide-x sm:divide-y-0 sm:px-6">
               <div className="py-3 sm:pr-4">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">Settlement total</p>
+                <p className="text-[10px] font-semibold capitalize tracking-[0.12em] text-slate-500">Settlement total</p>
                 <p className="mt-1 text-lg font-bold text-slate-900">{money(selectedSettlement.amountDue)}</p>
               </div>
               <div className="py-3 sm:px-4">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">Linked orders</p>
+                <p className="text-[10px] font-semibold capitalize tracking-[0.12em] text-slate-500">Linked orders</p>
                 <p className="mt-1 text-sm font-semibold text-slate-900">
                   {selectedSettlement.orders.length} order{selectedSettlement.orders.length === 1 ? '' : 's'}
                 </p>
               </div>
               <div className="py-3 sm:pl-4">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">Payout account</p>
+                <p className="text-[10px] font-semibold capitalize tracking-[0.12em] text-slate-500">Payout account</p>
                 <p
                   className={`mt-1 text-sm font-semibold ${selectedSettlement.payoutAccountReady ? 'text-emerald-700' : 'text-amber-700'}`}
                 >

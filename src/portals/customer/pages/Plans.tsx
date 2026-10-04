@@ -30,7 +30,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   const { supabase, headers } = getSupabaseServerClient(request)
   const { data: rows, error } = await supabase
     .from('plans')
-    .select('id, name, type, price, weekly_limit, active')
+    .select('id, name, type, price, weekly_limit, covers_wash, covers_iron, active')
     .eq('active', true)
     .order('price')
   if (error) return data<PlansData>({ plans: [] }, { headers, status: 200 })
@@ -43,8 +43,8 @@ export async function loader({ request }: Route.LoaderArgs) {
         price: Number(plan.price),
         currency: '₦',
         weeklyLimit: plan.weekly_limit,
-        service: 'Wash + Iron',
-        description: `${plan.weekly_limit} clothes per week on a ${plan.type} plan.`,
+        service: plan.covers_wash && plan.covers_iron ? 'Wash + Iron' : plan.covers_wash ? 'Wash' : 'Iron',
+        description: `${plan.weekly_limit} clothes per week for ${plan.covers_wash && plan.covers_iron ? 'Wash + Iron' : plan.covers_wash ? 'Wash' : 'Iron'}.`,
         featured: index === 1,
       })),
     },
@@ -147,7 +147,7 @@ export default function Plans() {
         price: activePlan.price,
         currency: '₦' as const,
         weeklyLimit: activePlan.weekly_limit,
-        service: 'Wash + Iron',
+        service: activePlan.covers_wash && activePlan.covers_iron ? 'Wash + Iron' : activePlan.covers_wash ? 'Wash' : 'Iron',
         description: 'Your active Qaffy subscription.',
         featured: false,
       }
@@ -198,7 +198,7 @@ export default function Plans() {
         <section className="rounded-2xl border border-[#a7d7d2] bg-[#eef9f7] p-5 text-slate-900 sm:p-6">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#418d87]">Current plan</p>
+              <p className="text-xs font-semibold capitalize tracking-[0.16em] text-[#418d87]">Current plan</p>
               <div className="mt-3 flex items-center gap-2">
                 <h3 className="text-2xl font-bold">{currentPlan.name}</h3>
                 <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold capitalize text-[#418d87]">
@@ -263,7 +263,7 @@ export default function Plans() {
               >
                 <div className="min-w-0">
                   {plan.featured && (
-                    <span className="mb-3 inline-flex rounded-full bg-brand-strong px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-white">
+                    <span className="mb-3 inline-flex rounded-full bg-brand-strong px-2.5 py-1 text-[10px] font-semibold capitalize tracking-[0.16em] text-white">
                       Popular
                     </span>
                   )}
@@ -278,6 +278,10 @@ export default function Plans() {
                   <div className="flex items-center justify-between">
                     <span className="text-slate-500">Weekly limit</span>
                     <span className="font-semibold text-slate-900">{plan.weeklyLimit} clothes</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-slate-500">Services</span>
+                    <span className="text-right font-semibold text-slate-900">{plan.service}</span>
                   </div>
                 </div>
                 <button

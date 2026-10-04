@@ -52,6 +52,7 @@ export function getSubscriptionWeekStart(reference = new Date()) {
 }
 
 export type SubscriptionUsageOrder = {
+  subscription_id?: string | null
   is_subscription_order: boolean
   status: string
   clothes_count_vendor: number | null

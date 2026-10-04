@@ -165,7 +165,7 @@ export default function Referrals() {
         <fetcher.Form method="post" className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <input type="hidden" name="intent" value="create" />
           <label className="md:col-span-2 xl:col-span-4">
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Campaign name</span>
+            <span className="mb-1.5 block text-xs font-semibold capitalize tracking-[0.14em] text-slate-500">Campaign name</span>
             <input
               name="name"
               required
@@ -174,7 +174,7 @@ export default function Referrals() {
             />
           </label>
           <label>
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Referrer reward</span>
+            <span className="mb-1.5 block text-xs font-semibold capitalize tracking-[0.14em] text-slate-500">Referrer reward</span>
             <input
               name="referrerRewardValue"
               type="number"
@@ -185,7 +185,7 @@ export default function Referrals() {
             />
           </label>
           <label>
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">New customer reward</span>
+            <span className="mb-1.5 block text-xs font-semibold capitalize tracking-[0.14em] text-slate-500">New customer reward</span>
             <input
               name="referredRewardValue"
               type="number"
@@ -196,7 +196,7 @@ export default function Referrals() {
             />
           </label>
           <label>
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Minimum order</span>
+            <span className="mb-1.5 block text-xs font-semibold capitalize tracking-[0.14em] text-slate-500">Minimum order</span>
             <input
               name="minimumOrderAmount"
               type="number"
@@ -207,7 +207,7 @@ export default function Referrals() {
             />
           </label>
           <label>
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Reward expiry days</span>
+            <span className="mb-1.5 block text-xs font-semibold capitalize tracking-[0.14em] text-slate-500">Reward expiry days</span>
             <input
               name="rewardExpiryDays"
               type="number"
@@ -218,7 +218,7 @@ export default function Referrals() {
             />
           </label>
           <label>
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Starts</span>
+            <span className="mb-1.5 block text-xs font-semibold capitalize tracking-[0.14em] text-slate-500">Starts</span>
             <input
               name="startsAt"
               type="datetime-local"
@@ -227,7 +227,7 @@ export default function Referrals() {
             />
           </label>
           <label>
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Ends</span>
+            <span className="mb-1.5 block text-xs font-semibold capitalize tracking-[0.14em] text-slate-500">Ends</span>
             <input
               name="endsAt"
               type="datetime-local"
@@ -236,7 +236,7 @@ export default function Referrals() {
             />
           </label>
           <label>
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Max rewards per referrer</span>
+            <span className="mb-1.5 block text-xs font-semibold capitalize tracking-[0.14em] text-slate-500">Max rewards per referrer</span>
             <input
               name="maxRewardsPerReferrer"
               type="number"
@@ -267,7 +267,7 @@ export default function Referrals() {
         <div className="overflow-x-auto">
           <table className="w-full min-w-245 table-fixed text-left">
             <thead>
-              <tr className="border-b border-slate-200 bg-slate-50 text-[10px] uppercase tracking-[0.12em] text-slate-500">
+              <tr className="border-b border-slate-200 bg-slate-50 text-[10px] capitalize tracking-[0.12em] text-slate-500">
                 <th className="w-[23%] px-5 py-3 font-semibold">Campaign</th>
                 <th className="w-[18%] px-5 py-3 font-semibold">Rewards</th>
                 <th className="w-[15%] px-5 py-3 font-semibold">Qualification</th>
@@ -303,7 +303,7 @@ export default function Referrals() {
                     </td>
                     <td className="px-5 py-4">
                       <span
-                        className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${campaign.status === 'active' ? 'bg-emerald-50 text-emerald-700' : campaign.status === 'ended' ? 'bg-slate-100 text-slate-600' : 'bg-amber-50 text-amber-700'}`}
+                        className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold capitalize tracking-[0.12em] ${campaign.status === 'active' ? 'bg-emerald-50 text-emerald-700' : campaign.status === 'ended' ? 'bg-slate-100 text-slate-600' : 'bg-amber-50 text-amber-700'}`}
                       >
                         {campaign.status}
                       </span>

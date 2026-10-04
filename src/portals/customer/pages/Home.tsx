@@ -21,6 +21,7 @@ import NewOrder from './NewOrder'
 import TopUpModal from './TopUpModal'
 import CopyableOrderId from '../../../components/CopyableOrderId'
 import ProtectedOtp from '../../../components/ProtectedOtp'
+import DeliveryOtpPaywall from '../../../components/DeliveryOtpPaywall'
 import { useCustomerStore } from '../customer-store-hook'
 import { ensurePushSubscription, getPushSubscription, savePushSubscription } from '../../../lib/push.client'
 import BubblyBackground from '../../../components/BubblyBackground'
@@ -42,7 +43,7 @@ export async function action({ request }: Route.ActionArgs) {
 
   if (intent !== 'initialize') return data({ ok: false, message: 'Unsupported payment action.' }, { status: 400, headers })
 
-  if (!Number.isFinite(amount) || amount < 1000) return data({ ok: false, message: 'Minimum top-up is ₦1,000.' }, { status: 400, headers })
+  if (!Number.isFinite(amount) || amount < 100) return data({ ok: false, message: 'Minimum top-up is ₦100.' }, { status: 400, headers })
 
   const secretKey = process.env.PAYSTACK_SECRET_KEY
   if (!secretKey) return data({ ok: false, message: 'Paystack is not configured.' }, { status: 503, headers })
@@ -191,7 +192,7 @@ export default function Home() {
           <p className="relative text-base font-semibold text-brand-primary">Good morning, {customerName}</p>
           <h2 className="mt-1 text-2xl font-bold tracking-tight text-[#121212] lg:hidden">Overview</h2>
           <div className="mt-2 flex w-full items-center justify-between gap-3 text-xs">
-            <p className="min-w-0 truncate font-semibold uppercase tracking-[0.14em] text-slate-400">
+            <p className="min-w-0 truncate font-semibold capitalize tracking-[0.14em] text-slate-400">
               Qaffy ID: <span className="text-slate-600">{customerId}</span>
             </p>
             <p className="shrink-0 text-right text-slate-500">{today}</p>
@@ -250,7 +251,7 @@ export default function Home() {
         <div className="relative">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+              <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-slate-500">
                 {subscription ? 'Subscription' : 'Available balance'}
               </p>
               {subscription ? (
@@ -364,10 +365,12 @@ export default function Home() {
                 </div>
 
                 <div className="shrink-0 sm:ml-2">
-                  {getVisibleOtp(order) ? (
+                  {order.status === 'Pending payment' && order.total > 0 ? (
+                    <DeliveryOtpPaywall amount={order.total} onClick={() => setIsTopUpModalOpen(true)} />
+                  ) : getVisibleOtp(order) ? (
                     <div className="flex items-start gap-3 sm:flex-col sm:items-end">
                       <div className="min-w-0">
-                        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-primary">
+                        <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-brand-primary">
                           {getVisibleOtpLabel(order)}
                         </p>
                         <div className="mt-2">

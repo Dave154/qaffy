@@ -126,7 +126,7 @@ export default function Settings() {
       <section className="rounded-[28px] bg-gradient-to-br from-brand-primary via-brand-primary to-brand-primary-hover p-5 text-white shadow-lg shadow-brand-border sm:p-6">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
-            <p className="text-xs font-medium uppercase tracking-[0.18em] text-white/80">Profile</p>
+            <p className="text-xs font-medium capitalize tracking-[0.18em] text-white/80">Profile</p>
             <h3 className="mt-3 break-words text-3xl font-bold">{customerName}</h3>
             <p className="mt-2 break-all text-sm text-white/80">
               {customerEmail} • {customerId}
@@ -139,7 +139,7 @@ export default function Settings() {
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {quickStats.map((stat) => (
           <div key={stat.label} className="rounded-[22px] border border-brand-border bg-white p-4 shadow-sm shadow-brand-soft">
-            <p className="text-[10px] uppercase tracking-[0.22em] text-slate-400">{stat.label}</p>
+            <p className="text-[10px] capitalize tracking-[0.22em] text-slate-400">{stat.label}</p>
             <p className="mt-3 text-lg font-bold text-slate-900">{stat.value}</p>
             <p className="mt-1 text-sm text-slate-500">{stat.helper}</p>
           </div>

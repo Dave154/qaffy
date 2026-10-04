@@ -203,7 +203,7 @@ export default function VendorLayout() {
         <div className="mx-auto flex max-w-3xl items-center justify-between px-4 py-3.5 sm:px-6">
           <div className="flex flex-col items-center gap-3">
             <QaffyLogo className="inline-flex" />
-            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-brand-primary">Vendor</p>
+            <p className="text-[10px] font-semibold capitalize tracking-[0.18em] text-brand-primary">Vendor</p>
           </div>
           <button
             type="button"
@@ -222,7 +222,7 @@ export default function VendorLayout() {
         >
           <div className="flex flex-col items-center gap-3 px-3">
             <QaffyLogo className="inline-flex" />
-            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-brand-primary">Vendor</p>
+            <p className="text-[10px] font-semibold capitalize tracking-[0.18em] text-brand-primary">Vendor</p>
             <button
               type="button"
               onClick={() => setMenuOpen(false)}

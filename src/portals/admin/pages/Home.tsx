@@ -765,7 +765,7 @@ export default function Home() {
               <div className="mt-8 flex items-end justify-between gap-3">
                 <div>
                   <p className="text-3xl font-semibold leading-none text-[#121212]">{value}</p>
-                  <p className="mt-1 text-[10px] uppercase tracking-[0.08em] text-[#9aa7a7]">{helper}</p>
+                  <p className="mt-1 text-[10px] capitalize tracking-[0.08em] text-[#9aa7a7]">{helper}</p>
                 </div>
                 <ArrowUpRight size={15} className="text-[#505959]" />
               </div>

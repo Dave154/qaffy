@@ -313,7 +313,7 @@ function PartnerTable({ type, partners }: { type: 'vendor' | 'logistics'; partne
       <div ref={tableRef} className="overflow-visible">
         <table className="relative z-0 w-full min-w-[760px] text-left overflow-visible">
           <thead>
-            <tr className="border-b border-slate-200 bg-slate-50 text-[10px] uppercase tracking-[0.12em] text-slate-500">
+            <tr className="border-b border-slate-200 bg-slate-50 text-[10px] capitalize tracking-[0.12em] text-slate-500">
               <th className="px-5 py-3 font-semibold">Partner</th>
               <th className="px-5 py-3 font-semibold">Contact</th>
               <th className="px-5 py-3 font-semibold">Joined</th>
@@ -512,7 +512,7 @@ export function PartnerPage({ type }: { type: 'vendor' | 'logistics' }) {
           <input type="hidden" name="partnerType" value={type} />
           <div className="space-y-6">
             <label className="block min-w-0">
-              <span className="mb-2.5 block text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Email address</span>
+              <span className="mb-2.5 block text-xs font-semibold capitalize tracking-[0.12em] text-slate-500">Email address</span>
               <input
                 type="email"
                 name="email"

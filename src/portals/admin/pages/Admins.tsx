@@ -194,7 +194,7 @@ export default function Admins() {
                 <div className="flex items-center gap-3">
                   <span className="text-xs text-slate-500">Added {new Date(admin.createdAt).toLocaleDateString()}</span>
                   <span
-                    className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${admin.status === 'approved' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}
+                    className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold capitalize tracking-[0.12em] ${admin.status === 'approved' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}
                   >
                     {admin.status === 'approved' && <CheckCircle2 size={12} />}
                     {admin.status}

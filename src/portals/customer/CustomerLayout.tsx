@@ -24,7 +24,15 @@ import { supabase } from '../../lib/supabase.client'
 import { CustomerStoreProvider } from './customer-store'
 import type { CustomerReferral, MismatchLine, PersistedOrderItem, PickupLocationOption } from './customer-store'
 import { useCustomerStore } from './customer-store-hook'
-import type { Invoice, Order, Payment, Plan, Subscription, Wallet, WalletTransaction } from '../../types/database.types'
+import type {
+  Invoice,
+  Order,
+  Payment,
+  Plan,
+  Subscription,
+  Wallet,
+  WalletTransaction,
+} from '../../types/database.types'
 import { ensurePushSubscription, savePushSubscription } from '../../lib/push.client'
 import { calculateSubscriptionUnitsUsed } from '../../lib/subscription-week'
 
@@ -170,6 +178,15 @@ export async function loader({ request }: Route.LoaderArgs) {
   const { data: subscriptionPlan } = subscription
     ? await serverSupabase.from('plans').select('*').eq('id', subscription.plan_id).maybeSingle()
     : { data: null }
+  const subscriptionPlanSnapshot =
+    subscription && subscriptionPlan
+      ? {
+          ...subscriptionPlan,
+          weekly_limit: subscription.weekly_limit_snapshot,
+          covers_wash: subscription.covers_wash_snapshot,
+          covers_iron: subscription.covers_iron_snapshot,
+        }
+      : null
 
   const [{ data: referredRows }, { data: referrerRows }] = await Promise.all([
     serverSupabase
@@ -227,7 +244,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       orderMismatches,
       unreadNotificationCount: unreadNotificationCount ?? 0,
       subscription,
-      subscriptionPlan,
+      subscriptionPlan: subscriptionPlanSnapshot,
       persistedReferrals,
     },
     { headers },
@@ -238,6 +255,13 @@ function PlanSummary({ onNavigate }: { onNavigate?: () => void }) {
   const { activePlan, subscription, subscriptionBalance, subscriptionUsedUnits } = useCustomerStore()
   const displayedUsedUnits = activePlan ? Math.min(subscriptionUsedUnits, activePlan.weekly_limit) : subscriptionUsedUnits
   const usagePercent = activePlan ? Math.min(100, Math.round((displayedUsedUnits / activePlan.weekly_limit) * 100)) : 0
+  const coverageLabel = activePlan
+    ? activePlan.covers_wash && activePlan.covers_iron
+      ? 'Wash, Iron, and Wash + Iron'
+      : activePlan.covers_wash
+        ? 'Wash'
+        : 'Iron'
+    : ''
 
   return (
     <NavLink
@@ -246,10 +270,11 @@ function PlanSummary({ onNavigate }: { onNavigate?: () => void }) {
       onClick={onNavigate}
       className="mt-auto block rounded-2xl border border-[#a7d7d2] bg-[#eef9f7] p-3.5 transition hover:border-[#78beb7] hover:bg-[#e4f5f2] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#00b7d4]"
     >
-      <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#418d87]">Current plan</p>
+      <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-[#418d87]">Current plan</p>
       <p className="mt-2 text-sm font-semibold capitalize text-slate-800">
         {activePlan && subscription ? `${subscription.name} ${subscription.billingPeriod}` : 'No active plan'}
       </p>
+      {activePlan && <p className="mt-1 text-xs text-slate-500">Covers: {coverageLabel}</p>}
       {subscriptionBalance < 0 && (
         <p className="mt-1 text-xs text-brand-primary">Subscription debt: ₦{Math.abs(subscriptionBalance).toLocaleString()}</p>
       )}

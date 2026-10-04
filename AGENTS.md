@@ -426,7 +426,7 @@ Before updating UI components, verify:
 - Vendor count review does not expose invoice, payment, subscription, or order-total metadata; billing remains a trusted server-side outcome after count confirmation.
 - Vendor count review shows only physical customer and received item quantities; subscription-unit accounting remains hidden and server-side.
 - Physical customer/vendor counts are stored separately from weighted subscription units; mismatch review compares physical counts, while subscription allowance and billing use dedicated unit fields.
-- Subscription usage meters count only units covered by the plan; excess units charged from the general wallet do not increase the weekly allowance meter. Weeks run Sunday midnight in `Africa/Lagos`, and allowance usage is timestamped at vendor confirmation rather than order creation.
+- Subscription usage meters count only units covered by the plan; over-limit covered units and uncovered services do not increase the weekly allowance meter. Weeks run Sunday midnight in `Africa/Lagos`, and allowance usage is timestamped at vendor confirmation rather than order creation.
 - Vendor-confirmed final count is the billing and payout source of truth. Added categories are included in the displayed count, invoice calculation, mismatch handling, and `confirmed_quantity` payout data; extra billing excludes them from the original-order baseline.
 - Vendor Realtime subscriptions use the stable revalidation callback, and vendor fetcher responses are handled once to avoid duplicate revalidation, toasts, or subscription churn.
 - Customer identifiers should use the customer Qaffy ID, formatted as `QF-XXXX` where available, rather than exposing a raw UUID.
@@ -605,7 +605,7 @@ The customer portal is the current completion target. Do not move to another por
 ### Next customer task
 
 - Customer OTP flow now selects the correct active order, uses the public order reference, resets OTP step state when switching orders, and excludes delivered orders.
-- Vendor confirmation now calculates weighted subscription units, applies the remaining subscription allowance first, and charges only any excess from the customer's general wallet. Insufficient excess funds leave the invoice unpaid and delivery blocked.
+- Vendor confirmation now uses each order's saved subscription coverage, weekly limit, and item-rate snapshots. It applies allowance only to covered service components, charges over-limit covered units at the saved global category/service subscriber rate, and bills uncovered services at regular rates. Insufficient wallet balance leaves the full invoice unpaid and delivery blocked.
 - Validation for this slice: `npm run typecheck` and `npm run build` pass.
 
 ### Next customer task
@@ -755,8 +755,10 @@ The first enables Realtime for wallets, wallet transactions, and subscriptions. 
 - The customer should only see mismatch information after the vendor confirms it.
 - If the wallet balance is insufficient after vendor confirmation, the order remains unpaid and shows as pending payment until the wallet is topped up.
 - Admin is not the billing decision-maker for mismatch math; they review mismatches for tracking, reference, and operational visibility only.
-- A subscription order is classified as a subscription order as a whole; subscription coverage is not allocated as separate payment decisions per item.
-- Subscription allowance covers the order first, and any excess is charged from the general wallet. If the general wallet cannot cover the excess, the entire order remains unpaid and delivery is blocked until the customer tops up.
+- An order placed during an active subscription is associated with a snapshot of that subscription's coverage and weekly limit. Coverage applies to eligible service components: a Wash-only plan covers the Wash component of Wash + Iron, while Iron is charged separately at its regular customer rate.
+- Only covered weighted units consume the weekly allowance. Allocation maximizes covered weighted units deterministically. Over-limit covered units use the saved global subscriber rate for that category/service; services outside the plan use their saved regular customer rate.
+- Subscriber rates are configured once per category/service, shared across plans, and saved with each order item at placement. Plan coverage and weekly limit are snapshotted when a subscription begins; later Admin plan changes apply to the customer's next subscription, while rate changes apply to orders placed afterward.
+- Customer discounts do not affect vendor payout rates or amounts. If the wallet cannot cover the final combined invoice, it remains unpaid and delivery is blocked until the customer tops up.
 - Vendors enter bank name and account number in their dashboard; Paystack must verify and resolve the account before it can be used for payouts, and the vendor must confirm the resolved account name.
 
 ### Admin Build Order
@@ -784,3 +786,37 @@ Before production assignment or settlement work, add vendor ownership to orders.
 - `src/portals/admin/pages/Plans.tsx` supports plan creation/editing and semester settings.
 - Admin sidebar paths were corrected to `/admin/*`.
 - Delivery verification and the final customer-facing payout workflow remain the next major operational gaps.
+
+## Part 14: Subscription Service Pricing Handoff (2026-10-02)
+
+**Read `SUBSCRIPTION_ORDERING_DISCUSSION.md` before continuing.** It is the source of truth for the confirmed founder decisions, implementation checkpoint, and staging handoff.
+
+### Confirmed behavior
+
+- In customer NewOrder only, a repeated normalized category/service pair increments the existing line; the same category with a different service is a separate line. Quantity editing remains available.
+- Plans cover Wash only, Iron only, or both. A both-service plan covers Wash, Iron, and Wash + Iron. Mixed covered/uncovered order lines are allowed; for a Wash + Iron line under a Wash-only plan, Wash uses the plan and Iron is billed at its regular rate.
+- Over-limit covered units use the global subscriber rate configured per category/service. Uncovered services get no subscriber discount. Vendor payouts are unchanged.
+- Plan coverage and weekly limit are snapshotted when a subscription begins, so Admin plan changes affect new subscriptions only. Applicable regular and global subscriber rates are snapshotted on order-item creation.
+- A global subscriber-rate change applies to new orders from active subscribers; existing order-item snapshots remain unchanged.
+- Weekly covered-unit usage carries over across a midweek subscription change and resets Sunday at 00:00 in `Africa/Lagos`.
+- Vendor-confirmed quantities remain authoritative. Allowance is applied only to covered service components using deterministic allocation that maximizes weighted units. The full invoice must be paid before delivery.
+
+### Implementation state
+
+- Migration `supabase/migrations/20261002100000_service_specific_subscription_pricing.sql` adds plan coverage flags, `plan_category_rates`, subscription snapshots, order/subscription links, item price/weight snapshots, RLS, and trusted triggers. It is recorded as applied remotely.
+- Migrations `20261002100000_service_specific_subscription_pricing.sql`, `20261002110000_subscription_invoice_billing_breakdown.sql`, and `20261002120000_global_subscription_category_rates.sql` are recorded as applied in the linked database. Read-only checks confirm the invoice breakdown and global subscriber-rate columns exist, and all category rates are populated. Confirm the linked environment before release; workflow smoke tests remain outstanding.
+- `src/lib/subscriptions.server.ts` snapshots terms for both Paystack activation and Admin manual grants.
+- `src/portals/admin/pages/Plans.tsx` edits service coverage; `src/portals/admin/pages/Categories.tsx` manages shared subscriber rates by category/service.
+- `src/portals/customer/pages/NewOrder.tsx` merges category/service lines and previews covered, subscriber-rate, and regular-rate amounts. `CustomerLayout.tsx` and `customer-store.tsx` load saved plan terms; category rates are global.
+- `src/lib/subscription-billing.ts` calculates component-aware allowance and invoice amounts. `src/lib/wallet.server.ts` uses it for snapshot-linked orders and retains the legacy finalization path for pre-migration orders without `subscription_id`.
+- `src/portals/customer/pages/Invoice.tsx` presents the compact persisted billing breakdown.
+- `src/lib/subscription-billing.test.mjs` and `src/lib/order-lines.test.mjs` cover the new pricing and line-merge rules.
+- Vendor customer-count visibility edits remain in `src/portals/vendor/pages/Home.tsx` and `src/portals/vendor/pages/Orders.tsx`; preserve them.
+
+### Validation and deployment status
+
+- `npm test`: 41 passing tests. `npm run typecheck`, `npm run build`, and `git diff --check` pass.
+- `npx supabase db push --linked --dry-run` shows only `20261002110000_subscription_invoice_billing_breakdown.sql` pending. Do not push until confirming the linked project is staging.
+- Read-only linked schema check after the first migration: 2 plan coverage columns, 3 subscription snapshot columns, 7 order-item snapshot columns, 16 plan/category rate rows, 2 subscription rate snapshot rows, and 0 subscriptions missing term snapshots. `invoices.billing_breakdown` was absent at that time.
+- No database migration was applied by this coding session. Confirm who applied the first migration and to which environment before pushing the invoice-column migration. No production migration has been run by this session.
+- After applying the pending invoice-column migration to confirmed staging, verify `billing_breakdown` exists, then smoke-test both paid and manually granted subscriptions, create an order with same-category different services, verify Wash-only + Wash + Iron splitting, allowance exhaustion and midweek plan changes, plan/rate changes affecting only new subscriptions, category-added-during-subscription pricing, invoice breakdown, insufficient-wallet blocking, and unchanged vendor payout.

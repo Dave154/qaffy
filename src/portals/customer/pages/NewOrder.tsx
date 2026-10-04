@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { Minus, Plus, Trash2 } from 'lucide-react'
 import type { CustomerOrder, OrderLine } from '../customer-store'
@@ -8,8 +8,18 @@ import BubblyBackground from '../../../components/BubblyBackground'
 import CopyableOrderId from '../../../components/CopyableOrderId'
 import ProtectedOtp from '../../../components/ProtectedOtp'
 import { toast } from '../../../lib/toast'
+import { calculateSubscriptionBilling } from '../../../lib/subscription-billing'
+import { addOrIncrementOrderLine } from '../../../lib/order-lines'
 
-type Category = { id: string; name: string; isMain: boolean; subscriptionUnits: number; rates: Record<string, number>; description: string }
+type Category = {
+  id: string
+  name: string
+  isMain: boolean
+  subscriptionUnits: number
+  rates: Record<string, number>
+  subscriberRates: Record<string, number>
+  description: string
+}
 
 const services = [
   { name: 'Wash', description: 'Clean and fold' },
@@ -20,8 +30,15 @@ const services = [
 type NewOrderProps = { onClose: () => void; order?: CustomerOrder }
 
 export default function NewOrder({ onClose, order }: NewOrderProps) {
-  const { addOrder, pickupLocations, preferredPickupLocationId, preferredPickupLocationName, subscription, subscriptionRemainingUnits } =
-    useCustomerStore()
+  const {
+    activePlan,
+    addOrder,
+    pickupLocations,
+    preferredPickupLocationId,
+    preferredPickupLocationName,
+    subscription,
+    subscriptionRemainingUnits,
+  } = useCustomerStore()
   const isReadOnly = Boolean(order)
   const [categories, setCategories] = useState<Category[]>([])
   const [catalogState, setCatalogState] = useState<'loading' | 'ready' | 'empty' | 'error'>(isReadOnly ? 'ready' : 'loading')
@@ -70,7 +87,9 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
         categoryIds.length > 0
           ? await supabase
               .from('cloth_category_rates')
-              .select('category_id, wash_price, iron_price, wash_iron_price, subscription_units')
+              .select(
+                'category_id, wash_price, iron_price, wash_iron_price, subscriber_wash_price, subscriber_iron_price, subscriber_wash_iron_price, subscription_units',
+              )
               .in('category_id', categoryIds)
           : { data: [], error: null }
       if (rateError) {
@@ -92,6 +111,11 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
               isMain: Boolean(row.is_main),
               subscriptionUnits: Number(rate.subscription_units),
               rates: { Wash: Number(rate.wash_price), Iron: Number(rate.iron_price), 'Wash + Iron': Number(rate.wash_iron_price) },
+              subscriberRates: {
+                Wash: Number(rate.subscriber_wash_price),
+                Iron: Number(rate.subscriber_iron_price),
+                'Wash + Iron': Number(rate.subscriber_wash_iron_price),
+              },
               description: 'Live pricing and subscription units from Qaffy rates.',
             },
           ]
@@ -132,14 +156,35 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
       : items)
   const total = order?.total ?? items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0)
   const itemCount = order?.items ?? items.reduce((sum, item) => sum + item.quantity, 0)
-  const weightedItemCount = items.reduce((sum, item) => sum + item.quantity * (item.subscriptionUnits ?? 1), 0)
-  const addedCategoryNames = new Set(items.map((item) => item.category.trim().toLowerCase()))
-  const availableCategories = categories.filter((item) => !addedCategoryNames.has(item.name.trim().toLowerCase()))
-
+  const availableCategories = categories
+  const subscriptionBillingPreview = useMemo(() => {
+    if (!activePlan) return null
+    return calculateSubscriptionBilling(
+      items.map((item, index) => {
+        const categoryRow = categories.find((candidate) => candidate.name.trim().toLowerCase() === item.category.trim().toLowerCase())
+        const regularWashPrice = categoryRow?.rates.Wash ?? item.unitPrice
+        const regularIronPrice = categoryRow?.rates.Iron ?? item.unitPrice
+        return {
+          id: `${item.category}:${item.service}:${index}`,
+          service: item.service === 'Wash + Iron' ? 'wash_iron' : item.service === 'Iron' ? 'iron' : 'wash',
+          quantity: item.quantity,
+          unitsPerItem: item.subscriptionUnits ?? 1,
+          regularPrice: item.unitPrice,
+          regularWashPrice,
+          regularIronPrice,
+          subscriberWashPrice: categoryRow?.subscriberRates.Wash ?? regularWashPrice,
+          subscriberIronPrice: categoryRow?.subscriberRates.Iron ?? regularIronPrice,
+          subscriberWashIronPrice: categoryRow?.subscriberRates['Wash + Iron'] ?? item.unitPrice,
+        }
+      }),
+      { wash: activePlan.covers_wash, iron: activePlan.covers_iron },
+      subscriptionRemainingUnits ?? 0,
+    )
+  }, [activePlan, categories, items, subscriptionRemainingUnits])
   const addItem = () => {
     if (!draftLine) return
-    setItems((currentItems) => [...currentItems, draftLine])
-    setCategory(availableCategories.find((item) => item.name !== draftLine.category) ?? null)
+    setItems((currentItems) => addOrIncrementOrderLine(currentItems, draftLine))
+    setCategory(category)
     setQuantity(1)
   }
 
@@ -203,11 +248,11 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
         {isReadOnly && (
           <section className="mt-6 grid gap-3 sm:grid-cols-2">
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5 shadow-sm">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Payment status</p>
+              <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-slate-500">Payment status</p>
               <p className="mt-2.5 font-semibold text-slate-900">{order?.paymentStatus}</p>
             </div>
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5 shadow-sm">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Pickup OTP</p>
+              <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-slate-500">Pickup OTP</p>
               {order?.pickedUp ? (
                 <p className="mt-2.5 text-sm font-medium text-slate-600">Unavailable: order already picked up.</p>
               ) : (
@@ -217,7 +262,7 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
               )}
             </div>
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5 shadow-sm">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Delivery OTP</p>
+              <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-slate-500">Delivery OTP</p>
               {order?.status === 'Delivered' ? (
                 <p className="mt-2.5 text-sm font-medium text-slate-600">Unavailable: order already delivered.</p>
               ) : order?.deliveryOtp ? (
@@ -358,55 +403,67 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
           )}
           {displayItems.length > 0 && (
             <div className="mt-5 divide-y divide-slate-100 rounded-2xl border border-slate-200">
-              {displayItems.map((item, index) => (
-                <div
-                  key={`${item.category}-${item.service}-${index}`}
-                  className="flex flex-col gap-3 p-3 text-sm sm:flex-row sm:items-center"
-                >
-                  <div className="min-w-0 flex-1">
-                    <p className="font-semibold text-slate-900">{item.category}</p>
-                    <p className="text-xs text-slate-500">
-                      {item.service} · {item.quantity} item{item.quantity === 1 ? '' : 's'}
-                    </p>
+              {displayItems.map((item, index) => {
+                const subscriptionLineAmount = subscriptionBillingPreview?.lines[index]?.totalAmount ?? 0
+                const isCoveredSubscriptionLine = Boolean(subscription && !isReadOnly && subscriptionLineAmount === 0)
+                return (
+                  <div
+                    key={`${item.category}-${item.service}-${index}`}
+                    className={`flex gap-3 p-3 text-sm ${isCoveredSubscriptionLine ? 'items-center' : 'flex-col sm:flex-row sm:items-center'}`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="font-semibold text-slate-900">{item.category}</p>
+                      <p className="text-xs text-slate-500">
+                        {item.service} · {item.quantity} item{item.quantity === 1 ? '' : 's'}
+                      </p>
+                    </div>
+                    <div className={`flex items-center gap-2 ${isCoveredSubscriptionLine ? 'shrink-0' : 'self-stretch sm:self-auto'}`}>
+                      {!isReadOnly && (
+                        <input
+                          type="number"
+                          min={1}
+                          inputMode="numeric"
+                          aria-label={`Quantity for ${item.category}`}
+                          value={item.quantity}
+                          onChange={(event) =>
+                            setItems((currentItems) =>
+                              currentItems.map((currentItem, itemIndex) =>
+                                itemIndex === index
+                                  ? { ...currentItem, quantity: Math.max(1, Number(event.target.value) || 1) }
+                                  : currentItem,
+                              ),
+                            )
+                          }
+                          className="w-16 rounded-xl border border-slate-200 px-2 py-1 text-center font-semibold text-slate-900 focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
+                        />
+                      )}
+                      {subscription && !isReadOnly ? (
+                        subscriptionLineAmount > 0 && (
+                          <span className="min-w-0 flex-1 text-right font-semibold text-brand-strong">
+                            + ₦{subscriptionLineAmount.toLocaleString()}
+                          </span>
+                        )
+                      ) : (
+                        <span className="min-w-0 flex-1 text-right font-semibold text-slate-900">
+                          {subscription
+                            ? `${item.quantity * (item.subscriptionUnits ?? 1)} unit${item.quantity * (item.subscriptionUnits ?? 1) === 1 ? '' : 's'}`
+                            : `₦${(item.quantity * item.unitPrice).toLocaleString()}`}
+                        </span>
+                      )}
+                      {!isReadOnly && (
+                        <button
+                          type="button"
+                          aria-label={`Remove ${item.category}`}
+                          onClick={() => setItems((currentItems) => currentItems.filter((_, itemIndex) => itemIndex !== index))}
+                          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl text-slate-400 hover:bg-brand-soft hover:text-brand-primary"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2 self-stretch sm:self-auto">
-                    {!isReadOnly && (
-                      <input
-                        type="number"
-                        min={1}
-                        inputMode="numeric"
-                        aria-label={`Quantity for ${item.category}`}
-                        value={item.quantity}
-                        onChange={(event) =>
-                          setItems((currentItems) =>
-                            currentItems.map((currentItem, itemIndex) =>
-                              itemIndex === index
-                                ? { ...currentItem, quantity: Math.max(1, Number(event.target.value) || 1) }
-                                : currentItem,
-                            ),
-                          )
-                        }
-                        className="w-16 rounded-xl border border-slate-200 px-2 py-1 text-center font-semibold text-slate-900 focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
-                      />
-                    )}
-                    <span className="min-w-0 flex-1 text-right font-semibold text-slate-900">
-                      {subscription
-                        ? `${item.quantity * (item.subscriptionUnits ?? 1)} unit${item.quantity * (item.subscriptionUnits ?? 1) === 1 ? '' : 's'}`
-                        : `₦${(item.quantity * item.unitPrice).toLocaleString()}`}
-                    </span>
-                    {!isReadOnly && (
-                      <button
-                        type="button"
-                        aria-label={`Remove ${item.category}`}
-                        onClick={() => setItems((currentItems) => currentItems.filter((_, itemIndex) => itemIndex !== index))}
-                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl text-slate-400 hover:bg-brand-soft hover:text-brand-primary"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </section>
@@ -473,18 +530,46 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
         )}
 
         <section className="mt-6 rounded-2xl border border-brand-border bg-brand-soft p-5 sm:p-6 shadow-sm">
-          <div className="flex items-start justify-between gap-4">
+          <div className="space-y-4">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-strong">
+              <p className="text-xs font-semibold capitalize tracking-[0.16em] text-brand-strong">
                 {isReadOnly ? 'Order total' : 'Order estimate'}
               </p>
               <p className="mt-2.5 text-sm text-slate-600">
-                {subscription
-                  ? `${order ? itemCount : weightedItemCount} weighted unit${(order ? itemCount : weightedItemCount) === 1 ? '' : 's'}`
-                  : `${itemCount} item${itemCount === 1 ? '' : 's'}`}{' '}
-                across {displayItems.length} item type{displayItems.length === 1 ? '' : 's'}
+                {subscription && !isReadOnly
+                  ? `${subscriptionBillingPreview?.coveredUnits ?? 0} units covered by your plan`
+                  : subscription
+                    ? `${itemCount} items across ${displayItems.length} item type${displayItems.length === 1 ? '' : 's'}`
+                    : `${itemCount} item${itemCount === 1 ? '' : 's'} across ${displayItems.length} item type${displayItems.length === 1 ? '' : 's'}`}
               </p>
             </div>
+            {subscription && !isReadOnly && subscriptionBillingPreview && (
+              <div className="space-y-2 border-t border-brand-border/70 pt-3 text-sm">
+                {subscriptionBillingPreview.subscriberAmount > 0 && (
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="min-w-0 text-slate-600">Extra laundry after your weekly plan limit</p>
+                    <p className="shrink-0 font-semibold text-brand-strong">
+                      + ₦{subscriptionBillingPreview.subscriberAmount.toLocaleString()}
+                    </p>
+                  </div>
+                )}
+                {subscriptionBillingPreview.regularAmount > 0 && (
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="min-w-0 text-slate-600">Laundry not covered by your plan</p>
+                    <p className="shrink-0 font-semibold text-brand-strong">
+                      + ₦{subscriptionBillingPreview.regularAmount.toLocaleString()}
+                    </p>
+                  </div>
+                )}
+                {subscriptionBillingPreview.subscriberAmount > 0 && subscriptionBillingPreview.regularAmount > 0 && (
+                  <div className="flex items-start justify-between gap-3 border-t border-brand-border/70 pt-2 font-bold text-brand-strong">
+                    <p>Estimated total</p>
+                    <p className="shrink-0">₦{subscriptionBillingPreview.totalAmount.toLocaleString()}</p>
+                  </div>
+                )}
+                {subscriptionBillingPreview.totalAmount === 0 && <p className="font-semibold text-brand-strong">No extra charge</p>}
+              </div>
+            )}
             {!subscription &&
               (isReadOnly ? (
                 <p className="text-right text-sm font-semibold text-brand-strong">

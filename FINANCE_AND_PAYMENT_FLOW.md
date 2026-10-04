@@ -40,7 +40,7 @@ Approved operational billing model as of 2026-09-14.
 - Subscription purchases store `payments.plan_id` and activate `subscriptions` only through the signed webhook; they do not credit either wallet balance.
 - Customer plans are loaded from active database rows and duplicate active subscriptions are blocked at both UI and server levels.
 - Customer wallet and subscription updates use Supabase Realtime, with bounded return-page refresh fallback for webhook timing.
-- Apply `20260915110000_customer_wallet_realtime.sql`, `20260915120000_subscription_payment_plan.sql`, `20260915130000_authoritative_order_item_pricing.sql`, `20260915140000_public_order_numbers.sql`, and `20261001120000_subscription_usage_applied_at.sql` before live testing.
+- Apply `20260915110000_customer_wallet_realtime.sql`, `20260915120000_subscription_payment_plan.sql`, `20260915130000_authoritative_order_item_pricing.sql`, `20260915140000_public_order_numbers.sql`, `20261001120000_subscription_usage_applied_at.sql`, `20261002100000_service_specific_subscription_pricing.sql`, `20261002110000_subscription_invoice_billing_breakdown.sql`, and `20261002120000_global_subscription_category_rates.sql` to the intended target before live testing.
 - Customer NewOrder now loads active categories, customer Wash/Iron/Wash + Iron rates, and subscription units from Supabase. Order creation recalculates prices from the database and does not charge the wallet.
 - Subscription orders remain unpaid at creation. Weekly subscription usage and coverage are evaluated from the vendor-confirmed final count, not the customer's original estimate.
 - Migration `20260915130000_authoritative_order_item_pricing.sql` overwrites client-supplied `order_items.unit_price` values from the selected customer rate in the database.
@@ -51,7 +51,7 @@ Approved operational billing model as of 2026-09-14.
 - Customer Transactions now combines Paystack payment rows and wallet ledger debits, with functional filters and real pending/success/failed statuses.
 - Customer Settings now saves profile name/phone, shows the live subscription end date and referral code, and renders recent payment rows from the payment store.
 - Customer OTP flow now selects the correct active order and does not expose OTPs for delivered orders.
-- Vendor confirmation now stores weighted final units for subscription orders, applies remaining weekly allowance first, and settles only excess from the general one-off wallet. If excess funds are insufficient, the invoice remains unpaid and the order is not released for delivery.
+- Vendor confirmation now stores weighted final units for subscription orders and applies allowance only to plan-covered service components. Over-limit covered components use the saved global category/service subscriber rate; uncovered services use saved regular customer rates. Charges remain one invoice payable from the one-off wallet; if the balance is insufficient, delivery remains blocked.
 - Next billing-related customer work: run live payment, invoice, order, and OTP smoke tests after applying the pending Supabase migrations.
 - Orders now have a globally unique database-generated `public_order_number` in `QO-######` format for user-facing references; UUID order IDs remain internal keys.
 
@@ -178,14 +178,16 @@ If the wallet balance is insufficient after vendor confirmation:
 
 ### 7. Subscription order handling
 
-- A subscription order is classified as a subscription order as a whole.
-- Subscription coverage is not allocated as separate payment decisions per item.
-- The system checks the customer's remaining subscription clothes/units for the week against the order's final confirmed count.
-- If the order is within the remaining allowance, the subscription covers the order.
-- If the order exceeds the remaining allowance, the subscription covers the available allowance and the excess is charged from the general wallet.
-- If the general wallet cannot cover the excess, the entire order remains unpaid and delivery is blocked.
+- An order placed during an active subscription keeps a reference to that subscription's saved coverage and weekly-limit snapshot.
+- Coverage is service-specific and applied to the vendor-confirmed final count. A Wash + Iron plan covers Wash, Iron, and Wash + Iron. For a Wash-only plan, the Wash component of a Wash + Iron line can use the plan while Iron is billed separately at its regular rate.
+- The weekly allowance is allocated deterministically to maximize covered weighted units. Only covered units consume the allowance.
+- Weekly covered-unit usage is tracked per customer across subscription changes and resets Sunday at 00:00 in `Africa/Lagos`; a new subscription midweek inherits units already applied that week.
+- Over-limit units for a service covered by the plan use the saved global subscriber rate for that category and service. Services outside the plan use their saved regular customer rate and do not receive the subscriber discount.
+- Regular and global subscriber rates are saved on order-item creation; plan coverage and weekly limit are snapshotted when the subscription starts. Admin plan edits apply to new subscriptions, while subscriber-rate edits apply to orders placed afterward, including orders from active subscribers.
+- Vendor payout amounts are not reduced by customer subscriber discounts.
+- If the wallet cannot cover the final invoice, the invoice remains unpaid and delivery is blocked.
 - The customer is prompted to top up the general wallet before the order can be paid and released for delivery.
-- The implementation must not partially release or deliver a subscription order while its excess amount remains unpaid.
+- The implementation must not partially release or deliver an order while any charge remains unpaid.
 
 ## Operational rules for admins
 
@@ -205,13 +207,15 @@ Admin is not a billing gatekeeper for quantity mismatches. Their role is to:
 2. Order is picked up and processed
 3. Vendor confirms final item count
 4. System creates mismatch record if count differs
-5. System generates final invoice from vendor-confirmed quantity
+5. System generates the final invoice from vendor-confirmed quantities, subscription coverage, and saved rates
 6. System applies extra charge line item for over-counts
 7. System attempts wallet deduction
 8. If enough balance exists, invoice is paid
 9. If balance is insufficient, invoice remains unpaid and marked pending payment
 
-For a subscription order with excess units, the same final invoice represents the order-level subscription coverage and the general-wallet excess. The order remains blocked until the excess is covered.
+For a subscription order, the invoice minimally distinguishes plan-covered units, subscriber-rate excess, and regular-rate uncovered services. The order remains blocked until the full invoice is paid.
+
+Migrations `20261002100000_service_specific_subscription_pricing.sql`, `20261002110000_subscription_invoice_billing_breakdown.sql`, and `20261002120000_global_subscription_category_rates.sql` are recorded as applied to the linked database. Read-only checks confirm the invoice breakdown column and global subscriber-rate columns exist, with no category missing a global rate. The linked environment identity and end-to-end subscription smoke tests still need confirmation before release.
 
 ## Vendor payout account verification
 

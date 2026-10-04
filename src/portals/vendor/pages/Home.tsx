@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowRight, Check, ChevronRight, Clock3, PackageCheck, Search } from 'lucide-react'
+import { AlertTriangle, ArrowRight, Check, ChevronRight, Clock3, PackageCheck, Search } from 'lucide-react'
 import { data, Link, useFetcher, useLocation, useNavigate, useOutletContext, useRevalidator } from 'react-router'
 import type { Route } from './+types/Home'
 import { sql } from '../../../lib/db.server'
@@ -116,7 +116,7 @@ export async function action({ request }: Route.ActionArgs) {
         },
       })
     }
-    return data({ ok: true, amount: result.amount }, { headers })
+    return data({ ok: true, amount: result.amount, invoiceStatus: result.invoiceStatus }, { headers })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Order review could not be submitted.'
     return data({ ok: false, message }, { status: 400, headers })
@@ -136,7 +136,6 @@ type VendorOrder = {
   location: string
   status: 'Pending' | 'Vendor processing' | 'Processing' | 'Out for delivery' | 'Completed' | 'Awaiting payment' | 'Cancelled'
   orderStatus: 'pending_pickup' | 'picked_up' | 'at_vendor' | 'invoiced' | 'paid' | 'out_for_delivery' | 'delivered' | 'cancelled'
-  clothesCountCustomer: number
   clothesCountVendor: number | null
   pickupOtp: string
   deliveryOtp: string
@@ -167,7 +166,6 @@ type VendorLoaderOrder = {
   public_order_number: string
   customer_id: string
   order_type: VendorOrder['orderType']
-  clothes_count_customer: number
   clothes_count_vendor: number | null
   status: VendorOrder['orderStatus']
   pickup_otp: string | null
@@ -225,7 +223,6 @@ function mapLoaderOrder(order: VendorLoaderOrder): VendorOrder {
     location: order.location?.name ?? 'Pickup location pending',
     status: statusMap[order.status],
     orderStatus: order.status,
-    clothesCountCustomer: order.clothes_count_customer,
     clothesCountVendor: order.clothes_count_vendor,
     pickupOtp: order.pickup_otp ?? '',
     deliveryOtp: order.delivery_otp ?? '',
@@ -295,7 +292,7 @@ const orderStatusLabels: Record<VendorOrder['orderStatus'], string> = {
 function Detail({ label, value }: { label: string; value: string | number | null }) {
   return (
     <div>
-      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}</p>
+      <p className="text-[10px] font-semibold capitalize tracking-[0.14em] text-slate-500">{label}</p>
       <p className="mt-1.5 break-words text-sm font-semibold text-slate-900">{value ?? 'Not recorded'}</p>
     </div>
   )
@@ -320,7 +317,7 @@ function OrderReviewDialog({
   saving,
 }: {
   order: VendorOrder
-  received: Record<string, number>
+  received: Record<string, number | undefined>
   receivedTotal: number
   hasMismatch: boolean
   notes: string
@@ -328,7 +325,7 @@ function OrderReviewDialog({
   categoryNames: string[]
   isPreClaim: boolean
   canEdit: boolean
-  onReceivedChange: (itemId: string, value: number) => void
+  onReceivedChange: (itemId: string, value: number | undefined) => void
   onNotesChange: (value: string) => void
   onAddedItemsChange: (items: Array<{ categoryName: string; service: 'wash' | 'iron' | 'wash_iron'; quantity: number }>) => void
   onClose: () => void
@@ -337,7 +334,7 @@ function OrderReviewDialog({
   saving: boolean
 }) {
   const [isConfirmationOpen, setIsConfirmationOpen] = useState(false)
-  const customerItemCount = order.items.reduce((total, item) => total + item.quantity, 0)
+  const allReceivedEntered = order.items.every((item) => received[item.id] !== undefined)
   const formattedDate = (value: string | null) => (value ? new Date(value).toLocaleString() : 'Not recorded')
 
   return (
@@ -346,7 +343,7 @@ function OrderReviewDialog({
       <div className="max-h-[calc(100vh-1rem)] w-full max-w-3xl overflow-y-auto rounded-t-3xl border border-slate-200 bg-white p-5 shadow-2xl sm:max-h-[calc(100vh-2rem)] sm:rounded-3xl sm:p-8">
         <header className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-primary">
+            <p className="text-xs font-semibold capitalize tracking-[0.16em] text-brand-primary">
               {isPreClaim ? 'Order details' : 'Order review'}
             </p>
             <h3 className="mt-2 text-2xl font-bold text-slate-900">{order.customer}</h3>
@@ -443,28 +440,62 @@ function OrderReviewDialog({
         )}
 
         <section className="mt-6 rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
-          <div className="flex items-center justify-between gap-3">
-            <div>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <PackageCheck className="h-4 w-4 text-brand-primary" />
                 <h4 className="font-bold text-slate-900">Items and service</h4>
               </div>
               <p className="mt-1 text-sm text-slate-500">
-                Customer declared {customerItemCount} {customerItemCount === 1 ? 'item' : 'items'}
-                {isPreClaim ? '' : `; vendor received ${receivedTotal} ${receivedTotal === 1 ? 'item' : 'items'}`}.
+                {isPreClaim
+                  ? 'Review the service details before claiming.'
+                  : allReceivedEntered
+                    ? `Vendor received ${receivedTotal} ${receivedTotal === 1 ? 'item' : 'items'}.`
+                    : 'Enter a received count for each item.'}
               </p>
             </div>
-            <span className="rounded-full bg-brand-soft px-2.5 py-1 text-xs font-semibold text-brand-primary">
-              {order.items.length} item types
+            <span className="shrink-0 whitespace-nowrap rounded-full bg-brand-soft px-2.5 py-1 text-xs font-semibold text-brand-primary">
+              <span className="sm:hidden">{order.items.length} {order.items.length === 1 ? 'type' : 'types'}</span>
+              <span className="hidden sm:inline">
+                {order.items.length} item {order.items.length === 1 ? 'type' : 'types'}
+              </span>
             </span>
           </div>
-          <div className="mt-4 overflow-x-auto">
+          <div className="mt-4 space-y-2 md:hidden">
+            {order.items.map((item) => (
+              <div key={item.id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-slate-800">{item.name}</p>
+                  <p className="mt-0.5 text-xs text-slate-500">{serviceLabels[item.service]}</p>
+                </div>
+                {!isPreClaim && (
+                  <label className="w-24 shrink-0 text-xs font-semibold text-slate-500">
+                    Received
+                    <input
+                      type="number"
+                      min="1"
+                      value={received[item.id] ?? ''}
+                      disabled={!canEdit}
+                      onChange={(event) =>
+                        onReceivedChange(
+                          item.id,
+                          event.target.value === '' ? undefined : Math.max(1, Number(event.target.value) || 1),
+                        )
+                      }
+                      className="mt-1 h-11 w-full rounded-lg border border-slate-200 bg-white px-2 text-center text-base font-semibold text-slate-900 outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus disabled:bg-slate-100 disabled:text-slate-500"
+                      aria-label={`Received ${item.name}`}
+                    />
+                  </label>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="mt-4 hidden overflow-x-auto md:block">
             <table className="w-full min-w-155 text-left">
               <thead>
-                <tr className="border-b border-slate-200 text-[10px] uppercase tracking-[0.14em] text-slate-500">
+                <tr className="border-b border-slate-200 text-[10px] capitalize tracking-[0.14em] text-slate-500">
                   <th className="pb-3 font-semibold">Category</th>
                   <th className="pb-3 font-semibold">Service</th>
-                  <th className="pb-3 font-semibold">Customer qty</th>
                   {!isPreClaim && <th className="pb-3 font-semibold">Received</th>}
                   <th className="pb-3 text-right font-semibold">Unit price</th>
                   <th className="pb-3 text-right font-semibold">Line total</th>
@@ -475,15 +506,19 @@ function OrderReviewDialog({
                   <tr key={item.id} className="border-b border-slate-100 last:border-0">
                     <td className="py-3 text-sm font-semibold text-slate-800">{item.name}</td>
                     <td className="py-3 text-sm text-slate-600">{serviceLabels[item.service]}</td>
-                    <td className="py-3 text-sm text-slate-600">{item.quantity}</td>
                     {!isPreClaim && (
                       <td className="py-3">
                         <input
                           type="number"
-                          min="0"
-                          value={received[item.id] ?? item.quantity}
+                          min="1"
+                          value={received[item.id] ?? ''}
                           disabled={!canEdit}
-                          onChange={(event) => onReceivedChange(item.id, Math.max(0, Number(event.target.value) || 0))}
+                          onChange={(event) =>
+                            onReceivedChange(
+                              item.id,
+                              event.target.value === '' ? undefined : Math.max(1, Number(event.target.value) || 1),
+                            )
+                          }
                           className="h-9 w-20 rounded-lg border border-slate-200 px-2 text-sm font-semibold outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus disabled:bg-slate-100 disabled:text-slate-500"
                           aria-label={`Received ${item.name}`}
                         />
@@ -499,8 +534,7 @@ function OrderReviewDialog({
             </table>
           </div>
           {!isPreClaim && (
-            <div className="mt-4 grid gap-3 sm:grid-cols-3">
-              <Detail label="Customer items" value={customerItemCount} />
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <Detail label="Received items" value={receivedTotal} />
               <Detail label="Item types" value={order.items.length + addedItems.length} />
             </div>
@@ -539,7 +573,7 @@ function OrderReviewDialog({
           <button
             type="button"
             onClick={isPreClaim ? onClaim : () => setIsConfirmationOpen(true)}
-            disabled={saving || (!isPreClaim && hasMismatch && !notes.trim())}
+            disabled={saving || (!isPreClaim && (!allReceivedEntered || (hasMismatch && !notes.trim())))}
             className="mt-6 w-full rounded-2xl bg-brand-primary px-4 py-3 font-semibold text-white shadow-sm transition hover:bg-brand-primary-hover hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
           >
             {saving ? (isPreClaim ? 'Claiming...' : 'Confirming count...') : isPreClaim ? 'Claim order' : 'Confirm final count'}
@@ -562,40 +596,55 @@ function OrderReviewDialog({
               aria-labelledby="confirm-vendor-count-title"
               aria-describedby="confirm-vendor-count-description"
               onMouseDown={(event) => event.stopPropagation()}
-              className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl sm:p-6"
+              className="w-full max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
             >
-              <h4 id="confirm-vendor-count-title" className="text-lg font-bold text-slate-900">
-                Are you sure you want to confirm this count?
-              </h4>
-              <p id="confirm-vendor-count-description" className="mt-2 text-sm text-slate-600">
-                Confirming finalizes the received quantities and updates the customer&apos;s invoice. You won&apos;t be able to edit this review afterward.
-              </p>
-              <div className="mt-4 grid grid-cols-2 gap-3 rounded-xl bg-slate-50 p-3">
-                <Detail label="Customer declared" value={customerItemCount} />
-                <Detail label="Vendor received" value={receivedTotal} />
-              </div>
-              {hasMismatch && (
-                <p className="mt-3 text-xs font-medium text-amber-700">
-                  The count difference and your note will be shared with the customer.
+              <div className="border-b border-slate-100 p-5 sm:p-6">
+                <div className="flex items-start gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
+                    <AlertTriangle className="h-5 w-5" aria-hidden="true" />
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold capitalize tracking-[0.12em] text-amber-700">Final confirmation</p>
+                    <h4 id="confirm-vendor-count-title" className="mt-1 text-lg font-bold leading-6 text-slate-900">
+                      Confirm final count?
+                    </h4>
+                  </div>
+                </div>
+                <p id="confirm-vendor-count-description" className="mt-4 text-sm leading-5 text-slate-600">
+                  This will finalize the received quantities and update the customer&apos;s invoice. You can&apos;t edit this review afterward.
                 </p>
-              )}
-              <div className="mt-5 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setIsConfirmationOpen(false)}
-                  disabled={saving}
-                  className="h-10 rounded-lg border border-slate-200 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Go back
-                </button>
-                <button
-                  type="button"
-                  onClick={onSave}
-                  disabled={saving || (hasMismatch && !notes.trim())}
-                  className="h-10 rounded-lg bg-brand-primary px-4 text-sm font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {saving ? 'Confirming...' : 'Yes, confirm count'}
-                </button>
+              </div>
+              <div className="space-y-3 p-5 sm:p-6">
+                <div className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-sm font-medium text-slate-600">Vendor received</p>
+                  <p className="shrink-0 text-right text-2xl font-bold text-slate-900">
+                    {receivedTotal} <span className="text-sm font-medium text-slate-500">{receivedTotal === 1 ? 'item' : 'items'}</span>
+                  </p>
+                </div>
+                {hasMismatch && (
+                  <div className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                    <p className="leading-5">The count difference and your note will be shared with the customer.</p>
+                  </div>
+                )}
+                <div className="flex flex-col gap-2 pt-1 sm:flex-row sm:justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setIsConfirmationOpen(false)}
+                    disabled={saving}
+                    className="h-11 w-full rounded-lg border border-slate-200 px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+                  >
+                    Go back
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onSave}
+                    disabled={saving || !allReceivedEntered || (hasMismatch && !notes.trim())}
+                    className="h-11 w-full rounded-lg bg-brand-primary px-4 text-sm font-semibold text-white transition hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+                  >
+                    {saving ? 'Confirming...' : 'Yes, confirm count'}
+                  </button>
+                </div>
               </div>
             </section>
           </div>
@@ -614,7 +663,7 @@ export default function Home() {
   const orders = loadedOrders.map(mapLoaderOrder)
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null)
   const [detailsDismissed, setDetailsDismissed] = useState(false)
-  const [received, setReceived] = useState<Record<string, Record<string, number>>>({})
+  const [received, setReceived] = useState<Record<string, Record<string, number | undefined>>>({})
   const [addedItems, setAddedItems] = useState<Array<{ categoryName: string; service: 'wash' | 'iron' | 'wash_iron'; quantity: number }>>(
     [],
   )
@@ -658,25 +707,26 @@ export default function Home() {
     startOfWeek.setDate(startOfWeek.getDate() - 6)
     return orderDate >= startOfWeek
   })
+  const attentionOrders = visibleOrders.filter((order) => ['picked_up', 'at_vendor'].includes(order.orderStatus))
 
   const metrics = [
     {
       label: 'Pending',
-      value: orders.filter((order) => order.orderStatus === 'picked_up').length,
+      value: visibleOrders.filter((order) => order.orderStatus === 'picked_up').length,
       helper: 'Available to claim',
       icon: Clock3,
       tone: 'bg-amber-50 text-amber-700',
     },
     {
       label: 'Active orders',
-      value: orders.filter((order) => ['at_vendor', 'invoiced', 'paid', 'out_for_delivery'].includes(order.orderStatus)).length,
+      value: visibleOrders.filter((order) => ['at_vendor', 'invoiced', 'paid', 'out_for_delivery'].includes(order.orderStatus)).length,
       helper: 'In progress or awaiting delivery',
       icon: PackageCheck,
       tone: 'bg-brand-soft text-brand-primary',
     },
     {
       label: 'Completed',
-      value: orders.filter((order) => order.orderStatus === 'delivered').length,
+      value: visibleOrders.filter((order) => order.orderStatus === 'delivered').length,
       helper: 'Completed orders',
       icon: Check,
       tone: 'bg-emerald-50 text-emerald-700',
@@ -691,14 +741,22 @@ export default function Home() {
     setDetailsDismissed(false)
     setSelectedOrderId(order.id)
     setAddedItems([])
-    setReceived({ [order.id]: Object.fromEntries(order.items.map((item) => [item.id, item.confirmedQuantity ?? item.quantity])) })
+    setReceived({
+      [order.id]: Object.fromEntries(
+        order.items.map((item) => [item.id, item.confirmedQuantity == null ? undefined : Math.max(1, item.confirmedQuantity)]),
+      ),
+    })
   }
 
   const receivedTotal = selectedOrder
-    ? Object.values(received[selectedOrder.id] ?? {}).reduce((total, count) => total + count, 0) +
+    ? Object.values(received[selectedOrder.id] ?? {}).reduce<number>((total, count) => total + (count ?? 0), 0) +
       addedItems.reduce((total, item) => total + item.quantity, 0)
     : 0
-  const mismatchItems = selectedOrder?.items.filter((item) => (received[selectedOrder.id]?.[item.id] ?? 0) !== item.quantity) ?? []
+  const mismatchItems =
+    selectedOrder?.items.filter((item) => {
+      const receivedCount = received[selectedOrder.id]?.[item.id]
+      return receivedCount !== undefined && receivedCount !== item.quantity
+    }) ?? []
   const hasMismatch = mismatchItems.length > 0 || addedItems.length > 0
 
   const closeOrderDetails = () => {
@@ -793,7 +851,7 @@ export default function Home() {
           </div>
         </div>
         <div className="space-y-3 p-4 md:hidden">
-          {visibleOrders.map((order) => (
+          {attentionOrders.map((order) => (
             <article key={order.id} className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
@@ -804,14 +862,10 @@ export default function Home() {
                   {order.status}
                 </span>
               </div>
-              <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 border-y border-slate-100 py-3 text-xs min-[520px]:grid-cols-4">
+              <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 border-y border-slate-100 py-3 text-xs min-[520px]:grid-cols-3">
                 <div>
                   <dt className="text-slate-400">Order type</dt>
                   <dd className="mt-0.5 truncate font-medium text-slate-700">{orderTypeLabels[order.orderType]}</dd>
-                </div>
-                <div>
-                  <dt className="text-slate-400">Items</dt>
-                  <dd className="mt-0.5 font-medium text-slate-700">{order.clothesCountCustomer}</dd>
                 </div>
                 <div className="col-span-2 min-[520px]:col-span-1">
                   <dt className="text-slate-400">Pickup location</dt>
@@ -834,7 +888,7 @@ export default function Home() {
               </div>
             </article>
           ))}
-          {visibleOrders.length === 0 && (
+          {attentionOrders.length === 0 && (
             <p className="py-8 text-center text-sm text-slate-500">
               {dateRange === 'Today' ? 'No orders today.' : 'No orders in this date range.'}
             </p>
@@ -843,20 +897,19 @@ export default function Home() {
         <div className="hidden overflow-x-auto p-4 md:block md:p-5">
           <table className="w-full min-w-[1240px] table-fixed text-left">
             <thead>
-              <tr className="border-b border-[#ededed] text-[10px] uppercase tracking-[0.16em] text-slate-400">
+              <tr className="border-b border-[#ededed] text-[10px] capitalize tracking-[0.16em] text-slate-400">
                 <th className="w-40 px-4 py-3 font-semibold">Picked up date</th>
                 <th className="w-40 px-4 py-3 font-semibold">Created at</th>
                 <th className="w-36 px-4 py-3 font-semibold">Order type</th>
                 <th className="w-56 px-4 py-3 font-semibold">Customer</th>
                 <th className="w-40 px-4 py-3 font-semibold">Customer ID</th>
                 <th className="w-40 px-4 py-3 font-semibold">Pickup location</th>
-                <th className="w-24 px-4 py-3 font-semibold">Items</th>
                 <th className="w-40 px-4 py-3 font-semibold">Status</th>
                 <th className="w-32 px-4 py-3 text-right font-semibold">Action</th>
               </tr>
             </thead>
             <tbody>
-              {visibleOrders.map((order) => (
+              {attentionOrders.map((order) => (
                 <tr key={order.id} className="border-b border-[#f0f0f0] last:border-0">
                   <td className="max-w-40 truncate whitespace-nowrap px-4 py-4 text-sm text-slate-500" title={order.collectedAt}>
                     {order.collectedAt}
@@ -884,7 +937,6 @@ export default function Home() {
                   <td className="max-w-40 truncate whitespace-nowrap px-4 py-4 text-sm text-slate-600" title={order.location}>
                     {order.location}
                   </td>
-                  <td className="whitespace-nowrap px-4 py-4 text-sm text-slate-600">{order.clothesCountCustomer}</td>
                   <td className="px-4 py-4">
                     <span
                       className={`inline-flex whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${statusStyles[order.status]}`}
@@ -906,7 +958,7 @@ export default function Home() {
               ))}
             </tbody>
           </table>
-          {visibleOrders.length === 0 && (
+          {attentionOrders.length === 0 && (
             <p className="py-8 text-center text-sm text-slate-500">
               {dateRange === 'Today' ? 'No orders today.' : 'No orders in this date range.'}
             </p>

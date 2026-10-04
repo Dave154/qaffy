@@ -92,7 +92,28 @@ export interface ClothCategoryRate {
   vendor_wash_price: number
   vendor_iron_price: number
   vendor_wash_iron_price: number
+  subscriber_wash_price: number
+  subscriber_iron_price: number
+  subscriber_wash_iron_price: number
   subscription_units: number
+  created_at: string
+}
+
+export interface PlanCategoryRate {
+  plan_id: string
+  category_id: string
+  subscriber_wash_price: number
+  subscriber_iron_price: number
+  subscriber_wash_iron_price: number
+  created_at: string
+}
+
+export interface SubscriptionCategoryRateSnapshot {
+  subscription_id: string
+  category_id: string
+  subscriber_wash_price: number
+  subscriber_iron_price: number
+  subscriber_wash_iron_price: number
   created_at: string
 }
 
@@ -129,6 +150,8 @@ export interface Plan {
   type: PlanType
   weekly_limit: number
   price: number
+  covers_wash: boolean
+  covers_iron: boolean
   semester_start_date: string | null
   semester_end_date: string | null
   active: boolean
@@ -142,6 +165,9 @@ export interface Subscription {
   status: SubscriptionStatus
   start_date: string
   end_date: string | null
+  weekly_limit_snapshot: number
+  covers_wash_snapshot: boolean
+  covers_iron_snapshot: boolean
   created_at: string
 }
 
@@ -171,6 +197,7 @@ export interface Order {
   public_order_number: string
   customer_id: string
   vendor_id: string | null
+  subscription_id: string | null
   order_type: OrderType
   clothes_count_customer: number
   clothes_count_customer_units: number | null
@@ -198,6 +225,13 @@ export interface OrderItem {
   confirmed_quantity: number | null
   service: 'wash' | 'iron' | 'wash_iron'
   unit_price: number
+  subscription_units_snapshot: number | null
+  regular_wash_price_snapshot: number | null
+  regular_iron_price_snapshot: number | null
+  regular_wash_iron_price_snapshot: number | null
+  subscriber_wash_price_snapshot: number | null
+  subscriber_iron_price_snapshot: number | null
+  subscriber_wash_iron_price_snapshot: number | null
 }
 
 export interface Mismatch {
@@ -222,6 +256,7 @@ export interface Invoice {
   order_id: string
   amount: number
   status: InvoiceStatus
+  billing_breakdown: { coveredUnits: number; subscriberAmount: number; regularAmount: number } | null
   paid_at: string | null
   created_at: string
 }
@@ -385,9 +420,11 @@ export interface Database {
       profile_roles: TableDef<ProfileRole>
       cloth_categories: TableDef<ClothCategory>
       cloth_category_rates: TableDef<ClothCategoryRate>
+      plan_category_rates: TableDef<PlanCategoryRate>
       pickup_locations: TableDef<PickupLocation>
       plans: TableDef<Plan>
       subscriptions: TableDef<Subscription>
+      subscription_category_rate_snapshots: TableDef<SubscriptionCategoryRateSnapshot>
       wallets: TableDef<Wallet>
       wallet_transactions: TableDef<WalletTransaction>
       orders: TableDef<Order>
