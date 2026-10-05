@@ -477,7 +477,7 @@ Before updating UI components, verify:
 
 #### Admin UX and reporting continuation update (2026-09-22)
 
-- Admin mobile navigation is implemented in `src/portals/admin/AdminLayout.tsx`. The mobile drawer includes Overview, Partners, Orders, Mismatches, Finance, Users, Plans, Referrals, Settings subroutes, and logout. The desktop sidebar remains separate, and mobile content no longer reserves sidebar width.
+- Admin mobile navigation is implemented in `src/portals/admin/AdminLayout.tsx`. The mobile drawer includes Overview, Partners, Orders, Mismatches, Finance, Users, Plans, Reward, Settings subroutes, and logout. The desktop sidebar remains separate, and mobile content no longer reserves sidebar width.
 - Admin Overview date filters now include Today, This week, Last week, This month, Last month, Custom, and All time. Today uses hourly chart buckets through the current hour; all other ranges continue using daily chart buckets.
 - Admin Overview charts now expose exact values through trend-point hover/focus/tap tooltips and workload, revenue, and plan subscriber bar tooltips.
 - The customer notification center is registered at `/notifications` and backed by `notification_events`. Migration `supabase/migrations/20260922100000_notification_center.sql` adds `read_at`, customer-scoped update RLS, Realtime publication, and `ON DELETE SET NULL` notification references. Apply it before relying on unread state or live notifications.
