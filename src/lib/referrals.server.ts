@@ -23,16 +23,18 @@ export function getReferralCodeFromRequest(request: Request) {
  * Attributes a referral only for a newly-created customer profile.
  * The direct database transaction is intentional: referral attribution is not a client write.
  */
-async function notifyReferrerOfNewReferral(referrerId: string, referredProfileId: string, referralId: string) {
-  const [campaign] = await sql`
-    select c.name as campaign_name, c.referrer_reward_value
-    from public.referral_campaigns c
-    where c.status = 'active'
-      and (c.starts_at is null or c.starts_at <= now())
-      and (c.ends_at is null or c.ends_at > now())
-    order by c.starts_at desc nulls last, c.created_at desc
-    limit 1
-  `
+type ReferralCampaignSnapshot = {
+  referrerRewardValue: number
+  referredRewardValue: number
+  minimumOrderAmount: number
+} | null
+
+async function notifyReferralParticipants(
+  referrerId: string,
+  referredProfileId: string,
+  referralId: string,
+  campaign: ReferralCampaignSnapshot,
+) {
   const [referredProfile] = await sql`
     select name
     from public.profiles
@@ -40,26 +42,56 @@ async function notifyReferrerOfNewReferral(referrerId: string, referredProfileId
     limit 1
   `
 
-  const rewardAmount = campaign ? Number(campaign.referrer_reward_value) : null
+  const rewardAmount = campaign?.referrerRewardValue ?? null
+  const referredRewardAmount = campaign?.referredRewardValue ?? null
+  const minimumOrderAmount = campaign?.minimumOrderAmount ?? null
   const referredName = referredProfile?.name ?? 'a new customer'
-  const rewardText = rewardAmount !== null ? ` Your pending reward is ₦${rewardAmount.toLocaleString()}.` : ''
+  const rewardText = rewardAmount !== null
+    ? ` Your pending reward is ₦${rewardAmount.toLocaleString()}.`
+    : ' No bonus campaign was active when they signed up.'
 
-  await sendCustomerNotification({
-    eventKey: `referral-signup:${referralId}`,
-    customerId: referrerId,
-    notificationType: 'referral_signup',
-    payload: {
-      title: 'New referral joined',
-      body: `${referredName} signed up using your referral link.${rewardText} The reward stays pending until they complete the qualifying action.`,
-      details: [
-        'Referral recorded successfully.',
-        rewardAmount !== null ? `Pending reward: ₦${rewardAmount.toLocaleString()}` : 'Reward timing is based on the campaign rules.',
-        'This reward is only added after the qualifying action is completed.',
-      ],
-      url: '/settings#referrals',
-      tag: `referral:${referralId}`,
-    },
-  })
+  await Promise.all([
+    sendCustomerNotification({
+      eventKey: `referral-signup:${referralId}`,
+      customerId: referrerId,
+      notificationType: 'referral_signup',
+      payload: {
+        title: 'New referral joined',
+        body: `${referredName} signed up using your referral link.${rewardText} The reward stays pending until they complete the qualifying action.`,
+        details: [
+          'Referral recorded successfully.',
+          rewardAmount !== null ? `Pending reward: ₦${rewardAmount.toLocaleString()}` : 'Reward timing is based on the campaign rules.',
+          'This reward is only added after the qualifying action is completed.',
+        ],
+        url: '/settings#referrals',
+        tag: `referral:${referralId}`,
+      },
+    }),
+    sendCustomerNotification({
+      eventKey: `referral-signup-referred:${referralId}`,
+      customerId: referredProfileId,
+      notificationType: 'referral_signup',
+      payload: {
+        title: 'Your referral bonus is on its way',
+        body: referredRewardAmount !== null && minimumOrderAmount !== null
+          ? minimumOrderAmount > 0
+            ? `Your referral bonus of ₦${referredRewardAmount.toLocaleString()} is pending. Earn it when you pay for a qualifying order of at least ₦${minimumOrderAmount.toLocaleString()}.`
+            : `Your referral bonus of ₦${referredRewardAmount.toLocaleString()} is pending after any paid order.`
+          : 'Your referral was recorded, but no bonus campaign was active when you signed up.',
+        details: [
+          'Your account was successfully linked to a referral.',
+          referredRewardAmount !== null && minimumOrderAmount !== null
+            ? minimumOrderAmount > 0
+              ? `Referral bonus: ₦${referredRewardAmount.toLocaleString()} after a paid order of at least ₦${minimumOrderAmount.toLocaleString()}.`
+              : `Referral bonus: ₦${referredRewardAmount.toLocaleString()} after any paid order.`
+            : 'No reward terms were attached to this referral at signup.',
+          ...(referredRewardAmount !== null ? ['We will notify you again when the bonus is credited to your promotional balance.'] : []),
+        ],
+        url: '/settings#referrals',
+        tag: `referral:${referralId}:referred`,
+      },
+    }),
+  ])
 }
 
 export async function attributeReferral(profileId: string, referralCode: string) {
@@ -88,6 +120,23 @@ export async function attributeReferral(profileId: string, referralCode: string)
     `
     if (!referrer) return null
 
+    const [campaign] = await tx`
+      select
+        id,
+        referrer_reward_value,
+        referred_reward_value,
+        minimum_order_amount,
+        reward_expiry_days,
+        max_rewards_per_referrer
+      from public.referral_campaigns
+      where status = 'active'
+        and (starts_at is null or starts_at <= now())
+        and (ends_at is null or ends_at > now())
+      order by starts_at desc nulls last, created_at desc
+      limit 1
+      for share
+    `
+
     const [updatedProfile] = await tx`
       update public.profiles
       set referred_by = ${referrer.id}
@@ -97,18 +146,56 @@ export async function attributeReferral(profileId: string, referralCode: string)
     if (!updatedProfile) return null
 
     const [referral] = await tx`
-      insert into public.referrals (referrer_id, referred_id, status, attributed_at)
-      values (${referrer.id}, ${profileId}, 'pending', now())
+      insert into public.referrals (
+        referrer_id,
+        referred_id,
+        campaign_id,
+        reward_type,
+        reward_value,
+        referrer_reward_value_snapshot,
+        referred_reward_value_snapshot,
+        minimum_order_amount_snapshot,
+        reward_expiry_days_snapshot,
+        max_rewards_per_referrer_snapshot,
+        status,
+        rejection_reason,
+        attributed_at
+      )
+      values (
+        ${referrer.id},
+        ${profileId},
+        ${campaign?.id ?? null},
+        ${campaign ? 'wallet_credit' : null},
+        ${campaign ? campaign.referrer_reward_value : null},
+        ${campaign?.referrer_reward_value ?? null},
+        ${campaign?.referred_reward_value ?? null},
+        ${campaign?.minimum_order_amount ?? null},
+        ${campaign?.reward_expiry_days ?? null},
+        ${campaign?.max_rewards_per_referrer ?? null},
+        ${campaign ? 'pending' : 'rejected'},
+        ${campaign ? null : 'No active referral campaign at attribution time'},
+        now()
+      )
       on conflict (referred_id) do nothing
-      returning id, referrer_id
+      returning id, referrer_id, campaign_id, referrer_reward_value_snapshot, referred_reward_value_snapshot, minimum_order_amount_snapshot
     `
     if (!referral) return null
 
-    return { referrerId: referral.referrer_id, referralId: referral.id }
+    return {
+      referrerId: referral.referrer_id,
+      referralId: referral.id,
+      campaign: referral.campaign_id
+        ? {
+            referrerRewardValue: Number(referral.referrer_reward_value_snapshot),
+            referredRewardValue: Number(referral.referred_reward_value_snapshot),
+            minimumOrderAmount: Number(referral.minimum_order_amount_snapshot),
+          }
+        : null,
+    }
   })
 
   if (!attribution) return false
 
-  await notifyReferrerOfNewReferral(attribution.referrerId, profileId, attribution.referralId)
+  await notifyReferralParticipants(attribution.referrerId, profileId, attribution.referralId, attribution.campaign)
   return true
 }

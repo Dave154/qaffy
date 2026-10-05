@@ -111,6 +111,20 @@ export async function action({ request }: { request: Request }) {
         tag: `payment:${reference}`,
       },
     })
+    if (result.cashbackAmount > 0) {
+      await sendCustomerNotification({
+        eventKey: `payment:${reference}:cashback`,
+        customerId: payment.customer_id,
+        notificationType: 'cashback_earned',
+        payload: {
+          title: 'Cashback credited',
+          body: `You earned ₦${Number(result.cashbackAmount).toLocaleString()} cashback on this top-up.`,
+          details: [`Top-up: ₦${Number(payment.amount).toLocaleString()}`, `Cashback earned: ₦${Number(result.cashbackAmount).toLocaleString()}`],
+          url: '/transactions',
+          tag: `payment:${reference}:cashback`,
+        },
+      })
+    }
     for (const invoice of result.settledInvoices) {
       await sendCustomerNotification({
         eventKey: `invoice:${invoice.invoiceId}:paid`,

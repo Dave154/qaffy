@@ -51,7 +51,7 @@ export default [
       route('pickup-locations', 'portals/admin/pages/PickupLocations.tsx'),
       route('mismatches', 'portals/admin/pages/Mismatches.tsx'),
       route('plans', 'portals/admin/pages/Plans.tsx'),
-      route('referrals', 'portals/admin/pages/Referrals.tsx'),
+      route('reward', 'portals/admin/pages/Referrals.tsx'),
       route('admins', 'portals/admin/pages/Admins.tsx'),
       route('partners', 'portals/admin/pages/Partners.tsx'),
       route('partners/:type/:id', 'portals/admin/pages/PartnerDetails.tsx'),

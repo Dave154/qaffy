@@ -66,6 +66,20 @@ export async function loader({ request }: Route.LoaderArgs) {
     throw redirect('/login', { headers })
   }
 
+  const campaignCheckTime = new Date().toISOString()
+  const { data: activeReferralCampaign, error: referralCampaignError } = await serverSupabase
+    .from('referral_campaigns')
+    .select('referrer_reward_value, referred_reward_value, minimum_order_amount')
+    .eq('status', 'active')
+    .or(`starts_at.is.null,starts_at.lte.${campaignCheckTime}`)
+    .or(`ends_at.is.null,ends_at.gt.${campaignCheckTime}`)
+    .order('starts_at', { ascending: false, nullsFirst: false })
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (referralCampaignError) throw new Error(`Referral campaign details could not be loaded: ${referralCampaignError.message}`)
+
   const { count: unreadNotificationCount } = await serverSupabase
     .from('notification_events')
     .select('id', { count: 'exact', head: true })
@@ -246,6 +260,13 @@ export async function loader({ request }: Route.LoaderArgs) {
       subscription,
       subscriptionPlan: subscriptionPlanSnapshot,
       persistedReferrals,
+      referralCampaignBenefit: activeReferralCampaign
+        ? {
+            referrerRewardValue: Number(activeReferralCampaign.referrer_reward_value),
+            referredRewardValue: Number(activeReferralCampaign.referred_reward_value),
+            minimumOrderAmount: Number(activeReferralCampaign.minimum_order_amount),
+          }
+        : null,
     },
     { headers },
   )
@@ -417,6 +438,7 @@ export default function CustomerLayout() {
       persistedWalletTransactions={loaderData?.walletTransactions as WalletTransaction[] | undefined}
       persistedPayments={loaderData?.payments as Payment[] | undefined}
       persistedReferrals={loaderData?.persistedReferrals as CustomerReferral[] | undefined}
+      referralCampaignBenefit={loaderData?.referralCampaignBenefit}
       persistedTransactionError={loaderData?.transactionError as string | null | undefined}
       persistedInvoices={
         loaderData?.invoices as

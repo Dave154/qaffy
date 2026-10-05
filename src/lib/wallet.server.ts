@@ -17,6 +17,17 @@ function generateFourDigitOtp() {
   return String(1000 + Math.floor(Math.random() * 9000))
 }
 
+async function getCashbackPercentForTransaction(tx: TransactionSql) {
+  const [settings] = await tx`
+    select cashback_percent
+    from app_settings
+    where key = 'cashback'
+    limit 1
+  `
+  const percent = Number(settings?.cashback_percent ?? 0)
+  return Number.isFinite(percent) ? Math.min(Math.max(percent, 0), 100) : 0
+}
+
 type SubscriptionAllocationItem = { id: string; quantity: number; units: number; unitPrice: number }
 
 function allocateSubscriptionCoverage(items: SubscriptionAllocationItem[], allowance: number) {
@@ -167,36 +178,49 @@ async function issueReferralRewards(
   invoiceAmount: number,
 ): Promise<ReferralRewardRecipient[]> {
   const [referral] = await tx`
-    select r.id, r.referrer_id
+    select
+      r.id,
+      r.referrer_id,
+      r.campaign_id,
+      r.referrer_reward_value_snapshot,
+      r.referred_reward_value_snapshot,
+      r.minimum_order_amount_snapshot,
+      r.reward_expiry_days_snapshot,
+      r.max_rewards_per_referrer_snapshot
     from referrals r
-    where r.referred_id = ${customerId} and r.status = 'pending'
+    where r.referred_id = ${customerId}
+      and r.status = 'pending'
+      and r.campaign_id is not null
+      and r.referrer_reward_value_snapshot is not null
+      and r.referred_reward_value_snapshot is not null
+      and r.minimum_order_amount_snapshot is not null
+      and r.reward_expiry_days_snapshot is not null
     order by r.created_at asc
     limit 1
     for update
   `
   if (!referral) return []
 
-  const [campaign] = await tx`
-    select *
-    from referral_campaigns
-    where status = 'active'
-      and (starts_at is null or starts_at <= now())
-      and (ends_at is null or ends_at > now())
-    order by starts_at desc nulls last, created_at desc
-    limit 1
-  `
-  if (!campaign || invoiceAmount < Number(campaign.minimum_order_amount)) return []
+  if (invoiceAmount < Number(referral.minimum_order_amount_snapshot)) return []
 
-  if (campaign.max_rewards_per_referrer !== null) {
+  await tx`
+    select id
+    from profiles
+    where id = ${referral.referrer_id}
+    for update
+  `
+
+  if (referral.max_rewards_per_referrer_snapshot !== null) {
     const [rewardCount] = await tx`
       select count(*)::int as count
       from referral_rewards rr
-      join referrals referred_referral on referred_referral.id = rr.referral_id
-      where referred_referral.referrer_id = ${referral.referrer_id}
+      join referrals campaign_referral on campaign_referral.id = rr.referral_id
+      where campaign_referral.referrer_id = ${referral.referrer_id}
+        and campaign_referral.campaign_id = ${referral.campaign_id}
         and rr.recipient_id = ${referral.referrer_id}
         and rr.status in ('pending', 'issued')
     `
-    if (Number(rewardCount?.count ?? 0) >= Number(campaign.max_rewards_per_referrer)) {
+    if (Number(rewardCount?.count ?? 0) >= Number(referral.max_rewards_per_referrer_snapshot)) {
       await tx`
         update referrals
         set status = 'rejected', rejection_reason = 'Referrer reward limit reached', updated_at = now()
@@ -208,15 +232,15 @@ async function issueReferralRewards(
 
   await tx`
     update referrals
-    set campaign_id = ${campaign.id}, status = 'qualified', qualified_at = now(), qualifying_order_id = ${orderId}, updated_at = now()
+    set status = 'qualified', qualified_at = now(), qualifying_order_id = ${orderId}, updated_at = now()
     where id = ${referral.id}
   `
 
   const recipients = [
-    { profileId: referral.referrer_id, amount: Number(campaign.referrer_reward_value) },
-    { profileId: customerId, amount: Number(campaign.referred_reward_value) },
+    { profileId: referral.referrer_id, amount: Number(referral.referrer_reward_value_snapshot) },
+    { profileId: customerId, amount: Number(referral.referred_reward_value_snapshot) },
   ].sort((left, right) => left.profileId.localeCompare(right.profileId))
-  const expiresAt = new Date(Date.now() + Number(campaign.reward_expiry_days) * 24 * 60 * 60 * 1000).toISOString()
+  const expiresAt = new Date(Date.now() + Number(referral.reward_expiry_days_snapshot) * 24 * 60 * 60 * 1000).toISOString()
 
   const rewardedRecipients: ReferralRewardRecipient[] = []
   for (const recipient of recipients) {
@@ -225,7 +249,7 @@ async function issueReferralRewards(
     const promotionalBalance = Number(wallet?.promotional_balance ?? 0) + recipient.amount
     const [reward] = await tx`
       insert into referral_rewards (referral_id, recipient_id, campaign_id, qualifying_order_id, reward_type, reward_value, remaining_value, expires_at)
-      values (${referral.id}, ${recipient.profileId}, ${campaign.id}, ${orderId}, 'wallet_credit', ${recipient.amount}, ${recipient.amount}, ${expiresAt})
+      values (${referral.id}, ${recipient.profileId}, ${referral.campaign_id}, ${orderId}, 'wallet_credit', ${recipient.amount}, ${recipient.amount}, ${expiresAt})
       on conflict (referral_id, recipient_id, reward_type) do nothing
       returning id
     `
@@ -659,6 +683,7 @@ export async function creditWallet(customerId: string, balanceType: WalletBalanc
       const [wallet] = await tx`select one_off_balance, subscription_balance from wallets where customer_id = ${customerId}`
       return {
         newBalance: balanceType === 'subscription' ? Number(wallet.subscription_balance) : Number(wallet.one_off_balance),
+        cashbackAmount: 0,
         alreadyCredited: true,
         settledInvoices: [],
       }
@@ -668,8 +693,10 @@ export async function creditWallet(customerId: string, balanceType: WalletBalanc
     const subscriptionDebt = Math.max(0, -Number(wallet.subscription_balance))
     const subscriptionCredit = balanceType === 'subscription' ? amount : Math.min(amount, subscriptionDebt)
     const oneOffCredit = balanceType === 'one_off' ? amount - subscriptionCredit : 0
+    const cashbackPercent = balanceType === 'one_off' ? await getCashbackPercentForTransaction(tx) : 0
+    const cashbackAmount = cashbackPercent > 0 ? Math.round(((oneOffCredit * cashbackPercent) / 100) * 100) / 100 : 0
     const subscriptionBalance = Number(wallet.subscription_balance) + subscriptionCredit
-    const oneOffBalance = Number(wallet.one_off_balance) + oneOffCredit
+    const oneOffBalance = Number(wallet.one_off_balance) + oneOffCredit + cashbackAmount
 
     await tx`
       update wallets
@@ -692,6 +719,12 @@ export async function creditWallet(customerId: string, balanceType: WalletBalanc
       await tx`
         insert into wallet_transactions (customer_id, balance_type, txn_type, amount, balance_after, related_payment_id)
         values (${customerId}, 'one_off', 'topup', ${oneOffCredit}, ${oneOffBalance}, ${payment?.id ?? null})
+      `
+    }
+    if (cashbackAmount > 0) {
+      await tx`
+        insert into wallet_transactions (customer_id, balance_type, txn_type, amount, balance_after, related_payment_id)
+        values (${customerId}, 'one_off', 'cashback', ${cashbackAmount}, ${oneOffBalance}, ${payment?.id ?? null})
       `
     }
 
@@ -737,6 +770,7 @@ export async function creditWallet(customerId: string, balanceType: WalletBalanc
 
     return {
       newBalance: balanceType === 'subscription' ? subscriptionBalance : settledBalance,
+      cashbackAmount,
       settledInvoices,
       alreadyCredited: false,
       referralRewardRecipients,

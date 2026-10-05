@@ -53,6 +53,7 @@ export type CustomerTransaction = {
   title: string
   reference: string
   date: string
+  sortDate: string
   amount: string
   direction: 'credit' | 'debit'
   category: 'topup' | 'payment' | 'reward'
@@ -68,6 +69,12 @@ export type CustomerReferral = {
   rewardStatus: string | null
   rewardValue: number | null
   rewardExpiresAt: string | null
+}
+
+export type ReferralCampaignBenefit = {
+  referrerRewardValue: number
+  referredRewardValue: number
+  minimumOrderAmount: number
 }
 
 export type CustomerInvoice = {
@@ -119,6 +126,7 @@ export type CustomerStore = {
   customerPhone: string
   referralCode: string | null
   referrals: CustomerReferral[]
+  referralCampaignBenefit: ReferralCampaignBenefit | null
   oneOffBalance: number
   subscriptionBalance: number
   promotionalBalance: number
@@ -162,23 +170,27 @@ function createOtp(_prefix: string, number: number) {
 }
 
 function mapDatabaseTransaction(transaction: WalletTransaction): CustomerTransaction | null {
-  const isCredit = transaction.txn_type === 'topup'
-  const isReferralReward = transaction.txn_type === 'referral_reward'
-  if (isCredit) return null
-  const amount = `${isReferralReward ? '+' : '-'}₦${Number(transaction.amount).toLocaleString()}`
+  if (transaction.txn_type === 'topup') return null
+
+  const isCredit = ['cashback', 'referral_reward'].includes(transaction.txn_type)
+  const isReward = transaction.txn_type === 'cashback' || transaction.txn_type === 'referral_reward'
+  const amount = `${isCredit ? '+' : '-'}₦${Number(transaction.amount).toLocaleString()}`
 
   return {
     id: transaction.id,
-    title: isReferralReward ? 'Referral reward' : 'Order payment',
+    title: transaction.txn_type === 'cashback' ? 'Cashback earned' : isReward ? 'Referral reward' : 'Order payment',
     reference: transaction.related_referral_reward_id
       ? `Referral • ${transaction.related_referral_reward_id.slice(0, 8)}`
       : transaction.related_invoice_id
         ? `Invoice • ${transaction.related_invoice_id.slice(0, 8)}`
-        : `Wallet • ${transaction.id.slice(0, 8)}`,
+        : transaction.txn_type === 'cashback'
+          ? `Cashback • ${transaction.id.slice(0, 8)}`
+          : `Wallet • ${transaction.id.slice(0, 8)}`,
     date: new Date(transaction.created_at).toLocaleString(),
+    sortDate: transaction.created_at,
     amount,
-    direction: isReferralReward ? 'credit' : 'debit',
-    category: isReferralReward ? 'reward' : 'payment',
+    direction: isCredit ? 'credit' : 'debit',
+    category: isReward ? 'reward' : 'payment',
     status: 'Successful',
   }
 }
@@ -189,6 +201,7 @@ function mapPayment(payment: Payment): CustomerTransaction {
     title: payment.plan_id ? 'Subscription payment' : 'Wallet top up',
     reference: payment.reference,
     date: new Date(payment.created_at).toLocaleString(),
+    sortDate: payment.created_at,
     amount: `+₦${Number(payment.amount).toLocaleString()}`,
     direction: 'credit',
     category: 'topup',
@@ -349,6 +362,7 @@ type CustomerStoreProviderProps = {
     pickup_location_id: string | null
   }
   persistedReferrals?: CustomerReferral[]
+  referralCampaignBenefit?: ReferralCampaignBenefit | null
   persistedOrders?: Order[]
   persistedWallet?: Wallet | null
   persistedWalletTransactions?: WalletTransaction[]
@@ -384,6 +398,7 @@ export function CustomerStoreProvider({
   children,
   profile,
   persistedReferrals = [],
+  referralCampaignBenefit = null,
   persistedOrders,
   persistedWallet,
   persistedWalletTransactions,
@@ -423,7 +438,7 @@ export function CustomerStoreProvider({
       ...(persistedWalletTransactions ?? [])
         .map(mapDatabaseTransaction)
         .filter((transaction): transaction is CustomerTransaction => transaction !== null),
-    ].sort((left, right) => new Date(right.date).getTime() - new Date(left.date).getTime()),
+    ].sort((left, right) => new Date(right.sortDate).getTime() - new Date(left.sortDate).getTime()),
   )
   const [invoices] = useState(() => (persistedInvoices ?? []).map(mapDatabaseInvoice))
   const invoice = invoices[0] ?? null
@@ -442,6 +457,7 @@ export function CustomerStoreProvider({
       customerPhone: profile?.phone ?? '',
       referralCode: profile?.referral_code ?? null,
       referrals: persistedReferrals,
+      referralCampaignBenefit,
       oneOffBalance,
       subscriptionBalance,
       promotionalBalance,
@@ -648,6 +664,7 @@ export function CustomerStoreProvider({
     oneOffBalance,
     orders,
     persistedReferrals,
+    referralCampaignBenefit,
     persistedTransactionError,
     profile,
     persistedPickupLocations,
