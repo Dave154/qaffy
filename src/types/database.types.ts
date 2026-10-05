@@ -340,6 +340,11 @@ export interface Referral {
   campaign_id: string | null
   reward_type: string | null
   reward_value: number | null
+  referrer_reward_value_snapshot: number | null
+  referred_reward_value_snapshot: number | null
+  minimum_order_amount_snapshot: number | null
+  reward_expiry_days_snapshot: number | null
+  max_rewards_per_referrer_snapshot: number | null
   status: ReferralStatus
   attributed_at: string
   qualified_at: string | null

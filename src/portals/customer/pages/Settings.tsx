@@ -44,6 +44,7 @@ export default function Settings() {
     customerPhone,
     customerId,
     referralCode,
+    referralCampaignBenefit,
     referrals,
     subscription,
     subscriptionEndDate,
@@ -251,6 +252,18 @@ export default function Settings() {
               <span>Referral code</span>
               <span>{referralCode ?? 'Not assigned'}</span>
             </div>
+            <p
+              className="truncate px-1 text-xs text-slate-500"
+              title={
+                referralCampaignBenefit
+                  ? `Your friend gets ₦${referralCampaignBenefit.referredRewardValue.toLocaleString()}; you get ₦${referralCampaignBenefit.referrerRewardValue.toLocaleString()} after ${referralCampaignBenefit.minimumOrderAmount > 0 ? `they pay a qualifying order of at least ₦${referralCampaignBenefit.minimumOrderAmount.toLocaleString()}` : 'any paid order'}.`
+                  : 'There is no active referral bonus campaign right now.'
+              }
+            >
+              {referralCampaignBenefit
+                ? `Friend gets ₦${referralCampaignBenefit.referredRewardValue.toLocaleString()}; you get ₦${referralCampaignBenefit.referrerRewardValue.toLocaleString()} after ${referralCampaignBenefit.minimumOrderAmount > 0 ? `a paid order of ₦${referralCampaignBenefit.minimumOrderAmount.toLocaleString()}+` : 'any paid order'}.`
+                : 'No active referral bonus campaign right now.'}
+            </p>
             <div className="grid grid-cols-2 gap-2 text-sm">
               <div className="rounded-2xl bg-brand-soft px-3.5 py-3">
                 <p className="text-xs text-slate-500">Successful referrals</p>

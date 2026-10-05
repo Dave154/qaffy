@@ -1,7 +1,11 @@
 import { Gift, Loader2, Pause, Play, Plus, Save, Square } from 'lucide-react'
 import { data, useFetcher, useLoaderData } from 'react-router'
+import { useEffect, useRef } from 'react'
 import type { Route } from './+types/Referrals'
 import { requireRole } from '../../../lib/auth.server'
+import { sql } from '../../../lib/db.server'
+import { sendCustomerNotification } from '../../../lib/notifications.server'
+import { toast } from '../../../lib/toast'
 
 type CampaignRow = {
   id: string
@@ -80,6 +84,110 @@ export async function action({ request }: Route.ActionArgs) {
     const status = String(formData.get('status') ?? '')
     if (!id || !['active', 'paused', 'ended'].includes(status))
       return data({ error: 'Valid campaign status required.' }, { headers, status: 400 })
+
+    if (status === 'active') {
+      const { data: activeCampaign, error: activeCampaignError } = await supabase
+        .from('referral_campaigns')
+        .select('id')
+        .eq('status', 'active')
+        .neq('id', id)
+        .maybeSingle()
+      if (activeCampaignError) return data({ error: activeCampaignError.message }, { headers, status: 400 })
+      if (activeCampaign)
+        return data(
+          { error: 'Pause the current campaign before activating another one.' },
+          { headers, status: 409 },
+        )
+
+      const { data: campaign, error } = await supabase
+        .from('referral_campaigns')
+        .update({ status: 'active', updated_at: new Date().toISOString() })
+        .eq('id', id)
+        .neq('status', 'active')
+        .select('id, name, referrer_reward_value, referred_reward_value, minimum_order_amount, updated_at')
+        .maybeSingle()
+      if (error) {
+        const databaseError = error as { code?: string; message: string; details?: string }
+        if (
+          databaseError.code === '23505' &&
+          `${databaseError.message} ${databaseError.details ?? ''}`.includes('referral_campaigns_one_active_idx')
+        )
+          return data(
+            { error: 'Pause the current campaign before activating another one.' },
+            { headers, status: 409 },
+          )
+        return data({ error: error.message }, { headers, status: 400 })
+      }
+      if (!campaign) {
+        const { data: existingCampaign, error: lookupError } = await supabase
+          .from('referral_campaigns')
+          .select('id, status')
+          .eq('id', id)
+          .maybeSingle()
+        if (lookupError) return data({ error: lookupError.message }, { headers, status: 400 })
+        if (!existingCampaign) return data({ error: 'Campaign not found.' }, { headers, status: 404 })
+        return data({ ok: true, message: 'Campaign is already active.' }, { headers })
+      }
+
+      try {
+        const customers = await sql<{ id: string }[]>`
+          select p.id
+          from public.profiles p
+          where p.role = 'customer'
+             or exists (
+               select 1
+               from public.profile_roles pr
+               where pr.profile_id = p.id
+                 and pr.role = 'customer'
+                 and pr.status = 'approved'
+             )
+        `
+        const qualifyingOrder =
+          Number(campaign.minimum_order_amount) > 0
+            ? `a paid order of ₦${Number(campaign.minimum_order_amount).toLocaleString()} or more`
+            : 'any paid order'
+        const campaignBody = `Refer a friend to earn ₦${Number(campaign.referrer_reward_value).toLocaleString()}; they get ₦${Number(campaign.referred_reward_value).toLocaleString()} after ${qualifyingOrder}.`
+        const activationKey = new Date(campaign.updated_at).toISOString()
+        let failedNotifications = 0
+
+        for (let start = 0; start < customers.length; start += 25) {
+          const results = await Promise.all(
+            customers.slice(start, start + 25).map((customer) =>
+              sendCustomerNotification({
+                eventKey: `referral-campaign:${campaign.id}:activated:${activationKey}:${customer.id}`,
+                customerId: customer.id,
+                notificationType: 'referral_campaign_activated',
+                payload: {
+                  title: `Referral campaign: ${campaign.name}`,
+                  body: campaignBody,
+                  url: '/settings#referrals',
+                  tag: `referral-campaign:${campaign.id}:activated:${activationKey}`,
+                },
+              }),
+            ),
+          )
+          failedNotifications += results.filter((result) => !result.duplicate && !result.sent).length
+        }
+
+        if (failedNotifications > 0)
+          return data(
+            {
+              ok: true,
+              warning: `Campaign activated, but notifications could not be sent to ${failedNotifications} customers.`,
+            },
+            { headers },
+          )
+      } catch (error) {
+        console.error('Activated referral campaign notifications could not be sent:', error)
+        return data(
+          { ok: true, warning: 'Campaign activated, but customer notifications could not be sent.' },
+          { headers },
+        )
+      }
+
+      return data({ ok: true, message: 'Campaign activated and customers notified.' }, { headers })
+    }
+
     const { error } = await supabase
       .from('referral_campaigns')
       .update({ status: status as CampaignRow['status'], updated_at: new Date().toISOString() })
@@ -130,12 +238,14 @@ export async function action({ request }: Route.ActionArgs) {
     created_by: auth.profile.id,
   })
   if (error) return data({ error: error.message }, { headers, status: 400 })
-  return data({ ok: true }, { headers })
+
+  return data({ ok: true, message: 'Campaign saved as a draft. Activate it to notify customers.' }, { headers })
 }
 
 export default function Referrals() {
   const { campaigns } = useLoaderData<typeof loader>()
   const fetcher = useFetcher<typeof action>()
+  const handledResponse = useRef<unknown>(null)
   const defaultStartsAt = new Date()
   const defaultEndsAt = new Date(defaultStartsAt)
   defaultEndsAt.setMonth(defaultEndsAt.getMonth() + 1)
@@ -144,14 +254,22 @@ export default function Referrals() {
   const pendingIntent = fetcher.state === 'idle' ? '' : String(fetcher.formData?.get('intent') ?? '')
   const isPending = (intent: string, id?: string) => pendingIntent === intent && (!id || String(fetcher.formData?.get('id') ?? '') === id)
 
+  useEffect(() => {
+    if (fetcher.state !== 'idle' || !fetcher.data || fetcher.data === handledResponse.current) return
+    handledResponse.current = fetcher.data
+    if ('error' in fetcher.data) {
+      toast.error(String(fetcher.data.error))
+      return
+    }
+    if ('warning' in fetcher.data && typeof fetcher.data.warning === 'string') {
+      toast.warning(fetcher.data.warning)
+      return
+    }
+    if ('message' in fetcher.data && typeof fetcher.data.message === 'string') toast.success(fetcher.data.message)
+  }, [fetcher.data, fetcher.state])
+
   return (
     <div className="space-y-6">
-      {fetcher.state === 'idle' && fetcher.data && 'error' in fetcher.data && (
-        <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
-          {fetcher.data.error}
-        </div>
-      )}
-
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex items-center gap-2">
           <div className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-soft text-brand-primary">
@@ -196,7 +314,7 @@ export default function Referrals() {
             />
           </label>
           <label>
-            <span className="mb-1.5 block text-xs font-semibold capitalize tracking-[0.14em] text-slate-500">Minimum order</span>
+            <span className="mb-1.5 block text-xs font-semibold capitalize tracking-[0.14em] text-slate-500">Minimum order amount</span>
             <input
               name="minimumOrderAmount"
               type="number"

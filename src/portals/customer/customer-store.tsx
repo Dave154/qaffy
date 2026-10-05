@@ -70,6 +70,12 @@ export type CustomerReferral = {
   rewardExpiresAt: string | null
 }
 
+export type ReferralCampaignBenefit = {
+  referrerRewardValue: number
+  referredRewardValue: number
+  minimumOrderAmount: number
+}
+
 export type CustomerInvoice = {
   id: string
   orderId: string
@@ -119,6 +125,7 @@ export type CustomerStore = {
   customerPhone: string
   referralCode: string | null
   referrals: CustomerReferral[]
+  referralCampaignBenefit: ReferralCampaignBenefit | null
   oneOffBalance: number
   subscriptionBalance: number
   promotionalBalance: number
@@ -349,6 +356,7 @@ type CustomerStoreProviderProps = {
     pickup_location_id: string | null
   }
   persistedReferrals?: CustomerReferral[]
+  referralCampaignBenefit?: ReferralCampaignBenefit | null
   persistedOrders?: Order[]
   persistedWallet?: Wallet | null
   persistedWalletTransactions?: WalletTransaction[]
@@ -384,6 +392,7 @@ export function CustomerStoreProvider({
   children,
   profile,
   persistedReferrals = [],
+  referralCampaignBenefit = null,
   persistedOrders,
   persistedWallet,
   persistedWalletTransactions,
@@ -442,6 +451,7 @@ export function CustomerStoreProvider({
       customerPhone: profile?.phone ?? '',
       referralCode: profile?.referral_code ?? null,
       referrals: persistedReferrals,
+      referralCampaignBenefit,
       oneOffBalance,
       subscriptionBalance,
       promotionalBalance,
@@ -648,6 +658,7 @@ export function CustomerStoreProvider({
     oneOffBalance,
     orders,
     persistedReferrals,
+    referralCampaignBenefit,
     persistedTransactionError,
     profile,
     persistedPickupLocations,

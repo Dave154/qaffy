@@ -291,7 +291,7 @@ export default function Plans() {
               >
                 <option value="wash">Wash only</option>
                 <option value="iron">Iron only</option>
-                <option value="both">Wash + Iron (all services)</option>
+                <option value="both">Wash + Iron</option>
               </select>
             </label>
 
@@ -597,7 +597,7 @@ export default function Plans() {
                 >
                   <option value="wash">Wash only</option>
                   <option value="iron">Iron only</option>
-                  <option value="both">Wash + Iron (all services)</option>
+                  <option value="both">Wash + Iron</option>
                 </select>
               </label>
               <label>
