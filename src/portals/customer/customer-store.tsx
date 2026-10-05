@@ -169,23 +169,26 @@ function createOtp(_prefix: string, number: number) {
 }
 
 function mapDatabaseTransaction(transaction: WalletTransaction): CustomerTransaction | null {
-  const isCredit = transaction.txn_type === 'topup'
-  const isReferralReward = transaction.txn_type === 'referral_reward'
-  if (isCredit) return null
-  const amount = `${isReferralReward ? '+' : '-'}₦${Number(transaction.amount).toLocaleString()}`
+  if (transaction.txn_type === 'topup') return null
+
+  const isCredit = ['cashback', 'referral_reward'].includes(transaction.txn_type)
+  const isReward = transaction.txn_type === 'cashback' || transaction.txn_type === 'referral_reward'
+  const amount = `${isCredit ? '+' : '-'}₦${Number(transaction.amount).toLocaleString()}`
 
   return {
     id: transaction.id,
-    title: isReferralReward ? 'Referral reward' : 'Order payment',
+    title: transaction.txn_type === 'cashback' ? 'Cashback earned' : isReward ? 'Referral reward' : 'Order payment',
     reference: transaction.related_referral_reward_id
       ? `Referral • ${transaction.related_referral_reward_id.slice(0, 8)}`
       : transaction.related_invoice_id
         ? `Invoice • ${transaction.related_invoice_id.slice(0, 8)}`
-        : `Wallet • ${transaction.id.slice(0, 8)}`,
+        : transaction.txn_type === 'cashback'
+          ? `Cashback • ${transaction.id.slice(0, 8)}`
+          : `Wallet • ${transaction.id.slice(0, 8)}`,
     date: new Date(transaction.created_at).toLocaleString(),
     amount,
-    direction: isReferralReward ? 'credit' : 'debit',
-    category: isReferralReward ? 'reward' : 'payment',
+    direction: isCredit ? 'credit' : 'debit',
+    category: isReward ? 'reward' : 'payment',
     status: 'Successful',
   }
 }

@@ -7,7 +7,7 @@ export type PartnerStatus = 'pending' | 'approved' | 'rejected' | 'suspended'
 export type PlanType = 'monthly' | 'semester'
 export type SubscriptionStatus = 'active' | 'ended' | 'cancelled'
 export type WalletBalanceType = 'one_off' | 'subscription' | 'promotional'
-export type WalletTxnType = 'topup' | 'debit' | 'refund' | 'adjustment' | 'referral_reward' | 'referral_reward_expiry'
+export type WalletTxnType = 'topup' | 'debit' | 'refund' | 'adjustment' | 'cashback' | 'referral_reward' | 'referral_reward_expiry'
 export type OrderType = 'wash' | 'wash_iron' | 'mixed'
 export type OrderStatus =
   | 'pending_pickup'
@@ -130,6 +130,7 @@ export interface AppSettings {
   key: string
   semester_start_date: string | null
   semester_end_date: string | null
+  cashback_percent: number | null
   updated_at: string
 }
 

@@ -21,7 +21,7 @@ type CampaignRow = {
   createdAt: string
 }
 
-type ReferralsData = { campaigns: CampaignRow[] }
+type ReferralsData = { campaigns: CampaignRow[]; cashbackPercent: number }
 
 function money(value: number) {
   return `₦${value.toLocaleString()}`
@@ -39,16 +39,25 @@ function formatDatetimeLocal(value: Date) {
 // eslint-disable-next-line react-refresh/only-export-components
 export async function loader({ request }: Route.LoaderArgs) {
   const auth = await requireRole(request, 'admin')
-  if (!auth) return data<ReferralsData>({ campaigns: [] }, { status: 200 })
+  if (!auth) return data<ReferralsData>({ campaigns: [], cashbackPercent: 0 }, { status: 200 })
 
-  const { data: rows, error } = await auth.supabase
-    .from('referral_campaigns')
-    .select(
-      'id, name, status, starts_at, ends_at, referrer_reward_value, referred_reward_value, minimum_order_amount, reward_expiry_days, max_rewards_per_referrer, created_at',
-    )
-    .order('created_at', { ascending: false })
+  const [{ data: rows, error }, cashbackResult] = await Promise.all([
+    auth.supabase
+      .from('referral_campaigns')
+      .select(
+        'id, name, status, starts_at, ends_at, referrer_reward_value, referred_reward_value, minimum_order_amount, reward_expiry_days, max_rewards_per_referrer, created_at',
+      )
+      .order('created_at', { ascending: false }),
+    auth.supabase
+      .from('app_settings' as any)
+      .select('cashback_percent')
+      .eq('key', 'cashback')
+      .maybeSingle() as unknown as Promise<{ data: { cashback_percent: number | null } | null; error: { message: string } | null }>,
+  ])
 
-  if (error) return data<ReferralsData>({ campaigns: [] }, { headers: auth.headers, status: 200 })
+  if (error) return data<ReferralsData>({ campaigns: [], cashbackPercent: 0 }, { headers: auth.headers, status: 200 })
+
+  const cashbackPercent = Number(cashbackResult.data?.cashback_percent ?? 0)
 
   return data<ReferralsData>(
     {
@@ -65,6 +74,7 @@ export async function loader({ request }: Route.LoaderArgs) {
         maxRewardsPerReferrer: row.max_rewards_per_referrer === null ? null : Number(row.max_rewards_per_referrer),
         createdAt: row.created_at,
       })),
+      cashbackPercent: Number.isFinite(cashbackPercent) ? cashbackPercent : 0,
     },
     { headers: auth.headers, status: 200 },
   )
@@ -78,6 +88,25 @@ export async function action({ request }: Route.ActionArgs) {
   const formData = await request.formData()
   const intent = String(formData.get('intent') ?? 'create')
   const { supabase, headers } = auth
+
+  if (intent === 'set-cashback') {
+    const cashbackPercent = Number(formData.get('cashbackPercent') ?? 0)
+    if (!Number.isFinite(cashbackPercent) || cashbackPercent < 0 || cashbackPercent > 100) {
+      return data({ error: 'Cashback must be a percentage between 0 and 100.' }, { headers, status: 400 })
+    }
+
+    const { error } = await supabase.from('app_settings' as any).upsert(
+      {
+        key: 'cashback',
+        cashback_percent: cashbackPercent,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'key' },
+    )
+
+    if (error) return data({ error: error.message }, { headers, status: 400 })
+    return data({ ok: true, message: `Cashback is now set to ${cashbackPercent}% on top-ups.` }, { headers })
+  }
 
   if (intent === 'status') {
     const id = String(formData.get('id') ?? '')
@@ -243,7 +272,7 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function Referrals() {
-  const { campaigns } = useLoaderData<typeof loader>()
+  const { campaigns, cashbackPercent } = useLoaderData<typeof loader>()
   const fetcher = useFetcher<typeof action>()
   const handledResponse = useRef<unknown>(null)
   const defaultStartsAt = new Date()
@@ -270,6 +299,41 @@ export default function Referrals() {
 
   return (
     <div className="space-y-6">
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex items-center gap-2">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
+            <Gift size={17} />
+          </div>
+          <div>
+            <h3 className="text-lg font-bold text-slate-900">Cashback settings</h3>
+            <p className="text-sm text-slate-500">Set the percentage to reward customers on any successful top-up.</p>
+          </div>
+        </div>
+        <fetcher.Form method="post" className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-end">
+          <input type="hidden" name="intent" value="set-cashback" />
+          <label className="w-full sm:max-w-[220px]">
+            <span className="mb-1.5 block text-xs font-semibold capitalize tracking-[0.14em] text-slate-500">Cashback %</span>
+            <input
+              name="cashbackPercent"
+              type="number"
+              min="0"
+              max="100"
+              step="0.1"
+              defaultValue={cashbackPercent}
+              className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
+            />
+          </label>
+          <button
+            type="submit"
+            disabled={isPending('set-cashback')}
+            className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-70"
+          >
+            {isPending('set-cashback') ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+            {isPending('set-cashback') ? 'Saving...' : 'Save cashback'}
+          </button>
+        </fetcher.Form>
+      </section>
+
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex items-center gap-2">
           <div className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-soft text-brand-primary">

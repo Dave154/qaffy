@@ -47,7 +47,7 @@ const navItems = [
   { to: '/admin/finance', label: 'Finance', icon: CircleDollarSign },
   { to: '/admin/users', label: 'Users', icon: UsersRound },
   { to: '/admin/plans', label: 'Plans', icon: CircleDollarSign },
-  { to: '/admin/referrals', label: 'Referrals', icon: Gift },
+  { to: '/admin/reward', label: 'Reward', icon: Gift },
   {
     to: '/admin/settings',
     label: 'Settings',
@@ -98,8 +98,8 @@ export default function AdminLayout() {
                         ? 'Users'
                         : location.pathname.includes('/plans')
                           ? 'Plans'
-                          : location.pathname.includes('/referrals')
-                            ? 'Referrals'
+                          : location.pathname.includes('/reward')
+                            ? 'Reward'
                             : location.pathname.includes('/settings') || location.pathname.includes('/admins')
                               ? 'Settings'
                               : 'Admin'

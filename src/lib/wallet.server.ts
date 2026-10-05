@@ -17,6 +17,17 @@ function generateFourDigitOtp() {
   return String(1000 + Math.floor(Math.random() * 9000))
 }
 
+async function getCashbackPercentForTransaction(tx: TransactionSql) {
+  const [settings] = await tx`
+    select cashback_percent
+    from app_settings
+    where key = 'cashback'
+    limit 1
+  `
+  const percent = Number(settings?.cashback_percent ?? 0)
+  return Number.isFinite(percent) ? Math.min(Math.max(percent, 0), 100) : 0
+}
+
 type SubscriptionAllocationItem = { id: string; quantity: number; units: number; unitPrice: number }
 
 function allocateSubscriptionCoverage(items: SubscriptionAllocationItem[], allowance: number) {
@@ -672,6 +683,7 @@ export async function creditWallet(customerId: string, balanceType: WalletBalanc
       const [wallet] = await tx`select one_off_balance, subscription_balance from wallets where customer_id = ${customerId}`
       return {
         newBalance: balanceType === 'subscription' ? Number(wallet.subscription_balance) : Number(wallet.one_off_balance),
+        cashbackAmount: 0,
         alreadyCredited: true,
         settledInvoices: [],
       }
@@ -681,8 +693,10 @@ export async function creditWallet(customerId: string, balanceType: WalletBalanc
     const subscriptionDebt = Math.max(0, -Number(wallet.subscription_balance))
     const subscriptionCredit = balanceType === 'subscription' ? amount : Math.min(amount, subscriptionDebt)
     const oneOffCredit = balanceType === 'one_off' ? amount - subscriptionCredit : 0
+    const cashbackPercent = balanceType === 'one_off' ? await getCashbackPercentForTransaction(tx) : 0
+    const cashbackAmount = cashbackPercent > 0 ? Math.round(((oneOffCredit * cashbackPercent) / 100) * 100) / 100 : 0
     const subscriptionBalance = Number(wallet.subscription_balance) + subscriptionCredit
-    const oneOffBalance = Number(wallet.one_off_balance) + oneOffCredit
+    const oneOffBalance = Number(wallet.one_off_balance) + oneOffCredit + cashbackAmount
 
     await tx`
       update wallets
@@ -705,6 +719,12 @@ export async function creditWallet(customerId: string, balanceType: WalletBalanc
       await tx`
         insert into wallet_transactions (customer_id, balance_type, txn_type, amount, balance_after, related_payment_id)
         values (${customerId}, 'one_off', 'topup', ${oneOffCredit}, ${oneOffBalance}, ${payment?.id ?? null})
+      `
+    }
+    if (cashbackAmount > 0) {
+      await tx`
+        insert into wallet_transactions (customer_id, balance_type, txn_type, amount, balance_after, related_payment_id)
+        values (${customerId}, 'one_off', 'cashback', ${cashbackAmount}, ${oneOffBalance}, ${payment?.id ?? null})
       `
     }
 
@@ -750,6 +770,7 @@ export async function creditWallet(customerId: string, balanceType: WalletBalanc
 
     return {
       newBalance: balanceType === 'subscription' ? subscriptionBalance : settledBalance,
+      cashbackAmount,
       settledInvoices,
       alreadyCredited: false,
       referralRewardRecipients,

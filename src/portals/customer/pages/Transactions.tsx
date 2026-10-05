@@ -3,7 +3,7 @@ import { useNavigation } from 'react-router'
 import { useCustomerStore } from '../customer-store-hook'
 import CopyableOrderId from '../../../components/CopyableOrderId'
 
-const filterItems = ['All activity', 'Top ups', 'Payments']
+const filterItems = ['All activity', 'Top ups', 'Payments', 'Rewards']
 
 export default function Transactions() {
   const { transactions, transactionError } = useCustomerStore()
@@ -15,7 +15,9 @@ export default function Transactions() {
       ? transactions.filter((transaction) => transaction.category === 'topup')
       : activeFilter === 'Payments'
         ? transactions.filter((transaction) => transaction.category === 'payment')
-        : transactions
+        : activeFilter === 'Rewards'
+          ? transactions.filter((transaction) => transaction.category === 'reward')
+          : transactions
   const exportTransactions = () => {
     const rows = [
       ['Type', 'Reference', 'Amount', 'Date', 'Status'],
