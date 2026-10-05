@@ -53,6 +53,7 @@ export type CustomerTransaction = {
   title: string
   reference: string
   date: string
+  sortDate: string
   amount: string
   direction: 'credit' | 'debit'
   category: 'topup' | 'payment' | 'reward'
@@ -186,6 +187,7 @@ function mapDatabaseTransaction(transaction: WalletTransaction): CustomerTransac
           ? `Cashback • ${transaction.id.slice(0, 8)}`
           : `Wallet • ${transaction.id.slice(0, 8)}`,
     date: new Date(transaction.created_at).toLocaleString(),
+    sortDate: transaction.created_at,
     amount,
     direction: isCredit ? 'credit' : 'debit',
     category: isReward ? 'reward' : 'payment',
@@ -199,6 +201,7 @@ function mapPayment(payment: Payment): CustomerTransaction {
     title: payment.plan_id ? 'Subscription payment' : 'Wallet top up',
     reference: payment.reference,
     date: new Date(payment.created_at).toLocaleString(),
+    sortDate: payment.created_at,
     amount: `+₦${Number(payment.amount).toLocaleString()}`,
     direction: 'credit',
     category: 'topup',
@@ -435,7 +438,7 @@ export function CustomerStoreProvider({
       ...(persistedWalletTransactions ?? [])
         .map(mapDatabaseTransaction)
         .filter((transaction): transaction is CustomerTransaction => transaction !== null),
-    ].sort((left, right) => new Date(right.date).getTime() - new Date(left.date).getTime()),
+    ].sort((left, right) => new Date(right.sortDate).getTime() - new Date(left.sortDate).getTime()),
   )
   const [invoices] = useState(() => (persistedInvoices ?? []).map(mapDatabaseInvoice))
   const invoice = invoices[0] ?? null
