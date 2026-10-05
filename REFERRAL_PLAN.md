@@ -1,17 +1,17 @@
-# Qaffy Referral Plan
+# Qaffy Reward Plan
 
-**Status:** Planning baseline; attribution, campaigns, rewards, promotional settlement, and customer history implemented
-**Updated:** 2026-09-17
+**Status:** Reward center implemented; cashback and referral campaigns operate under a unified admin Reward section
+**Updated:** 2026-10-05
 
-This document is the source of truth for the Qaffy customer referral program. It defines the product behavior and engineering constraints before implementation begins.
+This document is the source of truth for the Qaffy reward program. It covers both customer cashback earned on successful top-ups and referral-based promotional rewards. The reward system is managed through the admin Reward page and remains distinct from ordinary wallet top-ups and invoice settlement.
 
 ## Goals
 
 - Let an existing customer invite a new customer.
 - Attribute the new customer reliably before authentication completes.
 - Reward referrals only after a real qualifying order is completed and paid.
-- Make rewards configurable by Admin rather than hardcoded in customer code.
-- Keep referral rewards auditable, idempotent, and separate from customer-funded wallet top-ups.
+- Allow Admin to configure both cashback percentages and referral campaign rewards from a single Reward center.
+- Keep rewards auditable, idempotent, and separate from customer-funded wallet top-ups.
 - Provide enough visibility for customers, Admin, and Finance to reconcile every reward.
 
 ## Current State

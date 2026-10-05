@@ -29,6 +29,14 @@ const services = [
 
 type NewOrderProps = { onClose: () => void; order?: CustomerOrder }
 
+const parsePositiveQuantity = (value: string) => {
+  if (!/^\d+$/.test(value)) return null
+  const quantity = Number(value)
+  return Number.isSafeInteger(quantity) && quantity > 0 ? quantity : null
+}
+
+const getOrderLineKey = (item: Pick<OrderLine, 'category' | 'service'>) => `${item.category}\u0000${item.service}`
+
 export default function NewOrder({ onClose, order }: NewOrderProps) {
   const {
     activePlan,
@@ -46,7 +54,9 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
   const [category, setCategory] = useState<Category | null>(null)
   const [service, setService] = useState(services[2])
   const [quantity, setQuantity] = useState(1)
+  const [quantityInput, setQuantityInput] = useState<string | null>(null)
   const [items, setItems] = useState<OrderLine[]>([])
+  const [itemQuantityInputs, setItemQuantityInputs] = useState<Record<string, string>>({})
   const [pickupLocation, setPickupLocation] = useState('')
   const automaticPickupLocation = preferredPickupLocationId ? (preferredPickupLocationName ?? '') : ''
   const previousAutomaticPickupLocation = useRef('')
@@ -186,6 +196,7 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
     setItems((currentItems) => addOrIncrementOrderLine(currentItems, draftLine))
     setCategory(category)
     setQuantity(1)
+    setQuantityInput(null)
   }
 
   const handleCreateOrder = async () => {
@@ -363,7 +374,10 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
                   <button
                     type="button"
                     aria-label="Decrease quantity"
-                    onClick={() => setQuantity((value) => Math.max(1, value - 1))}
+                    onClick={() => {
+                      setQuantity((value) => Math.max(1, value - 1))
+                      setQuantityInput(null)
+                    }}
                     className="flex h-8 w-8 items-center justify-center rounded-2xl text-slate-500 hover:bg-slate-50"
                   >
                     <Minus className="h-4 w-4" />
@@ -373,14 +387,25 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
                     min={1}
                     inputMode="numeric"
                     aria-label="Quantity"
-                    value={quantity}
-                    onChange={(event) => setQuantity(Math.max(1, Number(event.target.value) || 1))}
+                    value={quantityInput ?? quantity}
+                    onChange={(event) => {
+                      const value = event.target.value
+                      setQuantityInput(value)
+                      const parsedQuantity = parsePositiveQuantity(value)
+                      if (parsedQuantity !== null) setQuantity(parsedQuantity)
+                    }}
+                    onBlur={() => {
+                      setQuantityInput(null)
+                    }}
                     className="w-14 border-0 bg-transparent text-center font-semibold text-slate-900 outline-none focus:ring-0"
                   />
                   <button
                     type="button"
                     aria-label="Increase quantity"
-                    onClick={() => setQuantity((value) => value + 1)}
+                    onClick={() => {
+                      setQuantity((value) => value + 1)
+                      setQuantityInput(null)
+                    }}
                     className="flex h-8 w-8 items-center justify-center rounded-2xl text-slate-500 hover:bg-slate-50"
                   >
                     <Plus className="h-4 w-4" />
@@ -406,6 +431,7 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
               {displayItems.map((item, index) => {
                 const subscriptionLineAmount = subscriptionBillingPreview?.lines[index]?.totalAmount ?? 0
                 const isCoveredSubscriptionLine = Boolean(subscription && !isReadOnly && subscriptionLineAmount === 0)
+                const lineKey = getOrderLineKey(item)
                 return (
                   <div
                     key={`${item.category}-${item.service}-${index}`}
@@ -424,15 +450,27 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
                           min={1}
                           inputMode="numeric"
                           aria-label={`Quantity for ${item.category}`}
-                          value={item.quantity}
-                          onChange={(event) =>
-                            setItems((currentItems) =>
-                              currentItems.map((currentItem, itemIndex) =>
-                                itemIndex === index
-                                  ? { ...currentItem, quantity: Math.max(1, Number(event.target.value) || 1) }
-                                  : currentItem,
-                              ),
-                            )
+                          value={itemQuantityInputs[lineKey] ?? item.quantity}
+                          onChange={(event) => {
+                            const value = event.target.value
+                            setItemQuantityInputs((currentInputs) => ({ ...currentInputs, [lineKey]: value }))
+                            const parsedQuantity = parsePositiveQuantity(value)
+                            if (parsedQuantity !== null) {
+                              setItems((currentItems) =>
+                                currentItems.map((currentItem) =>
+                                  getOrderLineKey(currentItem) === lineKey
+                                    ? { ...currentItem, quantity: parsedQuantity }
+                                    : currentItem,
+                                ),
+                              )
+                            }
+                          }}
+                          onBlur={() =>
+                            setItemQuantityInputs((currentInputs) => {
+                              const nextInputs = { ...currentInputs }
+                              delete nextInputs[lineKey]
+                              return nextInputs
+                            })
                           }
                           className="w-16 rounded-xl border border-slate-200 px-2 py-1 text-center font-semibold text-slate-900 focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
                         />
@@ -454,7 +492,14 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
                         <button
                           type="button"
                           aria-label={`Remove ${item.category}`}
-                          onClick={() => setItems((currentItems) => currentItems.filter((_, itemIndex) => itemIndex !== index))}
+                          onClick={() => {
+                            setItems((currentItems) => currentItems.filter((_, itemIndex) => itemIndex !== index))
+                            setItemQuantityInputs((currentInputs) => {
+                              const nextInputs = { ...currentInputs }
+                              delete nextInputs[lineKey]
+                              return nextInputs
+                            })
+                          }}
                           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl text-slate-400 hover:bg-brand-soft hover:text-brand-primary"
                         >
                           <Trash2 className="h-4 w-4" />

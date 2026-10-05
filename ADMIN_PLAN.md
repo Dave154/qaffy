@@ -40,7 +40,7 @@ The trusted settlement payout release flow through verified Paystack Transfers i
 - Admin authentication and `requireRole(request, 'admin')` exist.
 - `src/portals/admin/AdminLayout.tsx` has the shared Admin sidebar with consistent menu spacing, expandable Settings/Partners groups, and nested chevron navigation.
 - `src/portals/admin/pages/Home.tsx` loads live overview analytics and chart data.
-- The admin routes in `src/routes.ts` include overview, orders, finance, categories, pickup locations, mismatches, plans, referrals, Admin management, partners, and user screens.
+- The admin routes in `src/routes.ts` include overview, orders, finance, categories, pickup locations, mismatches, plans, reward management, Admin management, partners, and user screens.
 - The codebase includes working data tables and screens for profiles, profile_roles, vendors, logistics_agents, orders, order_items, mismatches, invoices, payments, wallet tooling, plans, subscriptions, cloth_categories, cloth_category_rates, pickup_locations, vendor_settlements, vendor_settlement_orders, referrals, and order_logistics_events.
 - Admin functionality already implemented in code includes overview, partner management, categories/rates, mismatch review, finance summaries, and plan configuration.
 - Admin provisioning is implemented at `/admin/admins` under Settings. An existing or new email can receive approved Admin access through `profile_roles`; the action is server-side and audited.
@@ -282,10 +282,10 @@ Vendor-side finance preparation is complete; Admin payout execution remains the 
 - Finance-specific loading and query-error states remain future work.
 - Manual wallet adjustment workflow still needs full validation against the approved wallet service rules.
 
-### Referral MVP
+### Reward MVP
 
 - Referral attribution supports email OTP and Google OAuth signup flows with immutable database-generated codes.
-- Admin can create, activate, pause, and end referral campaigns at `/admin/referrals`.
+- Admin can create, activate, pause, and end referral campaigns at `/admin/reward` and manage cashback percentage settings from the same page.
 - Paid qualifying invoices issue idempotent rewards to both the referrer and referred customer.
 - Promotional referral credit is stored separately from Paystack-funded wallet balances, expires per reward, and is consumed before ordinary one-off funds.
 - Customer Settings shows referral sharing, referral history, and reward status.

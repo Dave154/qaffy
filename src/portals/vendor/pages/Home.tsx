@@ -334,8 +334,26 @@ function OrderReviewDialog({
   saving: boolean
 }) {
   const [isConfirmationOpen, setIsConfirmationOpen] = useState(false)
+  const [addedItemQuantityInputs, setAddedItemQuantityInputs] = useState<Record<number, string>>({})
   const allReceivedEntered = order.items.every((item) => received[item.id] !== undefined)
   const formattedDate = (value: string | null) => (value ? new Date(value).toLocaleString() : 'Not recorded')
+  const parsePositiveQuantity = (value: string) => {
+    if (!/^\d+$/.test(value)) return null
+    const quantity = Number(value)
+    return Number.isSafeInteger(quantity) && quantity > 0 ? quantity : null
+  }
+  const removeAddedItem = (index: number) => {
+    onAddedItemsChange(addedItems.filter((_, itemIndex) => itemIndex !== index))
+    setAddedItemQuantityInputs((currentInputs) => {
+      const nextInputs: Record<number, string> = {}
+      Object.entries(currentInputs).forEach(([key, value]) => {
+        const itemIndex = Number(key)
+        if (itemIndex < index) nextInputs[itemIndex] = value
+        if (itemIndex > index) nextInputs[itemIndex - 1] = value
+      })
+      return nextInputs
+    })
+  }
 
   return (
     <div className="vendor-review-dialog fixed inset-0 z-40 flex items-end justify-center overflow-y-auto bg-slate-950/40 p-0 sm:items-center sm:p-4">
@@ -414,20 +432,32 @@ function OrderReviewDialog({
                     <input
                       type="number"
                       min="1"
-                      value={item.quantity}
-                      onChange={(event) =>
-                        onAddedItemsChange(
-                          addedItems.map((current, itemIndex) =>
-                            itemIndex === index ? { ...current, quantity: Math.max(1, Number(event.target.value) || 1) } : current,
-                          ),
-                        )
+                      value={addedItemQuantityInputs[index] ?? item.quantity}
+                      onChange={(event) => {
+                        const value = event.target.value
+                        setAddedItemQuantityInputs((currentInputs) => ({ ...currentInputs, [index]: value }))
+                        const quantity = parsePositiveQuantity(value)
+                        if (quantity !== null) {
+                          onAddedItemsChange(
+                            addedItems.map((current, itemIndex) =>
+                              itemIndex === index ? { ...current, quantity } : current,
+                            ),
+                          )
+                        }
+                      }}
+                      onBlur={() =>
+                        setAddedItemQuantityInputs((currentInputs) => {
+                          const nextInputs = { ...currentInputs }
+                          delete nextInputs[index]
+                          return nextInputs
+                        })
                       }
                       className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
                       aria-label="Added category quantity"
                     />
                     <button
                       type="button"
-                      onClick={() => onAddedItemsChange(addedItems.filter((_, itemIndex) => itemIndex !== index))}
+                      onClick={() => removeAddedItem(index)}
                       className="rounded-lg px-3 py-2 text-sm font-semibold text-red-600 hover:bg-red-50"
                     >
                       Remove

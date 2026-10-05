@@ -4,12 +4,13 @@ Qaffy is a multi-portal laundry platform built with React, TypeScript, Vite, and
 
 ## Status snapshot
 
-As of 2026-09-22, the codebase includes the following active workstreams:
+As of 2026-10-05, the codebase includes the following active workstreams:
 
-- Customer portal: live wallet, Paystack-backed top-ups, plan purchases, order flow, invoices, notifications, referrals, and OTP experience
+- Customer portal: live wallet, Paystack-backed top-ups, plan purchases, order flow, invoices, notifications, reward activity, and OTP experience
+- Reward center: cashback configuration for top-ups plus referral campaign and reward issuance flows
 - Logistics portal: signed-in agent scope, pickup/delivery workflows, and agency-specific event history
 - Vendor portal: review workflow, settlement finance context, and responsive partner UI
-- Admin portal: overview, orders, partners, categories, mismatches, finance, plans, and notifications
+- Admin portal: overview, orders, partners, categories, mismatches, finance, plans, reward management, and notifications
 
 ## Core architecture
 
@@ -26,7 +27,7 @@ As of 2026-09-22, the codebase includes the following active workstreams:
 
 - [AGENTS.md](AGENTS.md) — product and system architecture history, operational requirements, and portal handoff notes
 - [ADMIN_PLAN.md](ADMIN_PLAN.md) — admin roadmap, confirmed rules, and priority sequencing
-- [REFERRAL_PLAN.md](REFERRAL_PLAN.md) — referral attribution, rewards, and campaign logic
+- [REFERRAL_PLAN.md](REFERRAL_PLAN.md) — reward center logic, including cashback and referral campaigns
 - [FINANCE_AND_PAYMENT_FLOW.md](FINANCE_AND_PAYMENT_FLOW.md) — payment, wallet, and finance flow documentation
 
 ## Local setup
