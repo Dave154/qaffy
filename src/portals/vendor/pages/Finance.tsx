@@ -63,6 +63,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   const [
     { data: orderItems, error: orderItemsError },
     { data: rates, error: ratesError },
+    { data: invoices, error: invoicesError },
     { data: settlements, error: settlementsError },
     { data: settlementOrders, error: settlementOrdersError },
   ] = await Promise.all([
@@ -73,6 +74,9 @@ export async function loader({ request }: Route.LoaderArgs) {
           .in('order_id', orderIds)
       : Promise.resolve({ data: [], error: null }),
     supabase.from('cloth_category_rates').select('category_id, vendor_wash_price, vendor_iron_price, vendor_wash_iron_price'),
+    orderIds.length
+      ? supabase.from('invoices').select('order_id, status').in('order_id', orderIds)
+      : Promise.resolve({ data: [], error: null }),
     supabase
       .from('vendor_settlements')
       .select('id, vendor_id, period_start, period_end, amount_due, status, created_at')
@@ -83,7 +87,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       : Promise.resolve({ data: [], error: null }),
   ])
 
-  const queryError = ordersError ?? orderItemsError ?? ratesError ?? settlementsError ?? settlementOrdersError
+  const queryError = ordersError ?? orderItemsError ?? ratesError ?? invoicesError ?? settlementsError ?? settlementOrdersError
   if (queryError) {
     return data<VendorFinanceData>(
       { error: queryError.message, summary: { totalPayable: 0, pendingAmount: 0, paidAmount: 0 }, settlements: [] },
@@ -92,12 +96,22 @@ export async function loader({ request }: Route.LoaderArgs) {
   }
 
   const rateByCategory = new Map((rates ?? []).map((rate) => [rate.category_id, rate]))
+  const invoiceStatusByOrderId = new Map((invoices ?? []).map((invoice) => [invoice.order_id, invoice.status]))
+  const paidOrderIds = new Set(
+    [...invoiceStatusByOrderId].filter(([, status]) => status === 'paid').map(([orderId]) => orderId),
+  )
   const settledOrderIds = new Set((settlementOrders ?? []).map((mapping) => mapping.order_id))
+  const settlementOrderIds = new Map<string, string[]>()
+  for (const mapping of settlementOrders ?? []) {
+    const orderIds = settlementOrderIds.get(mapping.settlement_id) ?? []
+    orderIds.push(mapping.order_id)
+    settlementOrderIds.set(mapping.settlement_id, orderIds)
+  }
   const payableByOrder = new Map<string, number>()
 
   for (const item of orderItems ?? []) {
     const order = orders?.find((candidate) => candidate.id === item.order_id)
-    if (!order || order.clothes_count_vendor === null || order.status === 'cancelled') continue
+    if (!order || !paidOrderIds.has(order.id) || order.clothes_count_vendor === null || order.status === 'cancelled') continue
     const rate = rateByCategory.get(item.category_id)
     const unitPrice = getRateValueFromItem(item, rate, 'vendor')
     const current = payableByOrder.get(item.order_id) ?? 0
@@ -105,11 +119,18 @@ export async function loader({ request }: Route.LoaderArgs) {
   }
 
   const totalPayable = (orders ?? []).reduce(
-    (sum, order) => (settledOrderIds.has(order.id) ? sum : sum + (payableByOrder.get(order.id) ?? 0)),
+    (sum, order) =>
+      !paidOrderIds.has(order.id) || settledOrderIds.has(order.id)
+        ? sum
+        : sum + (payableByOrder.get(order.id) ?? 0),
     0,
   )
   const pendingAmount = (settlements ?? [])
-    .filter((settlement) => settlement.status === 'pending')
+    .filter((settlement) => {
+      if (settlement.status !== 'pending') return false
+      const orderIds = settlementOrderIds.get(settlement.id) ?? []
+      return orderIds.length > 0 && orderIds.every((orderId) => paidOrderIds.has(orderId))
+    })
     .reduce((sum, settlement) => sum + Number(settlement.amount_due ?? 0), 0)
   const paidAmount = (settlements ?? [])
     .filter((settlement) => settlement.status === 'paid')

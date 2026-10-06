@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 import { data } from 'react-router'
 import { sql } from '../lib/db.server'
 import { activateSubscriptionFromPayment, creditWallet } from '../lib/wallet.server'
-import { sendCustomerNotification } from '../lib/notifications.server'
+import { sendCustomerNotification, walletInvoicePaidNotification } from '../lib/notifications.server'
 import { processPaystackTransferWebhook } from '../lib/payouts.server'
 import { TransferWebhookValidationError } from '../lib/payout-webhooks'
 
@@ -131,13 +131,7 @@ export async function action({ request }: { request: Request }) {
         customerId: payment.customer_id,
         notificationType: 'payment_confirmed',
         orderId: invoice.orderId,
-        payload: {
-          title: 'Payment confirmed',
-          body: `Your invoice for ${invoice.publicOrderNumber} has been paid.`,
-          details: [`Order: ${invoice.publicOrderNumber}`, 'The invoice is fully paid.', 'Your order can continue to delivery.'],
-          url: `/orders?order=${encodeURIComponent(invoice.publicOrderNumber)}`,
-          tag: `order:${invoice.orderId}:payment`,
-        },
+        payload: walletInvoicePaidNotification(invoice.amount, invoice.publicOrderNumber, invoice.orderId),
       })
     }
   }

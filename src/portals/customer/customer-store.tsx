@@ -52,6 +52,7 @@ export type CustomerTransaction = {
   id: string
   title: string
   reference: string
+  orderReference?: string
   date: string
   sortDate: string
   amount: string
@@ -169,7 +170,10 @@ function createOtp(_prefix: string, number: number) {
   return String(1000 + (Math.abs(number) % 9000))
 }
 
-function mapDatabaseTransaction(transaction: WalletTransaction): CustomerTransaction | null {
+function mapDatabaseTransaction(
+  transaction: WalletTransaction,
+  orderReferenceByInvoiceId: Map<string, string>,
+): CustomerTransaction | null {
   if (transaction.txn_type === 'topup') return null
 
   const isCredit = ['cashback', 'referral_reward'].includes(transaction.txn_type)
@@ -186,6 +190,9 @@ function mapDatabaseTransaction(transaction: WalletTransaction): CustomerTransac
         : transaction.txn_type === 'cashback'
           ? `Cashback • ${transaction.id.slice(0, 8)}`
           : `Wallet • ${transaction.id.slice(0, 8)}`,
+    orderReference: transaction.related_invoice_id
+      ? orderReferenceByInvoiceId.get(transaction.related_invoice_id)
+      : undefined,
     date: new Date(transaction.created_at).toLocaleString(),
     sortDate: transaction.created_at,
     amount,
@@ -414,6 +421,7 @@ export function CustomerStoreProvider({
   persistedSubscriptionUsedUnits = 0,
 }: CustomerStoreProviderProps) {
   const unpaidInvoiceOrderIds = new Set(persistedUnpaidInvoiceOrderIds)
+  const orderReferenceByInvoiceId = new Map((persistedInvoices ?? []).map((invoice) => [invoice.id, invoice.order_reference ?? invoice.order_id]))
   const [orders, setOrders] = useState(() =>
     persistedOrders
       ? persistedOrders.map((order) =>
@@ -436,7 +444,7 @@ export function CustomerStoreProvider({
     [
       ...(persistedPayments ?? []).map(mapPayment),
       ...(persistedWalletTransactions ?? [])
-        .map(mapDatabaseTransaction)
+        .map((transaction) => mapDatabaseTransaction(transaction, orderReferenceByInvoiceId))
         .filter((transaction): transaction is CustomerTransaction => transaction !== null),
     ].sort((left, right) => new Date(right.sortDate).getTime() - new Date(left.sortDate).getTime()),
   )

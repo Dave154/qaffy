@@ -66,7 +66,21 @@ test('marks vendors with unverified payout accounts ineligible', () => {
   assert.match(previews[0].reason, /Verify the vendor payout account/)
 })
 
-test('falls back to the stored item price when the vendor rate is unavailable', () => {
+test('uses a zero vendor rate instead of falling back to the customer item price', () => {
+  const previews = buildSettlementVendorPreviews(
+    [vendors[0]],
+    [orders[0]],
+    [{ ...items[0], unit_price: 42 }],
+    [{ category_id: 'shirts', vendor_wash_price: 0 }],
+    [],
+  )
+
+  assert.equal(previews[0].amount, 0)
+  assert.equal(previews[0].items[0].vendorUnitPrice, 0)
+  assert.equal(previews[0].eligible, false)
+})
+
+test('uses zero when the vendor rate is missing instead of falling back to the customer item price', () => {
   const previews = buildSettlementVendorPreviews(
     [vendors[0]],
     [orders[0]],
@@ -75,8 +89,8 @@ test('falls back to the stored item price when the vendor rate is unavailable', 
     [],
   )
 
-  assert.equal(previews[0].amount, 84)
-  assert.equal(previews[0].items[0].vendorUnitPrice, 42)
+  assert.equal(previews[0].amount, 0)
+  assert.equal(previews[0].items[0].vendorUnitPrice, 0)
 })
 
 function createFakeSettlementDatabase({ includeSecondVendorOrder = true, unreadyVendorIds = [] } = {}) {

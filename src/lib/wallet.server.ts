@@ -320,6 +320,7 @@ export async function payFromWallet(customerId: string, invoiceId: string, balan
       invoiceId,
       orderId: invoice.order_id,
       publicOrderNumber: invoice.public_order_number,
+      amount: Number(invoice.amount),
       deliveryOtp,
       newBalance,
       referralRewardRecipients,
