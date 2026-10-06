@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { SlidersHorizontal, X } from 'lucide-react'
 import type { Route } from './+types/Orders'
 import { requireRole } from '../../../lib/auth.server'
+import { getInitialReceivedCounts } from '../../../lib/order-counts'
 
 type AdminOrder = {
   id: string
@@ -20,11 +21,18 @@ type AdminOrder = {
   items: Array<{
     id: string
     quantity: number
+    confirmed_quantity: number | null
     service: 'wash' | 'iron' | 'wash_iron'
     unit_price: number
     category: { name: string } | null
   }>
-  invoice: { amount: number; status: 'unpaid' | 'paid'; paid_at: string | null } | null
+  invoice: {
+    amount: number
+    status: 'unpaid' | 'paid'
+    paid_at: string | null
+    billing_breakdown: { coveredUnits: number; subscriberAmount: number; regularAmount: number } | null
+  } | null
+  mismatches: Array<{ id: string; details: unknown }>
 }
 
 type AdminOrdersData = { orders: AdminOrder[] }
@@ -39,16 +47,22 @@ export async function loader({ request }: Route.LoaderArgs) {
   const orderIds = orderRows.map((order) => order.id)
   const customerIds = [...new Set(orderRows.map((order) => order.customer_id))]
   const locationIds = [...new Set(orderRows.map((order) => order.pickup_location_id).filter(Boolean))] as string[]
-  const [{ data: profiles }, { data: locations }, { data: items }, { data: invoices }] = await Promise.all([
+  const [{ data: profiles }, { data: locations }, { data: items }, { data: invoices }, { data: mismatches }] = await Promise.all([
     customerIds.length
       ? supabase.from('profiles').select('id, name, qaffy_id, email, phone').in('id', customerIds)
       : Promise.resolve({ data: [] }),
     locationIds.length ? supabase.from('pickup_locations').select('id, name').in('id', locationIds) : Promise.resolve({ data: [] }),
     orderIds.length
-      ? supabase.from('order_items').select('id, order_id, category_id, quantity, service, unit_price').in('order_id', orderIds)
+      ? supabase
+          .from('order_items')
+          .select('id, order_id, category_id, quantity, confirmed_quantity, service, unit_price')
+          .in('order_id', orderIds)
       : Promise.resolve({ data: [] }),
     orderIds.length
-      ? supabase.from('invoices').select('order_id, amount, status, paid_at').in('order_id', orderIds)
+      ? supabase.from('invoices').select('order_id, amount, status, paid_at, billing_breakdown').in('order_id', orderIds)
+      : Promise.resolve({ data: [] }),
+    orderIds.length
+      ? supabase.from('mismatches').select('id, order_id, details').in('order_id', orderIds)
       : Promise.resolve({ data: [] }),
   ])
   const categoryIds = [...new Set((items ?? []).map((item) => item.category_id))]
@@ -70,6 +84,7 @@ export async function loader({ request }: Route.LoaderArgs) {
             category: (categories ?? []).find((category) => category.id === item.category_id) ?? null,
           })),
         invoice: (invoices ?? []).find((invoice) => invoice.order_id === order.id) ?? null,
+        mismatches: (mismatches ?? []).filter((mismatch) => mismatch.order_id === order.id),
       })),
     },
     { headers, status: 200 },
@@ -123,6 +138,23 @@ function Detail({ label, value }: { label: string; value: string | number }) {
 }
 
 function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => void }) {
+  const receivedCounts = getInitialReceivedCounts(
+    order.items.map((item) => ({
+      id: item.id,
+      name: item.category?.name ?? 'Laundry item',
+      service: item.service,
+      quantity: item.quantity,
+      confirmedQuantity: item.confirmed_quantity,
+    })),
+    order.mismatches.map((mismatch) => ({ id: mismatch.id, lines: mismatch.details })),
+    order.clothes_count_vendor,
+  )
+  const hasCompleteReceivedCounts = order.items.every((item) => receivedCounts[item.id] !== undefined)
+  const oneTimeInvoiceLineTotal =
+    !order.is_subscription_order && hasCompleteReceivedCounts
+      ? order.items.reduce((total, item) => total + Number(receivedCounts[item.id]) * item.unit_price, 0)
+      : null
+
   return (
     <div className="fixed inset-0 z-40 flex items-end justify-center overflow-y-auto bg-slate-950/40 p-0 sm:items-center sm:p-4">
       <div className="max-h-[calc(100vh-1rem)] w-full max-w-3xl overflow-y-auto rounded-t-3xl bg-white p-5 shadow-2xl sm:max-h-[calc(100vh-2rem)] sm:rounded-3xl sm:p-8">
@@ -151,22 +183,60 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
         <section className="mt-5 rounded-2xl border border-slate-200 p-4">
           <div className="flex items-center justify-between">
             <h4 className="font-bold text-slate-900">Items</h4>
-            <span className="text-sm text-slate-500">Customer count: {order.clothes_count_customer}</span>
+            <div className="text-right text-xs text-slate-500 sm:text-sm">
+              <p>Customer count: {order.clothes_count_customer}</p>
+              <p>Vendor count: {order.clothes_count_vendor ?? 'Not confirmed'}</p>
+            </div>
           </div>
-          <div className="mt-4 space-y-2">
+          <div className="mt-4 overflow-x-auto">
             {order.items.length === 0 ? (
               <p className="text-sm text-slate-500">No item details recorded.</p>
             ) : (
-              order.items.map((item) => (
-                <div key={item.id} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-3 text-sm">
-                  <span className="font-semibold text-slate-800">
-                    {item.category?.name ?? 'Laundry item'} {'\u00B7'} {serviceLabels[item.service]}
-                  </span>
-                  <span className="text-slate-600">
-                    {item.quantity} {'\u00D7'} {money(item.unit_price)}
-                  </span>
-                </div>
-              ))
+              <table className="w-full min-w-[640px] text-left text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 text-xs text-slate-500">
+                    <th className="px-2 py-2 font-semibold">Item / service</th>
+                    <th className="px-2 py-2 text-right font-semibold">Customer</th>
+                    <th className="px-2 py-2 text-right font-semibold">Vendor received</th>
+                    <th className="px-2 py-2 text-right font-semibold">Unit price</th>
+                    <th className="px-2 py-2 text-right font-semibold">Invoice line</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {order.items.map((item) => {
+                    const confirmedQuantity = receivedCounts[item.id]
+                    const lineAmount =
+                      order.is_subscription_order || confirmedQuantity === undefined
+                        ? null
+                        : confirmedQuantity * item.unit_price
+                    return (
+                      <tr key={item.id} className="border-b border-slate-100 last:border-0">
+                        <td className="px-2 py-3 font-semibold text-slate-800">
+                          {item.category?.name ?? 'Laundry item'} {'\u00B7'} {serviceLabels[item.service]}
+                        </td>
+                        <td className="px-2 py-3 text-right text-slate-600">{item.quantity}</td>
+                        <td className="px-2 py-3 text-right font-semibold text-slate-800">
+                          {confirmedQuantity ?? 'Not recorded'}
+                        </td>
+                        <td className="px-2 py-3 text-right text-slate-600">{money(item.unit_price)}</td>
+                        <td className="px-2 py-3 text-right font-semibold text-slate-800">
+                          {lineAmount === null ? (order.is_subscription_order ? 'Plan breakdown' : 'Not available') : money(lineAmount)}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+                {!order.is_subscription_order && oneTimeInvoiceLineTotal !== null && (
+                  <tfoot>
+                    <tr className="border-t border-slate-200">
+                      <th colSpan={4} className="px-2 pt-3 text-right text-sm font-bold text-slate-700">
+                        Calculated invoice total
+                      </th>
+                      <td className="px-2 pt-3 text-right text-sm font-bold text-slate-900">{money(oneTimeInvoiceLineTotal)}</td>
+                    </tr>
+                  </tfoot>
+                )}
+              </table>
             )}
           </div>
         </section>
@@ -176,6 +246,18 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
           <Detail label="Payment" value={order.invoice?.status === 'paid' ? 'Paid' : 'Pending'} />
           <Detail label="Service mode" value={order.is_subscription_order ? 'Subscription' : 'One-time'} />
         </section>
+        {order.is_subscription_order && order.invoice?.billing_breakdown && (
+          <section className="mt-3 grid gap-4 rounded-2xl border border-slate-200 bg-white p-4 sm:grid-cols-3">
+            <Detail label="Covered units" value={order.invoice.billing_breakdown.coveredUnits} />
+            <Detail label="Subscriber-rate charges" value={money(order.invoice.billing_breakdown.subscriberAmount)} />
+            <Detail label="Regular-rate charges" value={money(order.invoice.billing_breakdown.regularAmount)} />
+          </section>
+        )}
+        {order.is_subscription_order && order.invoice && !order.invoice.billing_breakdown && (
+          <p className="mt-3 rounded-xl bg-slate-50 px-4 py-3 text-xs text-slate-500">
+            A detailed subscription billing breakdown is not available for this invoice.
+          </p>
+        )}
         <section className="mt-5 rounded-2xl border border-slate-200 p-4">
           <h4 className="font-bold text-slate-900">Notes</h4>
           <p className="mt-2 text-sm text-slate-600">{order.notes || 'No notes recorded.'}</p>

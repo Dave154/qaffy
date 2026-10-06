@@ -201,14 +201,6 @@ export default function Home() {
     )
   }, [enteredOtp, orders])
 
-  const pickedUpOrders = useMemo(
-    () =>
-      orders.filter(
-        (order) => order.picked && matchesSelectedLocation(order) && isWithinRange(order.picked_up_date ?? order.created_at, selectedRange),
-      ),
-    [orders, selectedLocation, selectedRange],
-  )
-
   const pendingOrders = useMemo(
     () => orders.filter((order) => !order.picked && matchesSelectedLocation(order) && isWithinRange(order.created_at, selectedRange)),
     [orders, selectedLocation, selectedRange],
@@ -358,19 +350,16 @@ export default function Home() {
 
   const summary = {
     Today: {
-      pickedUp: pickedUpOrders.filter((order) => isWithinRange(order.created_at, 'Today')).length,
       pending: pendingOrders.filter((order) => isWithinRange(order.created_at, 'Today')).length,
       delivered: deliveredEvents.filter((event) => isWithinRange(event.created_at, 'Today')).length,
       pendingDelivery: pendingDeliveryOrders.filter((order) => isWithinRange(order.created_at, 'Today')).length,
     },
     'Last week': {
-      pickedUp: pickedUpOrders.filter((order) => isWithinRange(order.created_at, 'Last week')).length,
       pending: pendingOrders.filter((order) => isWithinRange(order.created_at, 'Last week')).length,
       delivered: deliveredEvents.filter((event) => isWithinRange(event.created_at, 'Last week')).length,
       pendingDelivery: pendingDeliveryOrders.filter((order) => isWithinRange(order.created_at, 'Last week')).length,
     },
     'Last month': {
-      pickedUp: pickedUpOrders.filter((order) => isWithinRange(order.created_at, 'Last month')).length,
       pending: pendingOrders.filter((order) => isWithinRange(order.created_at, 'Last month')).length,
       delivered: deliveredEvents.filter((event) => isWithinRange(event.created_at, 'Last month')).length,
       pendingDelivery: pendingDeliveryOrders.filter((order) => isWithinRange(order.created_at, 'Last month')).length,
@@ -439,7 +428,7 @@ export default function Home() {
             {activeTab === 'delivery' ? 'Delivered' : 'Picked up'}
           </div>
           <p className="mt-4 text-3xl font-bold text-slate-900">
-            {activeTab === 'delivery' ? summary[selectedRange].delivered : summary[selectedRange].pickedUp}
+            {activeTab === 'delivery' ? summary[selectedRange].delivered : pickedUpEvents.length}
           </p>
           <p className="mt-1 text-sm text-slate-500">
             {activeTab === 'delivery' ? 'Orders delivered' : 'Orders picked up'} in {selectedRange.toLowerCase()}

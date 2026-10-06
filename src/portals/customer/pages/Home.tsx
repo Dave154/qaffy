@@ -366,7 +366,7 @@ export default function Home() {
 
                 <div className="shrink-0 sm:ml-2">
                   {order.status === 'Pending payment' && order.total > 0 ? (
-                    <DeliveryOtpPaywall amount={order.total} onClick={() => setIsTopUpModalOpen(true)} />
+                    <DeliveryOtpPaywall amount={order.total} walletBalance={balance} onClick={() => setIsTopUpModalOpen(true)} />
                   ) : getVisibleOtp(order) ? (
                     <div className="flex items-start gap-3 sm:flex-col sm:items-end">
                       <div className="min-w-0">

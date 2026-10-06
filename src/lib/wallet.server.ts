@@ -447,6 +447,7 @@ export async function finalizeVendorOrder(
         const confirmedQuantity = confirmedQuantityById.get(item.id) ?? 0
         const difference = confirmedQuantity - originalQuantity
         return {
+          itemId: item.id,
           category: item.category_name,
           service: item.service,
           originalQuantity,
@@ -549,6 +550,7 @@ export async function finalizeVendorOrder(
             const originalQuantity = originalQuantityById.get(item.id) ?? 0
             const confirmedQuantity = confirmedQuantityById.get(item.id) ?? 0
             return {
+              itemId: item.id,
               category: item.category_name,
               service: item.service,
               originalQuantity,

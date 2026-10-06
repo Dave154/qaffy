@@ -48,7 +48,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       orderIds.length
         ? supabase
             .from('mismatches')
-            .select('id, order_id, direction, detail, created_at')
+            .select('id, order_id, direction, detail, details, created_at')
             .in('order_id', orderIds)
             .order('created_at', { ascending: false })
         : Promise.resolve({ data: [] }),

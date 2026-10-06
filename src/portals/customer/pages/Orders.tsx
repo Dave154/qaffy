@@ -56,7 +56,7 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function Orders() {
-  const { orders } = useCustomerStore()
+  const { orders, balance } = useCustomerStore()
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false)
   const [selectedOrder, setSelectedOrder] = useState<CustomerOrder | null>(null)
   const navigate = useNavigate()
@@ -213,7 +213,7 @@ export default function Orders() {
 
                 <div className="shrink-0 sm:ml-2">
                   {order.status === 'Pending payment' && order.total > 0 ? (
-                    <DeliveryOtpPaywall amount={order.total} onClick={() => navigate('/?topup=1')} />
+                    <DeliveryOtpPaywall amount={order.total} walletBalance={balance} onClick={() => navigate('/?topup=1')} />
                   ) : getVisibleOtp(order) ? (
                     <div className="flex items-start gap-3 sm:flex-col sm:items-end">
                       <div className="min-w-0">

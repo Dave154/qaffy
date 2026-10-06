@@ -262,16 +262,14 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
               <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-slate-500">Payment status</p>
               <p className="mt-2.5 font-semibold text-slate-900">{order?.paymentStatus}</p>
             </div>
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5 shadow-sm">
-              <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-slate-500">Pickup OTP</p>
-              {order?.pickedUp ? (
-                <p className="mt-2.5 text-sm font-medium text-slate-600">Unavailable: order already picked up.</p>
-              ) : (
+            {!order?.pickedUp && order?.pickupOtp && (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm sm:p-5">
+                <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-slate-500">Pickup OTP</p>
                 <div className="mt-2.5">
                   <ProtectedOtp value={order?.pickupOtp} digitClassName="h-9 w-9 text-sm" />
                 </div>
-              )}
-            </div>
+              </div>
+            )}
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5 shadow-sm">
               <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-slate-500">Delivery OTP</p>
               {order?.status === 'Delivered' ? (
@@ -281,7 +279,7 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
                   <ProtectedOtp value={order.deliveryOtp} digitClassName="h-9 w-9 text-sm" />
                 </div>
               ) : (
-                <p className="mt-2.5 text-sm font-medium text-slate-600">Not available yet: payment and dispatch are required.</p>
+                <p className="mt-2.5 text-sm font-medium text-slate-600">Not available yet: payment is required.</p>
               )}
             </div>
           </section>
