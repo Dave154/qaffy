@@ -86,13 +86,46 @@ export default function VerifyOtp() {
       const referralResponse = await fetch('/api/referrals/attribute', {
         method: 'POST',
         headers: sessionData.session?.access_token ? { Authorization: `Bearer ${sessionData.session.access_token}` } : undefined,
+      }).catch((error) => {
+        console.error('[referral] OTP attribution request failed', {
+          errorName: error instanceof Error ? error.name : 'UnknownError',
+        })
+        return null
       })
-      if (!referralResponse.ok) {
+      if (!referralResponse) {
+        setError('Your account was created, but referral status could not be confirmed. Please try again.')
+        setIsSubmitting(false)
+        return
+      }
+      const contentType = referralResponse.headers.get('Content-Type') ?? 'missing'
+      const referralResult = await referralResponse
+        .clone()
+        .json()
+        .catch(() => null) as { ok?: boolean; attributed?: boolean; reason?: string } | null
+      console.info('[referral] OTP attribution response', {
+        status: referralResponse.status,
+        contentType,
+        ok: referralResult?.ok === true,
+        attributed: referralResult?.attributed === true,
+        reason: referralResult?.reason ?? 'unavailable',
+      })
+      if (!referralResponse.ok || referralResult?.ok !== true) {
+        console.error('[referral] OTP attribution was not confirmed', {
+          status: referralResponse.status,
+          contentType,
+          reason: referralResult?.reason ?? 'unavailable',
+        })
         setError('Your account was created, but the referral could not be recorded. Please try again.')
         setIsSubmitting(false)
         return
       }
-      clearReferralCodeCookie()
+      if (referralResult.attributed === false && referralResult.reason !== 'no_referral_cookie') {
+        console.warn('[referral] OTP attribution was rejected', { reason: referralResult.reason ?? 'unspecified' })
+        setError('Your account was created, but the referral could not be linked. Please contact support.')
+        setIsSubmitting(false)
+        return
+      }
+      if (referralResult.attributed) clearReferralCodeCookie()
     }
 
     const { data: profile } = await supabase.from('profiles').select('role, name, phone').eq('id', userData.user.id).maybeSingle()

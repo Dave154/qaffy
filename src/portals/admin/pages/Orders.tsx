@@ -136,6 +136,7 @@ const statusStyles: Record<AdminOrder['status'], string> = {
 }
 const orderTypeLabels = { wash: 'Wash only', wash_iron: 'Wash + Iron', mixed: 'Mixed service' }
 const serviceLabels = { wash: 'Wash', iron: 'Iron', wash_iron: 'Wash + Iron' }
+const getCustomerItemCount = (order: AdminOrder) => order.items.reduce((total, item) => total + item.quantity, 0)
 const formatDate = (value: string | null) =>
   value
     ? new Date(value).toLocaleString('en-GB', {
@@ -207,7 +208,7 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
           <div className="flex items-center justify-between">
             <h4 className="font-bold text-slate-900">Items</h4>
             <div className="text-right text-xs text-slate-500 sm:text-sm">
-              <p>Customer count: {order.clothes_count_customer}</p>
+              <p>Customer count: {order.items.length > 0 ? getCustomerItemCount(order) : 'Not recorded'}</p>
               <p>Vendor count: {order.clothes_count_vendor ?? 'Not confirmed'}</p>
             </div>
           </div>
@@ -478,7 +479,7 @@ export default function Orders() {
         order.customer?.qaffy_id ?? 'Unavailable',
         orderTypeLabels[order.order_type],
         order.location?.name ?? 'Location pending',
-        order.clothes_count_customer,
+        order.items.length > 0 ? getCustomerItemCount(order) : 'Not recorded',
         order.invoice?.status === 'paid' ? 'Paid' : 'Pending',
         statusLabels[order.status],
       ]
@@ -530,10 +531,11 @@ export default function Orders() {
           </div>
         </div>
         <div className="overflow-x-auto p-4 md:p-5">
-          <table className="w-full min-w-[1280px] table-fixed text-left">
+          <table className="w-full min-w-[1400px] table-fixed text-left">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50 text-[10px] capitalize tracking-[0.12em] text-slate-500">
                 <th className="w-40 px-4 py-3 font-semibold">Created</th>
+                <th className="w-36 px-4 py-3 font-semibold">Order ID</th>
                 <th className="w-40 px-4 py-3 font-semibold">Pickup</th>
                 <th className="w-48 px-4 py-3 font-semibold">Customer</th>
                 <th className="w-36 px-4 py-3 font-semibold">Qaffy ID</th>
@@ -548,7 +550,7 @@ export default function Orders() {
             <tbody>
               {filteredOrders.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="px-4 py-8 text-center text-sm text-slate-500">
+                  <td colSpan={11} className="px-4 py-8 text-center text-sm text-slate-500">
                     No orders found.
                   </td>
                 </tr>
@@ -556,6 +558,7 @@ export default function Orders() {
                 filteredOrders.map((order) => (
                   <tr key={order.id} className="border-b border-slate-100 align-top last:border-0">
                     <td className="px-4 py-4 text-sm text-slate-700">{formatDate(order.created_at)}</td>
+                    <td className="px-4 py-4 text-sm font-semibold text-slate-700">{order.public_order_number}</td>
                     <td className="px-4 py-4 text-sm text-slate-700">{formatDate(order.picked_up_date)}</td>
                     <td className="px-4 py-4">
                       <div className="min-w-0">
@@ -566,7 +569,9 @@ export default function Orders() {
                     <td className="px-4 py-4 text-sm text-slate-700">{order.customer?.qaffy_id ?? 'Unavailable'}</td>
                     <td className="px-4 py-4 text-sm text-slate-700">{orderTypeLabels[order.order_type]}</td>
                     <td className="px-4 py-4 text-sm text-slate-700">{order.location?.name ?? 'Location pending'}</td>
-                    <td className="px-4 py-4 text-sm text-slate-700">{order.clothes_count_customer}</td>
+                    <td className="px-4 py-4 text-sm text-slate-700">
+                      {order.items.length > 0 ? getCustomerItemCount(order) : 'Not recorded'}
+                    </td>
                     <td className="px-4 py-4 text-sm text-slate-700">{order.invoice?.status === 'paid' ? 'Paid' : 'Pending'}</td>
                     <td className="px-4 py-4">
                       <span

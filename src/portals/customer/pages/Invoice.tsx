@@ -28,7 +28,7 @@ export async function action({ request }: Route.ActionArgs) {
       orderId: result.orderId,
       payload: walletInvoicePaidNotification(result.amount, result.publicOrderNumber, result.orderId),
     })
-    return data({ ok: true, deliveryOtp: result.deliveryOtp }, { headers })
+    return data({ ok: true }, { headers })
   } catch (error) {
     if (error instanceof InsufficientBalanceError)
       return data({ ok: false, message: 'Your wallet balance is too low for this invoice.' }, { status: 402, headers })

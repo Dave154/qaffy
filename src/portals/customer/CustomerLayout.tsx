@@ -202,7 +202,10 @@ export async function loader({ request }: Route.LoaderArgs) {
         }
       : null
 
-  const [{ data: referredRows }, { data: referrerRows }] = await Promise.all([
+  const [
+    { data: referredRows, error: referredRowsError },
+    { data: referrerRows, error: referrerRowsError },
+  ] = await Promise.all([
     serverSupabase
       .from('referrals')
       .select('id, referrer_id, referred_id, status, qualified_at, created_at')
@@ -214,11 +217,18 @@ export async function loader({ request }: Route.LoaderArgs) {
       .eq('referrer_id', userData.user.id)
       .order('created_at', { ascending: false }),
   ])
+  if (referredRowsError || referrerRowsError) {
+    console.error('[referral] Referral history query failed', {
+      side: referredRowsError && referrerRowsError ? 'both' : referredRowsError ? 'referred' : 'referrer',
+      errorCode: referredRowsError?.code ?? referrerRowsError?.code ?? 'unknown',
+    })
+    throw new Error('Referral history could not be loaded.')
+  }
   const referralRows = [...(referredRows ?? []), ...(referrerRows ?? [])].filter(
     (row, index, rows) => rows.findIndex((candidate) => candidate.id === row.id) === index,
   )
   const referralIds = referralRows.map((row) => row.id)
-  const { data: referralRewards } =
+  const { data: referralRewards, error: referralRewardsError } =
     referralIds.length > 0
       ? await serverSupabase
           .from('referral_rewards')
@@ -226,6 +236,12 @@ export async function loader({ request }: Route.LoaderArgs) {
           .in('referral_id', referralIds)
           .eq('recipient_id', userData.user.id)
       : { data: [] }
+  if (referralRewardsError) {
+    console.error('[referral] Referral reward history query failed', {
+      errorCode: referralRewardsError.code ?? 'unknown',
+    })
+    throw new Error('Referral reward history could not be loaded.')
+  }
   const persistedReferrals: CustomerReferral[] = referralRows.map((row) => {
     const reward = (referralRewards ?? []).find((candidate) => candidate.referral_id === row.id)
     return {

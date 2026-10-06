@@ -113,6 +113,7 @@ export type CustomerOrder = {
   action: string
   pickupOtp: string
   deliveryOtp?: string
+  dispatched: boolean
   pickedUp: boolean
   pickupDate?: string
   notes: string
@@ -335,7 +336,8 @@ function mapDatabaseOrder(
     items: order.clothes_count_customer,
     action: 'View details',
     pickupOtp: order.pickup_otp ?? '',
-    deliveryOtp: paymentStatus === 'Paid' ? order.delivery_otp ?? undefined : undefined,
+    deliveryOtp: paymentStatus === 'Paid' && order.status === 'out_for_delivery' ? order.delivery_otp ?? undefined : undefined,
+    dispatched: order.status === 'out_for_delivery',
     pickedUp: order.status !== 'pending_pickup',
     notes: order.notes ?? '',
     service: serviceMap[order.order_type],
@@ -532,6 +534,7 @@ export function CustomerStoreProvider({
           items: clothes,
           action: 'View details',
           pickupOtp: createOtp('QF', 2000 + idNumber),
+          dispatched: false,
           pickedUp: false,
           notes: notes || 'No special instructions added.',
           service,

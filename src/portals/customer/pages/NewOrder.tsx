@@ -7,6 +7,7 @@ import { supabase } from '../../../lib/supabase.client'
 import BubblyBackground from '../../../components/BubblyBackground'
 import CopyableOrderId from '../../../components/CopyableOrderId'
 import ProtectedOtp from '../../../components/ProtectedOtp'
+import DeliveryOtpStatus from '../../../components/DeliveryOtpStatus'
 import { toast } from '../../../lib/toast'
 import { calculateSubscriptionBilling } from '../../../lib/subscription-billing'
 import { addOrIncrementOrderLine } from '../../../lib/order-lines'
@@ -537,13 +538,19 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
                 </div>
               </div>
             )}
-            {order?.paymentStatus === 'Paid' && order.status !== 'Delivered' && order.deliveryOtp && (
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5 shadow-sm">
-                <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-slate-500">Delivery OTP</p>
-                <div className="mt-2.5">
-                  <ProtectedOtp value={order.deliveryOtp} digitClassName="h-9 w-9 text-sm" />
+            {order?.paymentStatus === 'Paid' && order.status !== 'Delivered' && (
+              order.dispatched && order.deliveryOtp ? (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm sm:p-5">
+                  <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-slate-500">Delivery OTP</p>
+                  <div className="mt-2.5">
+                    <ProtectedOtp value={order.deliveryOtp} digitClassName="h-9 w-9 text-sm" />
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm sm:p-5">
+                  <DeliveryOtpStatus />
+                </div>
+              )
             )}
           </section>
         )}

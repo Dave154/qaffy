@@ -15,19 +15,23 @@ export default function OtpFlow() {
     {
       label: 'Delivery OTP',
       detail: 'Use this to collect your clean clothes',
-      value: order?.paymentStatus === 'Paid' ? order.deliveryOtp : undefined,
+      value: order?.paymentStatus === 'Paid' && order.dispatched ? order.deliveryOtp : undefined,
     },
   ]
 
   const currentStep = otpSteps[activeStep]
   const unavailableMessage =
-    activeStep === 0 && order?.pickedUp
-      ? 'Picked up'
-      : activeStep === 1 && order?.status === 'Delivered'
+    activeStep === 0
+      ? order?.pickedUp
+        ? 'Picked up'
+        : 'Not ready'
+      : order?.status === 'Delivered'
         ? 'Delivered'
-        : activeStep === 1
-          ? 'Not ready'
-          : 'Not ready'
+        : order?.paymentStatus !== 'Paid'
+          ? 'Awaiting payment'
+          : !order?.dispatched
+            ? 'Awaiting dispatch'
+            : 'Not ready'
 
   return (
     <div className="space-y-5 pb-8">

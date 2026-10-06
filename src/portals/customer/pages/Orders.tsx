@@ -4,6 +4,7 @@ import OrderDetailModal from './OrderDetailModal'
 import CopyableOrderId from '../../../components/CopyableOrderId'
 import ProtectedOtp from '../../../components/ProtectedOtp'
 import DeliveryOtpPaywall from '../../../components/DeliveryOtpPaywall'
+import DeliveryOtpStatus from '../../../components/DeliveryOtpStatus'
 import { type CustomerOrder } from '../customer-store'
 import { useCustomerStore } from '../customer-store-hook'
 import { data, useNavigate, useSearchParams } from 'react-router'
@@ -125,7 +126,7 @@ export default function Orders() {
   }
   const getVisibleOtp = (order: (typeof orders)[number]) => {
     if (order.status === 'Awaiting pickup') return order.pickupOtp
-    if (order.paymentStatus === 'Paid' && order.status !== 'Delivered') return order.deliveryOtp ?? ''
+    if (order.paymentStatus === 'Paid' && order.dispatched && order.status !== 'Delivered') return order.deliveryOtp ?? ''
     return ''
   }
 
@@ -209,6 +210,8 @@ export default function Orders() {
                 <div className="shrink-0 sm:ml-2">
                   {order.status === 'Pending payment' && order.total > 0 ? (
                     <DeliveryOtpPaywall amount={order.total} walletBalance={balance} onClick={() => navigate('/?topup=1')} />
+                  ) : order.paymentStatus === 'Paid' && !order.dispatched && order.status !== 'Delivered' ? (
+                    <DeliveryOtpStatus />
                   ) : getVisibleOtp(order) ? (
                     <div className="flex items-start gap-3 sm:flex-col sm:items-end">
                       <div className="min-w-0">

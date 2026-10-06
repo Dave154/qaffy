@@ -365,7 +365,7 @@ export default function Home() {
     startOfWeek.setDate(startOfWeek.getDate() - 6)
     return orderDate >= startOfWeek
   })
-  const attentionOrders = visibleOrders.filter((order) => ['picked_up', 'at_vendor', 'invoiced'].includes(order.orderStatus))
+  const attentionOrders = visibleOrders.filter((order) => order.orderStatus === 'picked_up')
 
   const metrics = [
     {

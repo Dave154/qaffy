@@ -8,7 +8,12 @@ function normalizeReferralCode(value: string | null | undefined) {
   return /^QF[A-Z0-9]{6}$/.test(code) ? code : null
 }
 
-export function getReferralCodeFromRequest(request: Request) {
+type ReferralCookieRead = {
+  code: string | null
+  status: 'missing' | 'invalid' | 'valid'
+}
+
+export function readReferralCodeFromRequest(request: Request): ReferralCookieRead {
   const cookieHeader = request.headers.get('Cookie') ?? ''
   const value = cookieHeader
     .split(';')
@@ -16,18 +21,58 @@ export function getReferralCodeFromRequest(request: Request) {
     .find((part) => part.startsWith(`${referralCookieName}=`))
     ?.slice(referralCookieName.length + 1)
 
-  return normalizeReferralCode(value ? decodeURIComponent(value) : null)
+  if (value === undefined) return { code: null, status: 'missing' }
+
+  try {
+    const code = normalizeReferralCode(decodeURIComponent(value))
+    return code ? { code, status: 'valid' } : { code: null, status: 'invalid' }
+  } catch {
+    return { code: null, status: 'invalid' }
+  }
 }
 
 /**
  * Attributes a referral only for a newly-created customer profile.
  * The direct database transaction is intentional: referral attribution is not a client write.
  */
+export type ReferralAttributionResult =
+  | { attributed: true; reason: 'attributed' | 'recorded_without_active_campaign' }
+  | {
+      attributed: false
+      reason: ReferralAttributionRejectionReason
+    }
+
+type ReferralAttributionRejectionReason =
+  | 'invalid_code'
+  | 'profile_not_found'
+  | 'auth_user_not_found'
+  | 'already_attributed'
+  | 'profile_predates_auth_user'
+  | 'referrer_not_found'
+  | 'referral_already_exists'
+  | 'profile_attribution_conflict'
+
+const profileAuthTimestampSkewToleranceMs = 1_000
+
 type ReferralCampaignSnapshot = {
   referrerRewardValue: number
   referredRewardValue: number
   minimumOrderAmount: number
 } | null
+
+type ReferralAttributionRecord = {
+  referrerId: string
+  referralId: string
+  campaignActive: boolean
+  campaign: ReferralCampaignSnapshot
+}
+
+class ReferralAttributionConflict extends Error {
+  constructor() {
+    super('Referral attribution row already exists')
+    this.name = 'ReferralAttributionConflict'
+  }
+}
 
 async function notifyReferralParticipants(
   referrerId: string,
@@ -96,106 +141,171 @@ async function notifyReferralParticipants(
 
 export async function attributeReferral(profileId: string, referralCode: string) {
   const normalizedCode = normalizeReferralCode(referralCode)
-  if (!normalizedCode) return false
+  if (!normalizedCode) {
+    console.warn('[referral] Attribution rejected', { reason: 'invalid_code' })
+    return { attributed: false, reason: 'invalid_code' } satisfies ReferralAttributionResult
+  }
 
-  const attribution = await sql.begin(async (tx) => {
-    await tx`select set_config('qaffy.referral_attribution', 'true', true)`
+  let attribution: ReferralAttributionRecord | null = null
+  let rejectionReason: ReferralAttributionRejectionReason = 'profile_not_found'
 
-    const [profile] = await tx`
-      select p.id, p.referred_by, p.created_at, u.created_at as auth_created_at
-      from public.profiles p
-      join auth.users u on u.id = p.id
-      where p.id = ${profileId}
-      for update of p
-    `
-    if (!profile || profile.referred_by || new Date(profile.created_at) < new Date(profile.auth_created_at)) return null
+  try {
+    attribution = await sql.begin(async (tx) => {
+      await tx`select set_config('qaffy.referral_attribution', 'true', true)`
 
-    const [referrer] = await tx`
-      select id
-      from public.profiles
-      where referral_code = ${normalizedCode}
-        and role = 'customer'
-        and id <> ${profileId}
-      limit 1
-    `
-    if (!referrer) return null
+      const [profile] = await tx`
+        select p.id, p.referred_by, p.created_at, u.id as auth_user_id, u.created_at as auth_created_at
+        from public.profiles p
+        left join auth.users u on u.id = p.id
+        where p.id = ${profileId}
+        for update of p
+      `
+      if (!profile) {
+        rejectionReason = 'profile_not_found'
+        return null
+      }
+      if (!profile.auth_user_id || !profile.auth_created_at) {
+        rejectionReason = 'auth_user_not_found'
+        return null
+      }
+      if (profile.referred_by) {
+        rejectionReason = 'already_attributed'
+        return null
+      }
+      const profileCreatedAt = new Date(profile.created_at)
+      const authCreatedAt = new Date(profile.auth_created_at)
+      const profileCreatedAtMs = profileCreatedAt.getTime()
+      const authCreatedAtMs = authCreatedAt.getTime()
+      if (profileCreatedAtMs < authCreatedAtMs - profileAuthTimestampSkewToleranceMs) {
+        console.warn('[referral] New-account timestamp guard rejected attribution', {
+          profileCreatedAt: profileCreatedAt.toISOString(),
+          authCreatedAt: authCreatedAt.toISOString(),
+          deltaMilliseconds: profileCreatedAtMs - authCreatedAtMs,
+        })
+        rejectionReason = 'profile_predates_auth_user'
+        return null
+      }
 
-    const [campaign] = await tx`
-      select
-        id,
-        referrer_reward_value,
-        referred_reward_value,
-        minimum_order_amount,
-        reward_expiry_days,
-        max_rewards_per_referrer
-      from public.referral_campaigns
-      where status = 'active'
-        and (starts_at is null or starts_at <= now())
-        and (ends_at is null or ends_at > now())
-      order by starts_at desc nulls last, created_at desc
-      limit 1
-      for share
-    `
+      const [referrer] = await tx`
+        select id
+        from public.profiles
+        where referral_code = ${normalizedCode}
+          and role = 'customer'
+          and id <> ${profileId}
+        limit 1
+      `
+      if (!referrer) {
+        rejectionReason = 'referrer_not_found'
+        return null
+      }
 
-    const [updatedProfile] = await tx`
-      update public.profiles
-      set referred_by = ${referrer.id}
-      where id = ${profileId} and referred_by is null
-      returning id
-    `
-    if (!updatedProfile) return null
+      const [campaign] = await tx`
+        select
+          id,
+          referrer_reward_value,
+          referred_reward_value,
+          minimum_order_amount,
+          reward_expiry_days,
+          max_rewards_per_referrer
+        from public.referral_campaigns
+        where status = 'active'
+          and (starts_at is null or starts_at <= now())
+          and (ends_at is null or ends_at > now())
+        order by starts_at desc nulls last, created_at desc
+        limit 1
+        for share
+      `
 
-    const [referral] = await tx`
-      insert into public.referrals (
-        referrer_id,
-        referred_id,
-        campaign_id,
-        reward_type,
-        reward_value,
-        referrer_reward_value_snapshot,
-        referred_reward_value_snapshot,
-        minimum_order_amount_snapshot,
-        reward_expiry_days_snapshot,
-        max_rewards_per_referrer_snapshot,
-        status,
-        rejection_reason,
-        attributed_at
-      )
-      values (
-        ${referrer.id},
-        ${profileId},
-        ${campaign?.id ?? null},
-        ${campaign ? 'wallet_credit' : null},
-        ${campaign ? campaign.referrer_reward_value : null},
-        ${campaign?.referrer_reward_value ?? null},
-        ${campaign?.referred_reward_value ?? null},
-        ${campaign?.minimum_order_amount ?? null},
-        ${campaign?.reward_expiry_days ?? null},
-        ${campaign?.max_rewards_per_referrer ?? null},
-        ${campaign ? 'pending' : 'rejected'},
-        ${campaign ? null : 'No active referral campaign at attribution time'},
-        now()
-      )
-      on conflict (referred_id) do nothing
-      returning id, referrer_id, campaign_id, referrer_reward_value_snapshot, referred_reward_value_snapshot, minimum_order_amount_snapshot
-    `
-    if (!referral) return null
+      const [updatedProfile] = await tx`
+        update public.profiles
+        set referred_by = ${referrer.id}
+        where id = ${profileId} and referred_by is null
+        returning id
+      `
+      if (!updatedProfile) {
+        rejectionReason = 'profile_attribution_conflict'
+        return null
+      }
 
-    return {
-      referrerId: referral.referrer_id,
-      referralId: referral.id,
-      campaign: referral.campaign_id
-        ? {
-            referrerRewardValue: Number(referral.referrer_reward_value_snapshot),
-            referredRewardValue: Number(referral.referred_reward_value_snapshot),
-            minimumOrderAmount: Number(referral.minimum_order_amount_snapshot),
-          }
-        : null,
+      const [referral] = await tx`
+        insert into public.referrals (
+          referrer_id,
+          referred_id,
+          campaign_id,
+          reward_type,
+          reward_value,
+          referrer_reward_value_snapshot,
+          referred_reward_value_snapshot,
+          minimum_order_amount_snapshot,
+          reward_expiry_days_snapshot,
+          max_rewards_per_referrer_snapshot,
+          status,
+          rejection_reason,
+          attributed_at
+        )
+        values (
+          ${referrer.id},
+          ${profileId},
+          ${campaign?.id ?? null},
+          ${campaign ? 'wallet_credit' : null},
+          ${campaign ? campaign.referrer_reward_value : null},
+          ${campaign?.referrer_reward_value ?? null},
+          ${campaign?.referred_reward_value ?? null},
+          ${campaign?.minimum_order_amount ?? null},
+          ${campaign?.reward_expiry_days ?? null},
+          ${campaign?.max_rewards_per_referrer ?? null},
+          ${campaign ? 'pending' : 'rejected'},
+          ${campaign ? null : 'No active referral campaign at attribution time'},
+          now()
+        )
+        on conflict (referred_id) do nothing
+        returning id, referrer_id, campaign_id, referrer_reward_value_snapshot, referred_reward_value_snapshot, minimum_order_amount_snapshot
+      `
+      if (!referral) throw new ReferralAttributionConflict()
+
+      return {
+        referrerId: referral.referrer_id,
+        referralId: referral.id,
+        campaignActive: Boolean(referral.campaign_id),
+        campaign: referral.campaign_id
+          ? {
+              referrerRewardValue: Number(referral.referrer_reward_value_snapshot),
+              referredRewardValue: Number(referral.referred_reward_value_snapshot),
+              minimumOrderAmount: Number(referral.minimum_order_amount_snapshot),
+            }
+          : null,
+      }
+    })
+  } catch (error) {
+    if (error instanceof ReferralAttributionConflict) {
+      rejectionReason = 'referral_already_exists'
+    } else {
+      console.error('[referral] Attribution transaction failed', {
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+      })
+      throw error
     }
+  }
+
+  if (!attribution) {
+    console.warn('[referral] Attribution rejected', { reason: rejectionReason })
+    return { attributed: false, reason: rejectionReason } satisfies ReferralAttributionResult
+  }
+
+  console.info('[referral] Attribution recorded', {
+    campaignActive: attribution.campaignActive,
   })
 
-  if (!attribution) return false
+  try {
+    await notifyReferralParticipants(attribution.referrerId, profileId, attribution.referralId, attribution.campaign)
+  } catch (error) {
+    console.error('[referral] Attribution notification failed', {
+      errorName: error instanceof Error ? error.name : 'UnknownError',
+    })
+  }
 
-  await notifyReferralParticipants(attribution.referrerId, profileId, attribution.referralId, attribution.campaign)
-  return true
+  return {
+    attributed: true,
+    reason: attribution.campaignActive ? 'attributed' : 'recorded_without_active_campaign',
+  } satisfies ReferralAttributionResult
 }
