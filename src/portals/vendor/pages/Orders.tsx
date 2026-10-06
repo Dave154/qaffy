@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { data, Link, useFetcher, useOutletContext, useRevalidator } from 'react-router'
+import { data, useFetcher, useOutletContext, useRevalidator } from 'react-router'
 import { Search } from 'lucide-react'
 import { requireRole } from '../../../lib/auth.server'
 import { sql } from '../../../lib/db.server'
 import { sendCustomerNotification } from '../../../lib/notifications.server'
 import { toast } from '../../../lib/toast'
-import VendorOrderReviewDialog, { type VendorReviewOrder } from '../VendorOrderReviewDialog'
+import VendorOrderReviewDialog, { getInitialReceivedCounts, type VendorReviewOrder } from '../VendorOrderReviewDialog'
 import type { action as vendorHomeAction } from './Home'
 
 // eslint-disable-next-line react-refresh/only-export-components
@@ -92,6 +92,7 @@ type VendorOrder = {
   customer_id: string
   order_type: 'wash' | 'wash_iron' | 'mixed'
   status: 'pending_pickup' | 'picked_up' | 'at_vendor' | 'invoiced' | 'paid' | 'out_for_delivery' | 'delivered' | 'cancelled'
+  clothes_count_vendor: number | null
   created_at: string
   picked_up_date: string | null
   notes: string | null
@@ -106,7 +107,13 @@ type VendorOrder = {
     unit_price: number
     category: { name: string } | null
   }>
-  mismatches: Array<{ id: string; direction: 'over' | 'under'; detail: string | null; created_at: string }>
+  mismatches: Array<{
+    id: string
+    direction: 'over' | 'under'
+    detail: string | null
+    details: VendorReviewOrder['mismatches'][number]['lines']
+    created_at: string
+  }>
 }
 
 type VendorLayoutData = {
@@ -118,9 +125,9 @@ const statusLabels: Record<VendorOrder['status'], string> = {
   pending_pickup: 'Pending pickup',
   picked_up: 'Pending claim',
   at_vendor: 'Processing',
-  invoiced: 'Invoiced',
-  paid: 'Ready to dispatch',
-  out_for_delivery: 'Dispatched',
+  invoiced: 'Processing',
+  paid: 'Processing',
+  out_for_delivery: 'Processing',
   delivered: 'Completed',
   cancelled: 'Cancelled',
 }
@@ -151,6 +158,8 @@ export default function Orders() {
   const { revalidate } = useRevalidator()
   const handledFetcherData = useRef<typeof fetcher.data>(null)
   const handledReviewData = useRef<typeof reviewFetcher.data>(null)
+  const isClaimingOrder = (orderId: string) =>
+    fetcher.state !== 'idle' && fetcher.formData?.get('intent') === 'claim' && fetcher.formData?.get('orderId') === orderId
   const [query, setQuery] = useState('')
   const [activeTab, setActiveTab] = useState<'unclaimed' | 'processing' | 'ready' | 'dispatched' | 'delivered'>('processing')
   const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([])
@@ -197,6 +206,14 @@ export default function Orders() {
     [orders],
   )
 
+  const orderCounts = {
+    available: rows.filter((order) => order.status === 'picked_up').length,
+    processing: rows.filter((order) => ['at_vendor', 'invoiced', 'paid', 'out_for_delivery'].includes(order.status)).length,
+    ready: rows.filter((order) => order.status === 'paid').length,
+    dispatched: rows.filter((order) => order.status === 'out_for_delivery').length,
+    delivered: rows.filter((order) => order.status === 'delivered').length,
+  }
+
   const reviewOrder = useMemo<VendorReviewOrder | null>(() => {
     const order = orders.find((candidate) => candidate.id === reviewOrderId)
     if (!order) return null
@@ -206,6 +223,7 @@ export default function Orders() {
       customer: order.customer?.name ?? 'Customer',
       orderType: order.order_type,
       orderStatus: order.status,
+      confirmedCount: order.clothes_count_vendor,
       notes: order.notes ?? '',
       items: order.items.map((item) => ({
         id: item.id,
@@ -220,6 +238,7 @@ export default function Orders() {
         direction: mismatch.direction,
         detail: mismatch.detail ?? 'Mismatch recorded',
         createdAt: mismatch.created_at,
+        lines: mismatch.details ?? [],
       })),
     }
   }, [orders, reviewOrderId])
@@ -231,7 +250,7 @@ export default function Orders() {
       activeTab === 'unclaimed'
         ? order.status === 'picked_up'
         : activeTab === 'processing'
-          ? order.status === 'at_vendor'
+          ? ['at_vendor', 'invoiced', 'paid', 'out_for_delivery'].includes(order.status)
           : activeTab === 'ready'
             ? order.status === 'paid'
             : activeTab === 'dispatched'
@@ -264,17 +283,36 @@ export default function Orders() {
 
   const dispatchSelectedOrders = () => dispatchOrders(selectedOrderIds)
 
-  const openCountReview = (orderId: string) => {
+  const openOrderDetails = (orderId: string) => {
     const order = orders.find((candidate) => candidate.id === orderId)
-    if (!order || order.status !== 'at_vendor') return
+    if (!order) return
     setReviewOrderId(orderId)
     setReceived({
-      [orderId]: Object.fromEntries(
-        order.items.map((item) => [item.id, item.confirmed_quantity == null ? undefined : Math.max(1, item.confirmed_quantity)]),
+      [orderId]: getInitialReceivedCounts(
+        order.items.map((item) => ({
+          id: item.id,
+          name: item.category?.name ?? 'Laundry item',
+          service: item.service,
+          quantity: item.quantity,
+          confirmedQuantity: item.confirmed_quantity,
+        })),
+        order.mismatches.map((mismatch) => ({
+          id: mismatch.id,
+          direction: mismatch.direction,
+          detail: mismatch.detail ?? 'Mismatch recorded',
+          createdAt: mismatch.created_at,
+          lines: mismatch.details ?? [],
+        })),
+        order.clothes_count_vendor,
       ),
     })
     setReviewAddedItems([])
     setReviewNotes('')
+  }
+
+  const openCountReview = (orderId: string) => {
+    const order = orders.find((candidate) => candidate.id === orderId)
+    if (order?.status === 'at_vendor') openOrderDetails(orderId)
   }
 
   const saveCountReview = () => {
@@ -294,9 +332,6 @@ export default function Orders() {
   }
 
   const reviewReceived = reviewOrder ? (received[reviewOrder.id] ?? {}) : {}
-  const reviewReceivedTotal =
-    Object.values(reviewReceived).reduce<number>((total, quantity) => total + (quantity ?? 0), 0) +
-    reviewAddedItems.reduce((total, item) => total + item.quantity, 0)
   const reviewHasMismatch =
     (reviewOrder?.items.some((item) => {
       const receivedCount = reviewReceived[item.id]
@@ -308,8 +343,6 @@ export default function Orders() {
     setSelectedOrderIds([])
   }
 
-  const count = (label: string) => rows.filter((order) => order.label === label).length
-
   return (
     <div className="space-y-6">
       <header>
@@ -317,13 +350,11 @@ export default function Orders() {
         <p className="mt-2 text-sm text-slate-500">Review live customer orders and continue processing work.</p>
       </header>
 
-      <section className="grid grid-cols-3 gap-2 sm:gap-3 xl:grid-cols-5">
+      <section className="grid grid-cols-3 gap-2 sm:gap-3">
         {[
-          ['Available', count('Pending claim')],
-          ['Processing', count('Processing')],
-          ['Ready to dispatch', count('Ready to dispatch')],
-          ['Dispatched', count('Dispatched')],
-          ['Completed', count('Completed')],
+          ['Available', orderCounts.available],
+          ['Processing', orderCounts.processing],
+          ['Completed', orderCounts.delivered],
         ].map(([label, value]) => (
           <div key={label} className="min-h-24 min-w-0 rounded-[10px] border border-[#e9e9e9] bg-white p-2.5 sm:min-h-0 sm:p-4">
             <p className="break-words text-[10px] leading-4 text-slate-500 sm:text-xs">{label}</p>
@@ -345,11 +376,11 @@ export default function Orders() {
           </div>
           <div className="scrollbar-hidden flex flex-nowrap gap-2 overflow-x-auto pb-1">
             {[
-              ['unclaimed', 'Unclaimed', rows.filter((order) => order.status === 'picked_up').length],
-              ['processing', 'Processing', rows.filter((order) => order.status === 'at_vendor').length],
-              ['ready', 'Ready to dispatch', rows.filter((order) => order.status === 'paid').length],
-              ['dispatched', 'Dispatched', rows.filter((order) => order.status === 'out_for_delivery').length],
-              ['delivered', 'Delivered', rows.filter((order) => order.status === 'delivered').length],
+              ['unclaimed', 'Unclaimed', orderCounts.available],
+              ['processing', 'Processing', orderCounts.processing],
+              ['ready', 'Ready to dispatch', orderCounts.ready],
+              ['dispatched', 'Dispatched', orderCounts.dispatched],
+              ['delivered', 'Delivered', orderCounts.delivered],
             ].map(([value, label, count]) => (
               <button
                 key={value}
@@ -460,7 +491,7 @@ export default function Orders() {
                         disabled={fetcher.state !== 'idle'}
                         className="flex-1 rounded-[7px] border border-[#dedede] px-3 py-2.5 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary disabled:cursor-wait disabled:opacity-60"
                       >
-                        {fetcher.state !== 'idle' ? 'Claiming...' : 'Claim'}
+                        {isClaimingOrder(order.id) ? 'Claiming...' : 'Claim'}
                       </button>
                       ) : order.status === 'paid' ? (
                         <button
@@ -473,12 +504,13 @@ export default function Orders() {
                         </button>
                       ) : null}
                       {order.status !== 'picked_up' && (
-                        <Link
-                          to={`/vendor?orderId=${encodeURIComponent(order.id)}&returnTo=orders`}
-                          className="flex-1 rounded-[7px] border border-[#dedede] px-3 py-2.5 text-center text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary"
+                        <button
+                          type="button"
+                          onClick={() => openOrderDetails(order.id)}
+                          className="flex-1 rounded-[7px] border border-[#dedede] px-3 py-2.5 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary"
                         >
                           View details
-                        </Link>
+                        </button>
                       )}
                     </div>
                   )}
@@ -600,15 +632,16 @@ export default function Orders() {
                         disabled={fetcher.state !== 'idle'}
                         className="rounded-[7px] border border-[#dedede] px-3 py-2 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary disabled:cursor-wait disabled:opacity-60"
                       >
-                        {fetcher.state !== 'idle' ? 'Claiming...' : 'Claim'}
+                        {isClaimingOrder(order.id) ? 'Claiming...' : 'Claim'}
                       </button>
                     ) : (
-                      <Link
-                        to={`/vendor?orderId=${encodeURIComponent(order.id)}&returnTo=orders`}
+                      <button
+                        type="button"
+                        onClick={() => openOrderDetails(order.id)}
                         className="rounded-[7px] border border-[#dedede] px-3 py-2 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary"
                       >
                         View details
-                      </Link>
+                      </button>
                     )}
                   </td>
                 </tr>
@@ -622,7 +655,6 @@ export default function Orders() {
         <VendorOrderReviewDialog
           order={reviewOrder}
           received={reviewReceived}
-          receivedTotal={reviewReceivedTotal}
           hasMismatch={reviewHasMismatch}
           notes={reviewNotes}
           addedItems={reviewAddedItems}

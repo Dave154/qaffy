@@ -241,6 +241,7 @@ export interface Mismatch {
   direction: MismatchDirection
   detail: string | null
   details: Array<{
+    itemId?: string
     category: string
     service: 'wash' | 'iron' | 'wash_iron'
     originalQuantity: number

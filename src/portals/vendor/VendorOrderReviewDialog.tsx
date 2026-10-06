@@ -1,12 +1,15 @@
 import { useState } from 'react'
 import { AlertTriangle, PackageCheck } from 'lucide-react'
 
+export { getInitialReceivedCounts } from '../../lib/order-counts'
+
 export type VendorReviewOrder = {
   id: string
   publicOrderNumber: string
   customer: string
   orderType: 'wash' | 'wash_iron' | 'mixed'
   orderStatus: 'pending_pickup' | 'picked_up' | 'at_vendor' | 'invoiced' | 'paid' | 'out_for_delivery' | 'delivered' | 'cancelled'
+  confirmedCount: number | null
   notes: string
   items: Array<{
     id: string
@@ -16,24 +19,36 @@ export type VendorReviewOrder = {
     service: 'wash' | 'iron' | 'wash_iron'
     unitPrice: number
   }>
-  mismatches: Array<{ id: string; direction: 'over' | 'under'; detail: string; createdAt: string }>
+  mismatches: Array<{
+    id: string
+    direction: 'over' | 'under'
+    detail: string
+    createdAt: string
+    lines: VendorReviewMismatchLine[]
+  }>
 }
 
-type AddedItem = { categoryName: string; service: 'wash' | 'iron' | 'wash_iron'; quantity: number }
+export type VendorReviewAddedItem = { categoryName: string; service: 'wash' | 'iron' | 'wash_iron'; quantity: number }
+
+type VendorReviewMismatchLine = {
+  itemId?: string
+  category: string
+  service: 'wash' | 'iron' | 'wash_iron'
+  confirmedQuantity: number
+}
 
 type VendorOrderReviewDialogProps = {
   order: VendorReviewOrder
   received: Record<string, number | undefined>
-  receivedTotal: number
   hasMismatch: boolean
   notes: string
-  addedItems: AddedItem[]
+  addedItems: VendorReviewAddedItem[]
   categoryNames: string[]
   isPreClaim: boolean
   canEdit: boolean
   onReceivedChange: (itemId: string, value: number | undefined) => void
   onNotesChange: (value: string) => void
-  onAddedItemsChange: (items: AddedItem[]) => void
+  onAddedItemsChange: (items: VendorReviewAddedItem[]) => void
   onClose: () => void
   onSave: () => void
   onClaim: () => void
@@ -58,10 +73,10 @@ const orderTypeLabels: Record<VendorReviewOrder['orderType'], string> = {
 const orderStatusLabels: Record<VendorReviewOrder['orderStatus'], string> = {
   pending_pickup: 'Pending pickup',
   picked_up: 'Picked up',
-  at_vendor: 'Vendor processing',
-  invoiced: 'Invoiced',
-  paid: 'Paid',
-  out_for_delivery: 'Out for delivery',
+  at_vendor: 'Processing',
+  invoiced: 'Processing',
+  paid: 'Processing',
+  out_for_delivery: 'Processing',
   delivered: 'Delivered',
   cancelled: 'Cancelled',
 }
@@ -75,7 +90,6 @@ const serviceLabels: Record<VendorReviewOrder['items'][number]['service'], strin
 export default function VendorOrderReviewDialog({
   order,
   received,
-  receivedTotal,
   hasMismatch,
   notes,
   addedItems,
@@ -93,6 +107,10 @@ export default function VendorOrderReviewDialog({
   const [isConfirmationOpen, setIsConfirmationOpen] = useState(false)
   const [addedItemQuantityInputs, setAddedItemQuantityInputs] = useState<Record<number, string>>({})
   const allReceivedEntered = order.items.every((item) => received[item.id] !== undefined)
+  const enteredReceivedTotal =
+    Object.values(received).reduce<number>((total, quantity) => total + (quantity ?? 0), 0) +
+    addedItems.reduce((total, item) => total + item.quantity, 0)
+  const receivedTotal = canEdit ? enteredReceivedTotal : (order.confirmedCount ?? enteredReceivedTotal)
   const formattedDate = (value: string) => new Date(value).toLocaleString()
   const parsePositiveQuantity = (value: string) => {
     if (!/^\d+$/.test(value)) return null
@@ -328,11 +346,13 @@ export default function VendorOrderReviewDialog({
           {!isPreClaim && canEdit && hasMismatch && (
             <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
               <p className="font-semibold text-amber-800">Mismatch detected</p>
-              <p className="mt-1.5 text-sm text-amber-700">Describe what changed so the customer can understand the updated count.</p>
+              <p className="mt-1.5 text-sm text-amber-700">
+                Write the exact description of the clothes you received, e.g. 1 red shirt, 1 brown trouser.
+              </p>
               <textarea
                 value={notes}
                 onChange={(event) => onNotesChange(event.target.value)}
-                placeholder="e.g. 1 red shirt missing"
+                placeholder="e.g. 1 red shirt, 1 brown trouser"
                 className="mt-3 min-h-24 w-full rounded-xl border border-amber-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
               />
             </div>
