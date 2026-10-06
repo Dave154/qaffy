@@ -87,6 +87,7 @@ These items are **not complete yet**:
 - Add date-range filtering to the Orders page.
 - Add CSV export for the currently filtered order results only, using the active search/status/date filters.
 - Keep export data aligned with the visible order table and avoid exporting internal OTPs or unnecessary sensitive fields.
+- **Order cancellation:** customers and admins may cancel an order only while it is awaiting pickup (`pending_pickup` and not picked up). Pickup makes cancellation unavailable. Cancellation changes only the order status to `cancelled`, sends no notification, and hides the order from customer, vendor, and logistics views while retaining it for admins. Apply `supabase/migrations/20261006110000_hide_cancelled_orders.sql` to enforce admin-only visibility through RLS.
 
 #### Admin Overview
 
@@ -99,12 +100,13 @@ These items are **not complete yet**:
 
 - Hide the Cancelled order metric for now; retain the underlying status data for future use.
 - Subscription start and end dates should populate automatically from the selected plan and current semester settings when an admin creates a subscription. Manual date overrides should not be required for the standard flow.
+- Admins can cancel an active subscription by changing its existing status to `cancelled`. This stops it qualifying as active for future orders, sends no customer notification, and preserves the subscription record and existing order snapshots.
 
 ### Phase 1 Progress
 
 - Admin Overview now loads live order, customer, vendor, logistics, invoice, subscription, and plan data.
 - Admin Overview now includes live seven-day order/revenue charts, pipeline bars, subscriber mix, KPI cards, and recent activity.
-- Admin Orders is registered at `/admin/orders` with live rows, search, status filtering, truncation, payment/status badges, and a read-only order detail modal.
+- Admin Orders is registered at `/admin/orders` with live rows, search, status filtering, truncation, payment/status badges, and an order detail modal. Admins can cancel orders that are still awaiting pickup; customers have the same pre-pickup action on their Orders page.
 - Admin Partners now supports vendor and logistics onboarding, approval, suspension, rejection, and deletion flows.
 - Admin Categories and Rates now supports category creation, updates, activation, archival-safe deletion behavior, and customer/vendor pricing controls.
 - Admin Mismatch Review is a read-only accountability view with search, direction filtering, compact/truncated rows, a detail modal, and a modal-only link to the exact Admin order detail.

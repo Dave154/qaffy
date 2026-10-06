@@ -90,6 +90,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     .from('orders')
     .select('*')
     .eq('customer_id', userData.user.id)
+    .neq('status', 'cancelled')
     .order('created_at', { ascending: false })
 
   const invoiceOrderIds = (orders ?? []).map((order) => order.id)
@@ -139,11 +140,15 @@ export async function loader({ request }: Route.LoaderArgs) {
     .order('created_at', { ascending: false })
     .limit(20)
 
-  const { data: invoiceRows } = await serverSupabase
-    .from('invoices')
-    .select('*, orders!inner(customer_id)')
-    .eq('orders.customer_id', userData.user.id)
-    .order('created_at', { ascending: false })
+  const { data: invoiceRows } =
+    orderIds.length > 0
+      ? await serverSupabase
+          .from('invoices')
+          .select('*, orders!inner(customer_id)')
+          .eq('orders.customer_id', userData.user.id)
+          .in('order_id', orderIds)
+          .order('created_at', { ascending: false })
+      : { data: [] }
   const customerInvoiceOrderIds = (invoiceRows ?? []).map((invoice) => invoice.order_id)
   const { data: invoiceMismatches } =
     customerInvoiceOrderIds.length > 0
@@ -438,7 +443,7 @@ export default function CustomerLayout() {
 
   return (
     <CustomerStoreProvider
-      key={`${loaderData?.profile?.id ?? 'customer'}:${loaderData?.profile?.name ?? ''}:${loaderData?.profile?.phone ?? ''}:${loaderData?.profile?.referral_code ?? ''}:${loaderData?.wallet?.updated_at ?? 'no-wallet'}:${loaderData?.subscription?.id ?? 'no-subscription'}:${loaderData?.subscription?.end_date ?? ''}:${(loaderData?.orders ?? []).map((order) => `${order.id}-${order.status}-${order.pickup_otp ?? ''}-${order.delivery_otp ?? ''}-${order.clothes_count_vendor ?? ''}`).join('|')}:${(loaderData?.payments ?? []).map((payment) => `${payment.id}-${payment.status}`).join('|')}:${(loaderData?.persistedReferrals ?? []).map((referral) => `${referral.id}-${referral.status}-${referral.rewardStatus ?? ''}`).join('|')}`}
+      key={`${loaderData?.profile?.id ?? 'customer'}:${loaderData?.profile?.name ?? ''}:${loaderData?.profile?.phone ?? ''}:${loaderData?.profile?.referral_code ?? ''}:${loaderData?.profile?.pickup_location_id ?? ''}:${loaderData?.wallet?.updated_at ?? 'no-wallet'}:${loaderData?.subscription?.id ?? 'no-subscription'}:${loaderData?.subscription?.end_date ?? ''}:${(loaderData?.orders ?? []).map((order) => `${order.id}-${order.status}-${order.pickup_otp ?? ''}-${order.delivery_otp ?? ''}-${order.clothes_count_vendor ?? ''}`).join('|')}:${(loaderData?.payments ?? []).map((payment) => `${payment.id}-${payment.status}`).join('|')}:${(loaderData?.persistedReferrals ?? []).map((referral) => `${referral.id}-${referral.status}-${referral.rewardStatus ?? ''}`).join('|')}`}
       profile={loaderData?.profile ?? undefined}
       persistedOrders={loaderData ? (loaderData.orders as Order[]) : undefined}
       persistedUnpaidInvoiceOrderIds={loaderData?.unpaidInvoiceOrderIds as string[] | undefined}

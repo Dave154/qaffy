@@ -24,6 +24,7 @@ export async function loader({ request }: Route.LoaderArgs) {
         .from('orders')
         .select('*')
         .or(`vendor_id.eq.${vendor.id},and(vendor_id.is.null,status.eq.picked_up)`)
+        .neq('status', 'cancelled')
         .order('created_at', { ascending: false })
     : { data: [] }
   const orderIds = (orders ?? []).map((order) => order.id)
