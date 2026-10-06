@@ -1,8 +1,11 @@
 import { createServerClient, parseCookieHeader, serializeCookieHeader } from '@supabase/ssr'
 import type { Database } from '@/types/database.types'
+import { getSessionCookieOptions } from './session-cookie-options'
 
 export function getSupabaseServerClient(request: Request) {
   const headers = new Headers()
+  const cookies = parseCookieHeader(request.headers.get('Cookie') ?? '')
+  const rememberSession = cookies.find(({ name }) => name === 'qaffy-remember-session')?.value !== 'false'
 
   const supabaseUrl = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL
   const supabaseAnonKey = process.env.SUPABASE_ANON_KEY ?? process.env.VITE_SUPABASE_ANON_KEY
@@ -14,11 +17,11 @@ export function getSupabaseServerClient(request: Request) {
   const supabase = createServerClient<Database>(supabaseUrl, supabaseAnonKey, {
     cookies: {
       getAll() {
-        return parseCookieHeader(request.headers.get('Cookie') ?? '')
+        return cookies
       },
       setAll(cookiesToSet) {
         for (const { name, value, options } of cookiesToSet) {
-          headers.append('Set-Cookie', serializeCookieHeader(name, value, options))
+          headers.append('Set-Cookie', serializeCookieHeader(name, value, getSessionCookieOptions(options, rememberSession)))
         }
       },
     },

@@ -1,7 +1,7 @@
 import { redirect } from 'react-router'
 import type { Route } from './+types/AuthCallback'
 import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
-import { attributeReferral, getReferralCodeFromRequest } from '../../../lib/referrals.server'
+import { attributeReferral, readReferralCodeFromRequest } from '../../../lib/referrals.server'
 
 function getCallbackErrorMessage(role: string | null, error: string | null, description: string | null) {
   if (error === 'access_denied' || description?.toLowerCase().includes('cancel')) return 'Google sign-in was cancelled.'
@@ -126,13 +126,24 @@ export async function loader({ request }: Route.LoaderArgs) {
     throw redirect(nextPath, { headers })
   }
 
-  const referralCode = getReferralCodeFromRequest(request)
-  if (expectedRole === 'customer' && referralCode) {
+  const referralCookie = readReferralCodeFromRequest(request)
+  if (expectedRole === 'customer') {
+    console.info('[referral] Google callback referral cookie status', { status: referralCookie.status })
+  }
+  if (expectedRole === 'customer' && referralCookie.code) {
     try {
-      await attributeReferral(userData.user.id, referralCode)
-      headers.append('Set-Cookie', 'qaffy_referral_code=; Max-Age=0; Path=/; SameSite=Lax')
-    } catch {
-      // Keep authentication successful; a later authenticated attribution attempt can retry safely.
+      const result = await attributeReferral(userData.user.id, referralCookie.code)
+      console.info('[referral] Google callback attribution result', {
+        attributed: result.attributed,
+        reason: result.reason,
+      })
+      if (result.attributed) {
+        headers.append('Set-Cookie', 'qaffy_referral_code=; Max-Age=0; Path=/; SameSite=Lax')
+      }
+    } catch (error) {
+      console.error('[referral] Google callback attribution failed', {
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+      })
     }
   }
 

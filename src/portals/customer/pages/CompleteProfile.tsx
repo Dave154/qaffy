@@ -22,6 +22,11 @@ export default function CompleteProfile() {
       return
     }
 
+    if (!/^\d{10}$/.test(phone)) {
+      setError('Enter a 10-digit mobile number using numbers only.')
+      return
+    }
+
     if (!isSupabaseConfigured || !supabase) {
       setError('Supabase is not configured. Add the required environment variables to continue.')
       return
@@ -84,9 +89,13 @@ export default function CompleteProfile() {
             <input
               aria-label="Phone number"
               type="tel"
+              inputMode="numeric"
+              autoComplete="tel-national"
+              maxLength={10}
+              pattern="[0-9]{10}"
               value={phone}
-              onChange={(event) => setPhone(event.target.value)}
-              placeholder="0803 123 4567"
+              onChange={(event) => setPhone(event.target.value.replace(/\D/g, '').slice(0, 10))}
+              placeholder="0803123456"
               className="h-14 w-full rounded-lg border border-field-border bg-white px-4 text-[14px] font-semibold text-black outline-none transition placeholder:text-field-placeholder focus:border-field-focus focus:ring-2 focus:ring-field-focus-soft"
             />
             {error && (

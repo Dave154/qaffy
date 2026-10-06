@@ -22,6 +22,7 @@ import TopUpModal from './TopUpModal'
 import CopyableOrderId from '../../../components/CopyableOrderId'
 import ProtectedOtp from '../../../components/ProtectedOtp'
 import DeliveryOtpPaywall from '../../../components/DeliveryOtpPaywall'
+import DeliveryOtpStatus from '../../../components/DeliveryOtpStatus'
 import { useCustomerStore } from '../customer-store-hook'
 import { ensurePushSubscription, getPushSubscription, savePushSubscription } from '../../../lib/push.client'
 import BubblyBackground from '../../../components/BubblyBackground'
@@ -100,10 +101,12 @@ export default function Home() {
   const [pushSetupMessage, setPushSetupMessage] = useState('')
   const topUpFetcher = useFetcher<typeof action>()
   const activeOrderCount = orders.filter((order) => order.status !== 'Delivered').length
-  const pendingPaymentTotal = orders.filter((order) => order.status === 'Pending payment').reduce((total, order) => total + order.total, 0)
+  const pendingPaymentTotal = orders
+    .filter((order) => order.paymentStatus === 'Pending' && order.status !== 'Delivered')
+    .reduce((total, order) => total + order.total, 0)
   const getVisibleOtp = (order: (typeof orders)[number]) => {
     if (order.status === 'Awaiting pickup') return order.pickupOtp
-    if (order.deliveryOtp) return order.deliveryOtp
+    if (order.paymentStatus === 'Paid' && order.dispatched && order.deliveryOtp) return order.deliveryOtp
     return ''
   }
   const getVisibleOtpLabel = (order: (typeof orders)[number]) => (order.status === 'Awaiting pickup' ? 'Pickup OTP' : 'Delivery OTP')
@@ -111,6 +114,7 @@ export default function Home() {
     (firstOrder, secondOrder) => new Date(secondOrder.createdAt).getTime() - new Date(firstOrder.createdAt).getTime(),
   )
   const getAmountLabel = (order: (typeof orders)[number]) => {
+    if (order.paymentStatus === 'Pending' && order.total > 0) return `Payment due · ₦${order.total.toLocaleString()}`
     if (order.total > 0) return `₦${order.total.toLocaleString()}`
     if (order.status === 'In progress') return 'Final billing pending'
     if (order.isSubscriptionOrder && ['Ready for delivery', 'Delivered'].includes(order.status)) return 'Covered by plan'
@@ -367,6 +371,8 @@ export default function Home() {
                 <div className="shrink-0 sm:ml-2">
                   {order.status === 'Pending payment' && order.total > 0 ? (
                     <DeliveryOtpPaywall amount={order.total} walletBalance={balance} onClick={() => setIsTopUpModalOpen(true)} />
+                  ) : order.paymentStatus === 'Paid' && !order.dispatched && order.status !== 'Delivered' ? (
+                    <DeliveryOtpStatus />
                   ) : getVisibleOtp(order) ? (
                     <div className="flex items-start gap-3 sm:flex-col sm:items-end">
                       <div className="min-w-0">

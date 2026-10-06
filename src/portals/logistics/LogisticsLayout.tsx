@@ -1,9 +1,10 @@
-import { Outlet, data, useLoaderData, useNavigate, useRevalidator } from 'react-router'
+import { Link, Outlet, data, useLoaderData, useNavigate, useRevalidator } from 'react-router'
 import { useEffect, useState } from 'react'
 import { LogOut } from 'lucide-react'
 import type { Route } from './+types/LogisticsLayout'
 import QaffyLogo from '../../components/QaffyLogo'
 import { requireRole } from '../../lib/auth.server'
+import { sql } from '../../lib/db.server'
 import { supabase } from '../../lib/supabase.client'
 
 // eslint-disable-next-line react-refresh/only-export-components
@@ -37,9 +38,21 @@ export async function loader({ request }: Route.LoaderArgs) {
     .in('status', relevantStatuses)
     .order('created_at', { ascending: false })
 
+  const paidDispatchedOrders = await sql`
+    select o.id
+    from orders o
+    join invoices i on i.order_id = o.id
+    where o.status = 'out_for_delivery'
+      and i.status = 'paid'
+  `
+  const paidDispatchedOrderIds = new Set(paidDispatchedOrders.map((order) => order.id))
+  const visibleOrders = (ordersData ?? []).filter(
+    (order) => order.status !== 'out_for_delivery' || paidDispatchedOrderIds.has(order.id),
+  )
+
   const logisticsEvents = agentEvents ?? []
 
-  const customerIds = [...new Set((ordersData ?? []).map((order) => order.customer_id).filter(Boolean))]
+  const customerIds = [...new Set(visibleOrders.map((order) => order.customer_id).filter(Boolean))]
   const profileMap = new Map<string, { name: string | null; uid: string | null }>()
 
   if (customerIds.length > 0) {
@@ -54,7 +67,7 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   const locationIds = [
     ...new Set(
-      (ordersData ?? []).map((order) => order.pickup_location_id).filter((id): id is string => typeof id === 'string' && id.length > 0),
+      visibleOrders.map((order) => order.pickup_location_id).filter((id): id is string => typeof id === 'string' && id.length > 0),
     ),
   ]
   const locationMap = new Map<string, string>()
@@ -69,7 +82,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     }
   }
 
-  const expandedOrders = (ordersData ?? []).map((order) => ({
+  const expandedOrders = visibleOrders.map((order) => ({
     ...order,
     customer_name: profileMap.get(order.customer_id)?.name ?? 'Customer',
     customer_uid: profileMap.get(order.customer_id)?.uid ?? null,
@@ -116,7 +129,13 @@ export default function LogisticsLayout() {
         <div className="mx-auto flex max-w-5xl items-center justify-between px-5 py-4 sm:px-6">
           <div className="flex items-center gap-3 sm:gap-4">
             <div className="flex shrink-0 flex-col items-start justify-center gap-3 pt-0.5">
-              <QaffyLogo className="inline-flex" />
+              <Link
+                to="/logistics"
+                aria-label="Go to logistics home"
+                className="inline-flex rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary"
+              >
+                <QaffyLogo className="inline-flex" />
+              </Link>
               <p className="pl-0.5 text-[10px] font-semibold capitalize tracking-[0.18em] text-brand-primary">Logistics</p>
             </div>
             <div className="min-w-0 max-w-[180px] text-left sm:max-w-[260px]">
