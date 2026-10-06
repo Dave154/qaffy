@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import NewOrder from './NewOrder'
 import OrderDetailModal from './OrderDetailModal'
 import CopyableOrderId from '../../../components/CopyableOrderId'
@@ -7,11 +7,13 @@ import DeliveryOtpPaywall from '../../../components/DeliveryOtpPaywall'
 import DeliveryOtpStatus from '../../../components/DeliveryOtpStatus'
 import { type CustomerOrder } from '../customer-store'
 import { useCustomerStore } from '../customer-store-hook'
-import { data, useNavigate, useSearchParams } from 'react-router'
+import { data, useFetcher, useNavigate, useSearchParams } from 'react-router'
 import type { Route } from './+types/Orders'
 import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
+import { sql } from '../../../lib/db.server'
 import { chargeSubscriptionInvoice, debitOneOffInvoice, InsufficientBalanceError } from '../../../lib/wallet.server'
 import { sendCustomerNotification, walletInvoicePaidNotification } from '../../../lib/notifications.server'
+import { toast } from '../../../lib/toast'
 
 // eslint-disable-next-line react-refresh/only-export-components
 export async function action({ request }: Route.ActionArgs) {
@@ -22,6 +24,39 @@ export async function action({ request }: Route.ActionArgs) {
   if (!userData.user) return data({ ok: false, message: 'Please sign in again.' }, { status: 401, headers })
 
   const formData = await request.formData()
+  const intent = String(formData.get('intent') ?? '')
+  if (intent === 'cancel-order') {
+    const orderId = String(formData.get('orderId') ?? '')
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(orderId)) {
+      return data({ ok: false, intent, orderId, message: 'Invalid order.' }, { status: 400, headers })
+    }
+
+    try {
+      const [cancelledOrder] = await sql`
+        update orders
+        set status = 'cancelled'
+        where id = ${orderId}
+          and customer_id = ${userData.user.id}
+          and status = 'pending_pickup'
+          and picked = false
+        returning id
+      `
+      if (!cancelledOrder) {
+        return data(
+          { ok: false, intent, orderId, message: 'This order is no longer awaiting pickup and cannot be cancelled.' },
+          { status: 409, headers },
+        )
+      }
+      return data({ ok: true, intent, orderId }, { headers })
+    } catch (error) {
+      console.error('[orders] Customer cancellation failed', error)
+      return data(
+        { ok: false, intent, orderId, message: 'The order could not be cancelled. Please try again.' },
+        { status: 500, headers },
+      )
+    }
+  }
+
   const invoiceId = String(formData.get('invoiceId') ?? '')
   const balanceType = String(formData.get('balanceType') ?? 'subscription')
   if (!invoiceId) return data({ ok: false, message: 'Invoice is missing.' }, { status: 400, headers })
@@ -52,18 +87,22 @@ export async function action({ request }: Route.ActionArgs) {
 
 export default function Orders() {
   const { orders, balance } = useCustomerStore()
+  const cancelFetcher = useFetcher<typeof action>()
+  const handledCancelResponse = useRef<typeof cancelFetcher.data>(null)
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false)
   const [selectedOrder, setSelectedOrder] = useState<CustomerOrder | null>(null)
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const [activeFilter, setActiveFilter] = useState(() => searchParams.get('filter') ?? 'All orders')
   const searchQuery = (searchParams.get('search') ?? '').trim().toLowerCase()
+  const visibleOrders = orders.filter((order) => order.status !== 'Cancelled')
   const requestedOrderId = searchParams.get('order')
   const returnTo = searchParams.get('returnTo') ?? '/orders'
   const requestedOrder = requestedOrderId
-    ? (orders.find((order) => order.publicOrderNumber === requestedOrderId || order.id === requestedOrderId) ?? null)
+    ? (visibleOrders.find((order) => order.publicOrderNumber === requestedOrderId || order.id === requestedOrderId) ?? null)
     : null
-  const orderDetails = requestedOrder ?? selectedOrder
+  const currentSelectedOrder = selectedOrder ? (visibleOrders.find((order) => order.id === selectedOrder.id) ?? null) : null
+  const orderDetails = requestedOrder ?? currentSelectedOrder
 
   const closeOrderDetails = () => {
     setSelectedOrder(null)
@@ -91,7 +130,7 @@ export default function Orders() {
     }
   }
 
-  const filteredOrders = orders.filter((order) => {
+  const filteredOrders = visibleOrders.filter((order) => {
     const matchesFilter =
       activeFilter === 'Active'
         ? order.status !== 'Delivered'
@@ -108,13 +147,13 @@ export default function Orders() {
   })
 
   const stats = [
-    { label: 'Total orders', value: String(orders.length), helper: 'In your history' },
+    { label: 'Total orders', value: String(visibleOrders.length), helper: 'In your history' },
     {
       label: 'Active',
-      value: String(orders.filter((order) => order.status !== 'Delivered').length).padStart(2, '0'),
+      value: String(visibleOrders.filter((order) => order.status !== 'Delivered').length).padStart(2, '0'),
       helper: 'In progress',
     },
-    { label: 'Delivered', value: String(orders.filter((order) => order.status === 'Delivered').length), helper: 'Completed' },
+    { label: 'Delivered', value: String(visibleOrders.filter((order) => order.status === 'Delivered').length), helper: 'Completed' },
   ]
 
   const getAmountLabel = (order: (typeof orders)[number]) => {
@@ -129,6 +168,19 @@ export default function Orders() {
     if (order.paymentStatus === 'Paid' && order.dispatched && order.status !== 'Delivered') return order.deliveryOtp ?? ''
     return ''
   }
+
+  useEffect(() => {
+    const result = cancelFetcher.data
+    if (cancelFetcher.state !== 'idle' || !result || handledCancelResponse.current === result) return
+    handledCancelResponse.current = result
+
+    if (result.ok) {
+      toast.success('Order cancelled.')
+      return
+    }
+
+    toast.error('message' in result && typeof result.message === 'string' ? result.message : 'The order could not be cancelled.')
+  }, [cancelFetcher.data, cancelFetcher.state])
 
   return (
     <div className="space-y-6 pb-8">
@@ -234,14 +286,37 @@ export default function Orders() {
 
               <div className="mt-4 flex flex-row flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-3">
                 <p className="text-sm text-slate-600">{order.pickup}</p>
-                <button
-                  type="button"
-                  onClick={() => setSelectedOrder(order)}
-                  className="rounded-lg border border-brand-border bg-white px-3.5 py-2 text-sm font-semibold text-brand-primary hover:bg-brand-soft"
-                >
-                  {order.action}
-                </button>
-              </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          {order.status === 'Awaiting pickup' && (
+                            <cancelFetcher.Form
+                              method="post"
+                              onSubmit={(event) => {
+                                if (!window.confirm('Are you sure you want to cancel this order?')) event.preventDefault()
+                              }}
+                            >
+                              <input type="hidden" name="intent" value="cancel-order" />
+                              <input type="hidden" name="orderId" value={order.id} />
+                              <button
+                                type="submit"
+                                disabled={cancelFetcher.state !== 'idle'}
+                                className="rounded-lg border border-rose-200 bg-white px-3.5 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                              >
+                                {cancelFetcher.state !== 'idle' && cancelFetcher.formData?.get('orderId') === order.id
+                                  ? 'Cancelling…'
+                                  : 'Cancel order'}
+                              </button>
+                            </cancelFetcher.Form>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setSelectedOrder(order)}
+                            disabled={cancelFetcher.state !== 'idle' && cancelFetcher.formData?.get('orderId') === order.id}
+                            className="rounded-lg border border-brand-border bg-white px-3.5 py-2 text-sm font-semibold text-brand-primary hover:bg-brand-soft disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {order.action}
+                          </button>
+                        </div>
+                      </div>
             </article>
           ))}
           {filteredOrders.length === 0 && (

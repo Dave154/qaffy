@@ -13,7 +13,14 @@ import type {
   WalletTransaction,
 } from '../../types/database.types'
 
-export type OrderStatus = 'Awaiting pickup' | 'Picked up' | 'In progress' | 'Pending payment' | 'Ready for delivery' | 'Delivered'
+export type OrderStatus =
+  | 'Awaiting pickup'
+  | 'Picked up'
+  | 'In progress'
+  | 'Pending payment'
+  | 'Ready for delivery'
+  | 'Delivered'
+  | 'Cancelled'
 export type OrderLine = {
   category: string
   service: string
@@ -290,7 +297,7 @@ function mapDatabaseOrder(
     paid: 'Ready for delivery',
     out_for_delivery: 'Ready for delivery',
     delivered: 'Delivered',
-    cancelled: 'Delivered',
+    cancelled: 'Cancelled',
   }
 
   const serviceMap: Record<Order['order_type'], string> = {

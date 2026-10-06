@@ -1,9 +1,11 @@
-﻿import { data, useLoaderData, useSearchParams } from 'react-router'
-import { useEffect, useMemo, useState } from 'react'
+import { data, useFetcher, useLoaderData, useSearchParams } from 'react-router'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { SlidersHorizontal, X } from 'lucide-react'
 import type { Route } from './+types/Orders'
 import { requireRole } from '../../../lib/auth.server'
 import { getInitialReceivedCounts } from '../../../lib/order-counts'
+import { sql } from '../../../lib/db.server'
+import { toast } from '../../../lib/toast'
 
 type AdminOrder = {
   id: string
@@ -37,6 +39,43 @@ type AdminOrder = {
 
 type BillingBreakdown = { coveredUnits: number; subscriberAmount: number; regularAmount: number }
 type AdminOrdersData = { orders: AdminOrder[] }
+
+// eslint-disable-next-line react-refresh/only-export-components
+export async function action({ request }: Route.ActionArgs) {
+  const auth = await requireRole(request, 'admin')
+  if (!auth) return data({ ok: false, message: 'Please sign in again.' }, { status: 401 })
+
+  const formData = await request.formData()
+  const intent = String(formData.get('intent') ?? '')
+  const orderId = String(formData.get('orderId') ?? '')
+  if (intent !== 'cancel-order' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(orderId)) {
+    return data({ ok: false, intent, orderId, message: 'Invalid order action.' }, { status: 400, headers: auth.headers })
+  }
+
+  try {
+    const [cancelledOrder] = await sql`
+      update orders
+      set status = 'cancelled'
+      where id = ${orderId}
+        and status = 'pending_pickup'
+        and picked = false
+      returning id
+    `
+    if (!cancelledOrder) {
+      return data(
+        { ok: false, intent, orderId, message: 'Only orders still awaiting pickup can be cancelled.' },
+        { status: 409, headers: auth.headers },
+      )
+    }
+    return data({ ok: true, intent, orderId }, { headers: auth.headers })
+  } catch (error) {
+    console.error('[admin-orders] Cancellation failed', error)
+    return data(
+      { ok: false, intent, orderId, message: 'The order could not be cancelled. Please try again.' },
+      { status: 500, headers: auth.headers },
+    )
+  }
+}
 
 function normalizeBillingBreakdown(value: unknown): BillingBreakdown | null {
   let breakdown = value
@@ -162,6 +201,8 @@ function Detail({ label, value }: { label: string; value: string | number }) {
 }
 
 function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => void }) {
+  const cancelFetcher = useFetcher<typeof action>()
+  const handledCancelResponse = useRef<typeof cancelFetcher.data>(null)
   const receivedCounts = getInitialReceivedCounts(
     order.items.map((item) => ({
       id: item.id,
@@ -178,6 +219,20 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
     !order.is_subscription_order && hasCompleteReceivedCounts
       ? order.items.reduce((total, item) => total + Number(receivedCounts[item.id]) * item.unit_price, 0)
       : null
+
+  useEffect(() => {
+    const result = cancelFetcher.data
+    if (cancelFetcher.state !== 'idle' || !result || handledCancelResponse.current === result) return
+    handledCancelResponse.current = result
+
+    if (result.ok) {
+      toast.success('Order cancelled.')
+      onClose()
+      return
+    }
+
+    toast.error('message' in result && typeof result.message === 'string' ? result.message : 'The order could not be cancelled.')
+  }, [cancelFetcher.data, cancelFetcher.state, onClose])
 
   return (
     <div className="fixed inset-0 z-40 flex items-end justify-center overflow-y-auto bg-slate-950/40 p-0 sm:items-center sm:p-4">
@@ -286,6 +341,34 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
           <h4 className="font-bold text-slate-900">Notes</h4>
           <p className="mt-2 text-sm text-slate-600">{order.notes || 'No notes recorded.'}</p>
         </section>
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+          {order.status === 'pending_pickup' && (
+            <cancelFetcher.Form
+              method="post"
+              onSubmit={(event) => {
+                if (!window.confirm('Are you sure you want to cancel this order?')) event.preventDefault()
+              }}
+            >
+              <input type="hidden" name="intent" value="cancel-order" />
+              <input type="hidden" name="orderId" value={order.id} />
+              <button
+                type="submit"
+                disabled={cancelFetcher.state !== 'idle'}
+                className="rounded-lg border border-rose-200 px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+              >
+                {cancelFetcher.state !== 'idle' ? 'Cancelling…' : 'Cancel order'}
+              </button>
+            </cancelFetcher.Form>
+          )}
+          {order.status !== 'pending_pickup' && <span />}
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            Close
+          </button>
+        </div>
       </div>
     </div>
   )

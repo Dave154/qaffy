@@ -1,10 +1,11 @@
 import { ArrowLeft, Copy, Save, WalletCards } from 'lucide-react'
-import { data, Form, Link, useActionData, useLoaderData, useNavigation } from 'react-router'
-import { useState } from 'react'
+import { data, Form, Link, useActionData, useFetcher, useLoaderData, useNavigation } from 'react-router'
+import { useEffect, useRef, useState } from 'react'
 import type { Route } from './+types/UserDetails'
 import { requireRole } from '../../../lib/auth.server'
 import { adjustWallet } from '../../../lib/wallet.server'
 import { createManualSubscriptionWithSnapshot } from '../../../lib/subscriptions.server'
+import { sql } from '../../../lib/db.server'
 import { toast } from '../../../lib/toast'
 import { sumSuccessfulPlanPayments } from '../../../lib/revenue-reporting'
 
@@ -282,6 +283,29 @@ export async function action({ request, params }: Route.ActionArgs) {
       return data({ ok: false, message }, { status: message.includes('already has an active subscription') ? 409 : 400 })
     }
   }
+  if (intent === 'cancel-subscription') {
+    const subscriptionId = String(formData.get('subscriptionId') ?? '')
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(subscriptionId)) {
+      return data({ ok: false, message: 'Invalid subscription.' }, { status: 400, headers: auth.headers })
+    }
+    try {
+      const [cancelledSubscription] = await sql`
+        update subscriptions
+        set status = 'cancelled'
+        where id = ${subscriptionId}
+          and customer_id = ${customerId}
+          and status = 'active'
+        returning id
+      `
+      if (!cancelledSubscription) {
+        return data({ ok: false, message: 'This subscription is no longer active.' }, { status: 409, headers: auth.headers })
+      }
+      return data({ ok: true, message: 'Subscription cancelled.' }, { headers: auth.headers })
+    } catch (error) {
+      console.error('[admin-user-details] Subscription cancellation failed', error)
+      return data({ ok: false, message: 'The subscription could not be cancelled. Please try again.' }, { status: 500, headers: auth.headers })
+    }
+  }
   return data({ ok: false, message: 'Unknown action.' }, { status: 400 })
 }
 
@@ -405,6 +429,15 @@ export default function UserDetails() {
   const details = useLoaderData<typeof loader>()
   const actionData = useActionData<typeof action>()
   const navigation = useNavigation()
+  const cancelFetcher = useFetcher<typeof action>()
+  const handledCancelResponse = useRef<typeof cancelFetcher.data>(null)
+  useEffect(() => {
+    const result = cancelFetcher.data
+    if (cancelFetcher.state !== 'idle' || !result || handledCancelResponse.current === result) return
+    handledCancelResponse.current = result
+    if (result.ok) toast.success(result.message)
+    else toast.error(result.message)
+  }, [cancelFetcher.data, cancelFetcher.state])
   if (!details) return <div className="rounded-2xl border border-slate-200 bg-white p-8 text-sm text-slate-500">Customer not found.</div>
   const isSaving = navigation.state !== 'idle'
   return (
@@ -498,6 +531,7 @@ export default function UserDetails() {
                 <th className="pb-3">Status</th>
                 <th className="pb-3">Start</th>
                 <th className="pb-3">End</th>
+                <th className="pb-3 text-right">Action</th>
               </tr>
             </thead>
             <tbody>
@@ -509,6 +543,29 @@ export default function UserDetails() {
                   <td className="py-3 capitalize">{subscription.status}</td>
                   <td className="py-3">{subscription.startDate}</td>
                   <td className="py-3">{subscription.endDate ?? 'Open ended'}</td>
+                  <td className="py-3 text-right">
+                    {subscription.status === 'active' && (
+                      <cancelFetcher.Form
+                        method="post"
+                        onSubmit={(event) => {
+                          if (!window.confirm('Are you sure you want to cancel this subscription?')) event.preventDefault()
+                        }}
+                      >
+                        <input type="hidden" name="intent" value="cancel-subscription" />
+                        <input type="hidden" name="subscriptionId" value={subscription.id} />
+                        <button
+                          type="submit"
+                          disabled={cancelFetcher.state !== 'idle'}
+                          className="rounded-lg border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {cancelFetcher.state !== 'idle' &&
+                          cancelFetcher.formData?.get('subscriptionId') === subscription.id
+                            ? 'Cancelling…'
+                            : 'Cancel'}
+                        </button>
+                      </cancelFetcher.Form>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

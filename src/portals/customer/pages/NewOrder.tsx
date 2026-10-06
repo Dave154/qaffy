@@ -59,24 +59,16 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
   const [quantityInput, setQuantityInput] = useState<string | null>(null)
   const [items, setItems] = useState<OrderLine[]>([])
   const [itemQuantityInputs, setItemQuantityInputs] = useState<Record<string, string>>({})
-  const [pickupLocation, setPickupLocation] = useState('')
-  const automaticPickupLocation = preferredPickupLocationId ? (preferredPickupLocationName ?? '') : ''
-  const previousAutomaticPickupLocation = useRef('')
+  const [pickupLocation, setPickupLocation] = useState(preferredPickupLocationName ?? '')
   const [notes, setNotes] = useState('')
   const [pickupLocationError, setPickupLocationError] = useState('')
   const [isSaving, setIsSaving] = useState(false)
   const invoicePaymentFetcher = useFetcher<{ ok: boolean; message?: string }>()
+  const cancelFetcher = useFetcher<{ ok: boolean; orderId?: string; message?: string }>()
+  const handledCancelResponse = useRef<typeof cancelFetcher.data>(null)
   const payableInvoice = order
     ? invoices.find((invoice) => invoice.orderId === order.id && invoice.status === 'Awaiting payment')
     : undefined
-  useEffect(() => {
-    if (isReadOnly || !automaticPickupLocation) return
-    if (!pickupLocation || pickupLocation === previousAutomaticPickupLocation.current) {
-      setPickupLocation(automaticPickupLocation)
-      previousAutomaticPickupLocation.current = automaticPickupLocation
-    }
-  }, [automaticPickupLocation, isReadOnly, pickupLocation])
-
   useEffect(() => {
     if (isReadOnly) return
     let cancelled = false
@@ -148,6 +140,20 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
       cancelled = true
     }
   }, [isReadOnly])
+
+  useEffect(() => {
+    const result = cancelFetcher.data
+    if (cancelFetcher.state !== 'idle' || !result || handledCancelResponse.current === result) return
+    handledCancelResponse.current = result
+
+    if (result.ok) {
+      toast.success('Order cancelled.')
+      onClose()
+      return
+    }
+
+    toast.error(result.message ?? 'The order could not be cancelled.')
+  }, [cancelFetcher.data, cancelFetcher.state, onClose])
 
   const draftLine: OrderLine | null = category
     ? {
@@ -669,13 +675,34 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
               )}
             </div>
           ) : isReadOnly ? (
-            <button
-              type="button"
-              onClick={onClose}
-              className="mt-5 w-full rounded-2xl bg-brand-primary px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-primary-hover hover:shadow-md"
-            >
-              Close details
-            </button>
+            <div className="mt-5 flex flex-col gap-3">
+              {order?.status === 'Awaiting pickup' && (
+                <cancelFetcher.Form
+                  method="post"
+                  action="/orders"
+                  onSubmit={(event) => {
+                    if (!window.confirm('Are you sure you want to cancel this order?')) event.preventDefault()
+                  }}
+                >
+                  <input type="hidden" name="intent" value="cancel-order" />
+                  <input type="hidden" name="orderId" value={order.id} />
+                  <button
+                    type="submit"
+                    disabled={cancelFetcher.state !== 'idle'}
+                    className="w-full rounded-2xl border border-rose-200 bg-white px-4 py-3 text-sm font-semibold text-rose-700 transition hover:bg-rose-50 disabled:opacity-50"
+                  >
+                    {cancelFetcher.state !== 'idle' ? 'Cancelling…' : 'Cancel order'}
+                  </button>
+                </cancelFetcher.Form>
+              )}
+              <button
+                type="button"
+                onClick={onClose}
+                className="w-full rounded-2xl bg-brand-primary px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-primary-hover hover:shadow-md"
+              >
+                Close details
+              </button>
+            </div>
           ) : (
             <button
               type="button"

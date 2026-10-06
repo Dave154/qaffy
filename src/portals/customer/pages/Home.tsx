@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { data, useFetcher, useSearchParams } from 'react-router'
 import type { Route } from './+types/Home'
 import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
@@ -100,6 +100,8 @@ export default function Home() {
   const [pushSetupBusy, setPushSetupBusy] = useState(false)
   const [pushSetupMessage, setPushSetupMessage] = useState('')
   const topUpFetcher = useFetcher<typeof action>()
+  const cancelFetcher = useFetcher<{ ok: boolean; orderId?: string; message?: string }>()
+  const handledCancelResponse = useRef<typeof cancelFetcher.data>(null)
   const activeOrderCount = orders.filter((order) => order.status !== 'Delivered').length
   const pendingPaymentTotal = orders
     .filter((order) => order.paymentStatus === 'Pending' && order.status !== 'Delivered')
@@ -187,6 +189,19 @@ export default function Home() {
     nextParams.delete('topup')
     setSearchParams(nextParams, { replace: true })
   }, [searchParams, setSearchParams])
+
+  useEffect(() => {
+    const result = cancelFetcher.data
+    if (cancelFetcher.state !== 'idle' || !result || handledCancelResponse.current === result) return
+    handledCancelResponse.current = result
+
+    if (result.ok) {
+      toast.success('Order cancelled.')
+      return
+    }
+
+    toast.error(result.message ?? 'The order could not be cancelled.')
+  }, [cancelFetcher.data, cancelFetcher.state])
 
   return (
     <div className="space-y-6 pb-8">
@@ -339,8 +354,10 @@ export default function Home() {
         </div>
 
         <div className="space-y-3">
-          {recentOrders.slice(0, 2).map((order) => (
-            <article key={order.id} className="border-b border-[#eeeeee] bg-white p-4 last:border-b-0">
+          {recentOrders.slice(0, 2).map((order) => {
+            const isCancelling = cancelFetcher.state !== 'idle' && cancelFetcher.formData?.get('orderId') === order.id
+            return (
+              <article key={order.id} className="border-b border-[#eeeeee] bg-white p-4 last:border-b-0">
               <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0 flex-1 sm:pr-4">
                   <div className="flex flex-wrap items-center gap-2">
@@ -395,16 +412,47 @@ export default function Home() {
 
               <div className="mt-4 flex flex-col gap-3 border-t border-slate-200 pt-3 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-sm text-slate-600">{order.pickup}</p>
-                <Link
-                  to={`/orders?order=${encodeURIComponent(order.publicOrderNumber)}&returnTo=${encodeURIComponent('/')}`}
-                  prefetch="intent"
-                  className="rounded-lg border border-brand-border bg-white px-3.5 py-2 text-center text-sm font-semibold text-brand-primary hover:bg-brand-soft"
-                >
-                  View order
-                </Link>
+                <div className="flex flex-wrap items-center gap-2">
+                  {order.status === 'Awaiting pickup' && (
+                    <cancelFetcher.Form
+                      method="post"
+                      action="/orders"
+                      onSubmit={(event) => {
+                        if (!window.confirm('Are you sure you want to cancel this order?')) event.preventDefault()
+                      }}
+                    >
+                      <input type="hidden" name="intent" value="cancel-order" />
+                      <input type="hidden" name="orderId" value={order.id} />
+                      <button
+                        type="submit"
+                        disabled={cancelFetcher.state !== 'idle'}
+                        className="rounded-lg border border-rose-200 bg-white px-3.5 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                      >
+                        {cancelFetcher.state !== 'idle' && cancelFetcher.formData?.get('orderId') === order.id
+                          ? 'Cancelling…'
+                          : 'Cancel order'}
+                      </button>
+                    </cancelFetcher.Form>
+                  )}
+                  <Link
+                    to={`/orders?order=${encodeURIComponent(order.publicOrderNumber)}&returnTo=${encodeURIComponent('/')}`}
+                    prefetch="intent"
+                    aria-disabled={isCancelling}
+                    tabIndex={isCancelling ? -1 : undefined}
+                    onClick={(event) => {
+                      if (isCancelling) event.preventDefault()
+                    }}
+                    className={`rounded-lg border border-brand-border bg-white px-3.5 py-2 text-center text-sm font-semibold text-brand-primary hover:bg-brand-soft ${
+                      isCancelling ? 'pointer-events-none cursor-not-allowed opacity-50' : ''
+                    }`}
+                  >
+                    View order
+                  </Link>
+                </div>
               </div>
-            </article>
-          ))}
+              </article>
+            )
+          })}
           {orders.length === 0 && <p className="rounded-2xl bg-slate-50 p-6 text-center text-sm text-slate-500">No recent orders yet.</p>}
         </div>
       </section>
