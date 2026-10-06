@@ -30,7 +30,14 @@ export async function loader({ request }: Route.LoaderArgs) {
   const customerIds = [...new Set((orders ?? []).map((order) => order.customer_id))]
   const locationIds = [...new Set((orders ?? []).map((order) => order.pickup_location_id).filter(Boolean))] as string[]
 
-  const [{ data: profiles }, { data: locations }, { data: items }, { data: invoices }, { data: mismatches }, { data: logisticsEvents }] =
+  const [
+    { data: profiles },
+    { data: locations },
+    { data: items },
+    { data: invoices, error: invoicesError },
+    { data: mismatches },
+    { data: logisticsEvents },
+  ] =
     await Promise.all([
       customerIds.length
         ? supabase.from('profiles').select('id, name, qaffy_id, email, phone').in('id', customerIds)
@@ -44,7 +51,7 @@ export async function loader({ request }: Route.LoaderArgs) {
         : Promise.resolve({ data: [] }),
       orderIds.length
         ? supabase.from('invoices').select('id, order_id, amount, status, created_at, paid_at').in('order_id', orderIds)
-        : Promise.resolve({ data: [] }),
+        : Promise.resolve({ data: [], error: null }),
       orderIds.length
         ? supabase
             .from('mismatches')
@@ -60,6 +67,7 @@ export async function loader({ request }: Route.LoaderArgs) {
             .order('created_at', { ascending: false })
         : Promise.resolve({ data: [] }),
     ])
+  if (invoicesError) throw new Error(`Order payment status could not be loaded: ${invoicesError.message}`)
   const [{ data: categories }, { data: categoryRates }] = await Promise.all([
     supabase.from('cloth_categories').select('id, name').order('name', { ascending: true }),
     supabase.from('cloth_category_rates').select('category_id, vendor_wash_price, vendor_iron_price, vendor_wash_iron_price'),
@@ -202,7 +210,13 @@ export default function VendorLayout() {
       <header className="sticky top-0 z-20 border-b border-[#f2f3f3] bg-white lg:hidden">
         <div className="mx-auto flex max-w-3xl items-center justify-between px-4 py-3.5 sm:px-6">
           <div className="flex flex-col items-center gap-3">
-            <QaffyLogo className="inline-flex" />
+            <NavLink
+              to="/vendor"
+              aria-label="Go to vendor home"
+              className="inline-flex rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary"
+            >
+              <QaffyLogo className="inline-flex" />
+            </NavLink>
             <p className="text-[10px] font-semibold capitalize tracking-[0.18em] text-brand-primary">Vendor</p>
           </div>
           <button
@@ -221,7 +235,14 @@ export default function VendorLayout() {
           className={`${menuOpen ? 'translate-x-0' : '-translate-x-full'} fixed inset-y-0 left-0 z-30 flex w-[221px] flex-col overflow-y-auto border-r border-[#ececec] bg-white px-[13px] py-7 transition-transform lg:translate-x-0`}
         >
           <div className="flex flex-col items-center gap-3 px-3">
-            <QaffyLogo className="inline-flex" />
+            <NavLink
+              to="/vendor"
+              aria-label="Go to vendor home"
+              onClick={() => setMenuOpen(false)}
+              className="inline-flex rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary"
+            >
+              <QaffyLogo className="inline-flex" />
+            </NavLink>
             <p className="text-[10px] font-semibold capitalize tracking-[0.18em] text-brand-primary">Vendor</p>
             <button
               type="button"

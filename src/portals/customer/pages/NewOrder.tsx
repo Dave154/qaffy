@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router'
-import { Minus, Plus, Trash2 } from 'lucide-react'
+import { Link, useFetcher } from 'react-router'
+import { ChevronDown, Minus, Plus, Trash2 } from 'lucide-react'
 import type { CustomerOrder, OrderLine } from '../customer-store'
 import { useCustomerStore } from '../customer-store-hook'
 import { supabase } from '../../../lib/supabase.client'
@@ -41,6 +41,7 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
   const {
     activePlan,
     addOrder,
+    invoices,
     pickupLocations,
     preferredPickupLocationId,
     preferredPickupLocationName,
@@ -63,6 +64,10 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
   const [notes, setNotes] = useState('')
   const [pickupLocationError, setPickupLocationError] = useState('')
   const [isSaving, setIsSaving] = useState(false)
+  const invoicePaymentFetcher = useFetcher<{ ok: boolean; message?: string }>()
+  const payableInvoice = order
+    ? invoices.find((invoice) => invoice.orderId === order.id && invoice.status === 'Awaiting payment')
+    : undefined
   useEffect(() => {
     if (isReadOnly || !automaticPickupLocation) return
     if (!pickupLocation || pickupLocation === previousAutomaticPickupLocation.current) {
@@ -165,7 +170,9 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
         ]
       : items)
   const total = order?.total ?? items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0)
-  const itemCount = order?.items ?? items.reduce((sum, item) => sum + item.quantity, 0)
+  const itemCount = isReadOnly
+    ? displayItems.reduce((sum, item) => sum + item.quantity, 0)
+    : items.reduce((sum, item) => sum + item.quantity, 0)
   const availableCategories = categories
   const subscriptionBillingPreview = useMemo(() => {
     if (!activePlan) return null
@@ -191,6 +198,62 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
       subscriptionRemainingUnits ?? 0,
     )
   }, [activePlan, categories, items, subscriptionRemainingUnits])
+  const pickupDetailsFields = (
+    <>
+      <label>
+        <span className="mb-1.5 block text-sm font-medium text-slate-600">
+          Pickup instructions <span className="font-normal text-slate-400">(optional)</span>
+        </span>
+        <textarea
+          rows={3}
+          placeholder="Separate whites, handle silk carefully..."
+          value={order?.notes ?? notes}
+          onChange={(event) => setNotes(event.target.value)}
+          readOnly={isReadOnly}
+          className="w-full resize-none rounded-2xl border border-slate-200 bg-white px-3 py-3 text-base text-slate-900 placeholder:text-slate-400 focus:border-brand-primary focus:ring-2 focus:ring-brand-focus read-only:cursor-default read-only:bg-slate-50"
+        />
+      </label>
+      {(!preferredPickupLocationId || isReadOnly) && (
+        <label className="mt-4 block">
+          <span className="mb-1.5 block text-sm font-medium text-slate-600">
+            Pickup location <span className="text-rose-600">*</span>
+          </span>
+          <select
+            value={order?.pickupLocation ?? pickupLocation}
+            onChange={(event) => {
+              setPickupLocation(event.target.value)
+              setPickupLocationError('')
+            }}
+            disabled={isReadOnly}
+            required={!isReadOnly}
+            aria-invalid={Boolean(pickupLocationError)}
+            className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-base text-slate-900 focus:border-brand-primary focus:ring-2 focus:ring-brand-focus disabled:cursor-default disabled:bg-slate-50 disabled:opacity-100"
+          >
+            {!order && <option value="">Select a pickup location</option>}
+            {pickupLocations.map((location) => (
+              <option key={location.id} value={location.name}>
+                {location.name}
+                {location.address ? ` (${location.address})` : ''}
+              </option>
+            ))}
+            {order && !pickupLocations.some((location) => location.name === order.pickupLocation) && (
+              <option>{order.pickupLocation}</option>
+            )}
+          </select>
+          {pickupLocationError && (
+            <span className="mt-1.5 block text-sm text-rose-600" role="alert">
+              {pickupLocationError}
+            </span>
+          )}
+        </label>
+      )}
+      {preferredPickupLocationId && !isReadOnly && (
+        <p className="mt-4 rounded-2xl bg-brand-soft p-3 text-sm text-brand-strong">
+          Pickup location <span className="text-rose-600">*</span>: {preferredPickupLocationName}
+        </p>
+      )}
+    </>
+  )
   const addItem = () => {
     if (!draftLine) return
     setItems((currentItems) => addOrIncrementOrderLine(currentItems, draftLine))
@@ -385,6 +448,13 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
                       <p className="font-semibold text-slate-900">{item.category}</p>
                       <p className="text-xs text-slate-500">
                         {item.service} · {item.quantity} item{item.quantity === 1 ? '' : 's'}
+                        {isReadOnly && item.vendorAdded ? (
+                          <span className="font-semibold text-emerald-600"> (+{item.quantity}, vendor-added)</span>
+                        ) : isReadOnly && item.vendorCountDifference ? (
+                          <span className={`font-semibold ${item.vendorCountDifference > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                            {' '}({item.vendorCountDifference > 0 ? '+' : ''}{item.vendorCountDifference})
+                          </span>
+                        ) : null}
                       </p>
                     </div>
                     <div className={`flex items-center gap-2 ${isCoveredSubscriptionLine ? 'shrink-0' : 'self-stretch sm:self-auto'}`}>
@@ -459,10 +529,6 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
 
         {isReadOnly && (
           <section className="mt-6 grid gap-3 sm:grid-cols-2">
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5 shadow-sm">
-              <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-slate-500">Payment status</p>
-              <p className="mt-2.5 font-semibold text-slate-900">{order?.paymentStatus}</p>
-            </div>
             {!order?.pickedUp && order?.pickupOtp && (
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm sm:p-5">
                 <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-slate-500">Pickup OTP</p>
@@ -471,18 +537,14 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
                 </div>
               </div>
             )}
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5 shadow-sm">
-              <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-slate-500">Delivery OTP</p>
-              {order?.status === 'Delivered' ? (
-                <p className="mt-2.5 text-sm font-medium text-slate-600">Unavailable: order already delivered.</p>
-              ) : order?.deliveryOtp ? (
+            {order?.paymentStatus === 'Paid' && order.status !== 'Delivered' && order.deliveryOtp && (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5 shadow-sm">
+                <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-slate-500">Delivery OTP</p>
                 <div className="mt-2.5">
                   <ProtectedOtp value={order.deliveryOtp} digitClassName="h-9 w-9 text-sm" />
                 </div>
-              ) : (
-                <p className="mt-2.5 text-sm font-medium text-slate-600">Not available yet: payment is required.</p>
-              )}
-            </div>
+              </div>
+            )}
           </section>
         )}
 
@@ -495,76 +557,17 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
           </section>
         )}
 
-        {isReadOnly && order?.status === 'Pending payment' && (
-          <section className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-4 sm:p-5">
-            <p className="text-sm font-semibold text-amber-800">Payment needed before delivery</p>
-            <p className="mt-1.5 text-sm text-amber-700">
-              Your final invoice is ready. Pay it from your wallet, or top up your wallet first if your balance is insufficient.
-            </p>
-            <Link
-              to="/invoice"
-              onClick={onClose}
-              className="mt-4 inline-flex w-full items-center justify-center rounded-2xl bg-brand-primary px-4 py-3 text-sm font-semibold text-white transition hover:bg-brand-primary-hover"
-            >
-              View invoice and payment options
-            </Link>
-          </section>
+        {isReadOnly ? (
+          <details className="group mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-4 font-semibold text-slate-800 outline-none transition hover:bg-slate-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-primary sm:px-5">
+              <span>Additional details</span>
+              <ChevronDown className="h-4 w-4 shrink-0 text-slate-500 transition-transform group-open:rotate-180" aria-hidden="true" />
+            </summary>
+            <div className="border-t border-slate-100 p-4 sm:p-5">{pickupDetailsFields}</div>
+          </details>
+        ) : (
+          <section className="mt-6 rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">{pickupDetailsFields}</section>
         )}
-
-        <section className="mt-6 rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-sm">
-          <label>
-            <span className="mb-1.5 block text-sm font-medium text-slate-600">
-              Pickup instructions <span className="font-normal text-slate-400">(optional)</span>
-            </span>
-            <textarea
-              rows={3}
-              placeholder="Separate whites, handle silk carefully..."
-              value={order?.notes ?? notes}
-              onChange={(event) => setNotes(event.target.value)}
-              readOnly={isReadOnly}
-              className="w-full resize-none rounded-2xl border border-slate-200 bg-white px-3 py-3 text-base text-slate-900 placeholder:text-slate-400 focus:border-brand-primary focus:ring-2 focus:ring-brand-focus read-only:cursor-default read-only:bg-slate-50"
-            />
-          </label>
-          {(!preferredPickupLocationId || isReadOnly) && (
-            <label className="mt-4 block">
-              <span className="mb-1.5 block text-sm font-medium text-slate-600">
-                Pickup location <span className="text-rose-600">*</span>
-              </span>
-              <select
-                value={order?.pickupLocation ?? pickupLocation}
-                onChange={(event) => {
-                  setPickupLocation(event.target.value)
-                  setPickupLocationError('')
-                }}
-                disabled={isReadOnly}
-                required={!isReadOnly}
-                aria-invalid={Boolean(pickupLocationError)}
-                className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-base text-slate-900 focus:border-brand-primary focus:ring-2 focus:ring-brand-focus disabled:cursor-default disabled:bg-slate-50 disabled:opacity-100"
-              >
-                {!order && <option value="">Select a pickup location</option>}
-                {pickupLocations.map((location) => (
-                  <option key={location.id} value={location.name}>
-                    {location.name}
-                    {location.address ? ` (${location.address})` : ''}
-                  </option>
-                ))}
-                {order && !pickupLocations.some((location) => location.name === order.pickupLocation) && (
-                  <option>{order.pickupLocation}</option>
-                )}
-              </select>
-              {pickupLocationError && (
-                <span className="mt-1.5 block text-sm text-rose-600" role="alert">
-                  {pickupLocationError}
-                </span>
-              )}
-            </label>
-          )}
-          {preferredPickupLocationId && !isReadOnly && (
-            <p className="mt-4 rounded-2xl bg-brand-soft p-3 text-sm text-brand-strong">
-              Pickup location <span className="text-rose-600">*</span>: {preferredPickupLocationName}
-            </p>
-          )}
-        </section>
 
         {!isReadOnly && subscription && (
           <p className="mt-6 rounded-2xl bg-brand-soft p-4 text-sm text-brand-strong shadow-sm border border-brand-border">
@@ -574,17 +577,22 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
 
         <section className="mt-6 rounded-2xl border border-brand-border bg-brand-soft p-5 sm:p-6 shadow-sm">
           <div className="space-y-4">
-            <div>
+            <div className={isReadOnly ? 'flex items-center justify-between gap-3' : ''}>
               <p className="text-xs font-semibold capitalize tracking-[0.16em] text-brand-strong">
                 {isReadOnly ? 'Order total' : 'Order estimate'}
               </p>
-              <p className="mt-2.5 text-sm text-slate-600">
-                {subscription && !isReadOnly
-                  ? `${subscriptionBillingPreview?.coveredUnits ?? 0} units covered by your plan`
-                  : subscription
-                    ? `${itemCount} items across ${displayItems.length} item type${displayItems.length === 1 ? '' : 's'}`
+              {isReadOnly && !subscription && (
+                <p className="text-right text-base font-semibold text-brand-strong">
+                  {order?.total ? `₦${order.total.toLocaleString()}` : 'Final billing after review'}
+                </p>
+              )}
+              {!isReadOnly && (
+                <p className="mt-2.5 text-sm text-slate-600">
+                  {subscription
+                    ? `${subscriptionBillingPreview?.coveredUnits ?? 0} units covered by your plan`
                     : `${itemCount} item${itemCount === 1 ? '' : 's'} across ${displayItems.length} item type${displayItems.length === 1 ? '' : 's'}`}
-              </p>
+                </p>
+              )}
             </div>
             {subscription && !isReadOnly && subscriptionBillingPreview && (
               <div className="space-y-2 border-t border-brand-border/70 pt-3 text-sm">
@@ -613,16 +621,47 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
                 {subscriptionBillingPreview.totalAmount === 0 && <p className="font-semibold text-brand-strong">No extra charge</p>}
               </div>
             )}
-            {!subscription &&
-              (isReadOnly ? (
-                <p className="text-right text-sm font-semibold text-brand-strong">
-                  {order?.total ? `₦${order.total.toLocaleString()}` : 'Final billing after review'}
-                </p>
-              ) : (
+            {!subscription && !isReadOnly && (
                 <p className="text-2xl font-bold text-brand-strong">₦{total.toLocaleString()}</p>
-              ))}
+            )}
           </div>
-          {isReadOnly ? (
+          {isReadOnly && order?.paymentStatus === 'Pending' && order.status !== 'Delivered' && order.total > 0 ? (
+            <div className="mt-5 border-t border-brand-border/70 pt-4">
+              <p className="text-sm text-brand-strong">Your final invoice is ready. Pay it from your wallet here.</p>
+              {payableInvoice ? (
+                <invoicePaymentFetcher.Form method="post" action="/invoice">
+                  <input type="hidden" name="invoiceId" value={payableInvoice.id} />
+                  <button
+                    type="submit"
+                    disabled={invoicePaymentFetcher.state !== 'idle' || invoicePaymentFetcher.data?.ok === true}
+                    className="mt-3 inline-flex w-full items-center justify-center rounded-2xl bg-brand-primary px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-primary-hover disabled:cursor-wait disabled:opacity-70"
+                  >
+                    {invoicePaymentFetcher.state !== 'idle'
+                      ? 'Processing payment...'
+                      : invoicePaymentFetcher.data?.ok
+                        ? 'Payment received'
+                        : `Pay ₦${payableInvoice.total.toLocaleString()}`}
+                  </button>
+                  {invoicePaymentFetcher.data && !invoicePaymentFetcher.data.ok && (
+                    <p className="mt-2 text-sm font-medium text-rose-700" role="alert">
+                      {invoicePaymentFetcher.data.message ?? 'The invoice could not be paid.'}
+                    </p>
+                  )}
+                  {invoicePaymentFetcher.data?.message?.includes('wallet balance is too low') && (
+                    <Link
+                      to="/?topup=1"
+                      onClick={onClose}
+                      className="mt-3 inline-flex w-full items-center justify-center rounded-2xl border border-brand-primary px-4 py-3 text-sm font-semibold text-brand-primary transition hover:bg-white"
+                    >
+                      Top up wallet
+                    </Link>
+                  )}
+                </invoicePaymentFetcher.Form>
+              ) : (
+                <p className="mt-3 text-sm text-amber-700">Invoice payment details are loading. Please try again in a moment.</p>
+              )}
+            </div>
+          ) : isReadOnly ? (
             <button
               type="button"
               onClick={onClose}

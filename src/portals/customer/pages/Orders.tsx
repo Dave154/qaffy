@@ -117,6 +117,7 @@ export default function Orders() {
   ]
 
   const getAmountLabel = (order: (typeof orders)[number]) => {
+    if (order.paymentStatus === 'Pending' && order.total > 0) return `Payment due · ₦${order.total.toLocaleString()}`
     if (order.total > 0) return `₦${order.total.toLocaleString()}`
     if (order.status === 'In progress') return 'Final billing pending'
     if (order.isSubscriptionOrder && ['Ready for delivery', 'Delivered'].includes(order.status)) return 'Covered by plan'
@@ -124,7 +125,7 @@ export default function Orders() {
   }
   const getVisibleOtp = (order: (typeof orders)[number]) => {
     if (order.status === 'Awaiting pickup') return order.pickupOtp
-    if (order.status !== 'Delivered') return order.deliveryOtp ?? ''
+    if (order.paymentStatus === 'Paid' && order.status !== 'Delivered') return order.deliveryOtp ?? ''
     return ''
   }
 

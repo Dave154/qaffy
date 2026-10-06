@@ -3,6 +3,7 @@ import { data, useFetcher, useOutletContext, useRevalidator } from 'react-router
 import { Search } from 'lucide-react'
 import { requireRole } from '../../../lib/auth.server'
 import { sql } from '../../../lib/db.server'
+import { isReadyForDispatch } from '../../../lib/orderLifecycle'
 import { sendCustomerNotification } from '../../../lib/notifications.server'
 import { toast } from '../../../lib/toast'
 import VendorOrderReviewDialog, { getInitialReceivedCounts, type VendorReviewOrder } from '../VendorOrderReviewDialog'
@@ -49,11 +50,25 @@ export async function action({ request }: { request: Request }) {
         set status = 'out_for_delivery'
         where id in ${sql(orderIds)}
           and vendor_id = ${vendor.id}
-          and status = 'paid'
+          and (
+            (status = 'paid' and exists (
+              select 1 from invoices where invoices.order_id = orders.id and invoices.status = 'paid'
+            ))
+            or
+            (status = 'invoiced' and exists (
+              select 1 from invoices where invoices.order_id = orders.id and invoices.status = 'unpaid'
+            ))
+          )
         returning id, customer_id, public_order_number
       `
       if (dispatchedOrders.length === 0)
         return data({ ok: false, message: 'No selected orders are ready for dispatch.' }, { status: 409, headers: auth.headers })
+      const invoiceStatuses = await sql`
+        select order_id, status::text as status
+        from invoices
+        where order_id in ${sql(dispatchedOrders.map((order) => order.id))}
+      `
+      const invoiceStatusByOrderId = new Map(invoiceStatuses.map((invoice) => [invoice.order_id, invoice.status]))
       await Promise.all(
         dispatchedOrders.map((order) =>
           sendCustomerNotification({
@@ -62,9 +77,18 @@ export async function action({ request }: { request: Request }) {
             notificationType: 'order_ready_for_delivery',
             orderId: order.id,
             payload: {
-              title: 'Your order is ready for delivery',
-              body: `Your clean laundry is on the way for ${order.public_order_number}.`,
-              details: [`Order: ${order.public_order_number}`, 'Payment has been confirmed.', 'Your laundry is on its way to you.'],
+              title:
+                invoiceStatusByOrderId.get(order.id) === 'paid'
+                  ? 'Your order is ready for delivery'
+                  : 'Your order has been dispatched',
+              body:
+                invoiceStatusByOrderId.get(order.id) === 'paid'
+                  ? `Your clean laundry is on the way for ${order.public_order_number}.`
+                  : `Your order ${order.public_order_number} has been dispatched. Payment is required before handoff.`,
+              details:
+                invoiceStatusByOrderId.get(order.id) === 'paid'
+                  ? [`Order: ${order.public_order_number}`, 'Payment has been confirmed.', 'Your laundry is on its way to you.']
+                  : [`Order: ${order.public_order_number}`, 'Your laundry has been dispatched.', 'Please pay the invoice before handoff.'],
               url: `/orders?order=${encodeURIComponent(order.public_order_number)}`,
               tag: `order:${order.id}:delivery`,
             },
@@ -92,6 +116,7 @@ type VendorOrder = {
   customer_id: string
   order_type: 'wash' | 'wash_iron' | 'mixed'
   status: 'pending_pickup' | 'picked_up' | 'at_vendor' | 'invoiced' | 'paid' | 'out_for_delivery' | 'delivered' | 'cancelled'
+  invoice: { status: 'unpaid' | 'paid' } | null
   clothes_count_vendor: number | null
   created_at: string
   picked_up_date: string | null
@@ -209,7 +234,7 @@ export default function Orders() {
   const orderCounts = {
     available: rows.filter((order) => order.status === 'picked_up').length,
     processing: rows.filter((order) => ['at_vendor', 'invoiced', 'paid', 'out_for_delivery'].includes(order.status)).length,
-    ready: rows.filter((order) => order.status === 'paid').length,
+    ready: rows.filter((order) => isReadyForDispatch(order.status, order.invoice?.status)).length,
     dispatched: rows.filter((order) => order.status === 'out_for_delivery').length,
     delivered: rows.filter((order) => order.status === 'delivered').length,
   }
@@ -252,13 +277,13 @@ export default function Orders() {
         : activeTab === 'processing'
           ? ['at_vendor', 'invoiced', 'paid', 'out_for_delivery'].includes(order.status)
           : activeTab === 'ready'
-            ? order.status === 'paid'
+            ? isReadyForDispatch(order.status, order.invoice?.status)
             : activeTab === 'dispatched'
               ? order.status === 'out_for_delivery'
               : order.status === 'delivered'
     return searchText.includes(query.toLowerCase()) && inTab
   })
-  const selectableOrders = filteredOrders.filter((order) => order.status === 'paid')
+  const selectableOrders = filteredOrders.filter((order) => isReadyForDispatch(order.status, order.invoice?.status))
   const allSelectableOrdersSelected = selectableOrders.length > 0 && selectableOrders.every((order) => selectedOrderIds.includes(order.id))
 
   const toggleOrderSelection = (orderId: string) => {
@@ -462,7 +487,7 @@ export default function Orders() {
                   </div>
                 </dl>
                 <div className="mt-4 space-y-3 border-t border-slate-100 pt-3">
-                  {order.status === 'paid' && (
+                  {isReadyForDispatch(order.status, order.invoice?.status) && (
                     <label className="flex items-center gap-2 text-xs font-semibold text-slate-600">
                       <input
                         type="checkbox"
@@ -493,7 +518,7 @@ export default function Orders() {
                       >
                         {isClaimingOrder(order.id) ? 'Claiming...' : 'Claim'}
                       </button>
-                      ) : order.status === 'paid' ? (
+                      ) : isReadyForDispatch(order.status, order.invoice?.status) ? (
                         <button
                           type="button"
                           onClick={() => dispatchOrders([order.id])}
@@ -578,7 +603,7 @@ export default function Orders() {
               {filteredOrders.map((order) => (
                 <tr key={order.id} className="border-b border-[#f0f0f0] last:border-0">
                   <td className="px-4 py-4">
-                    {order.status === 'paid' && (
+                    {isReadyForDispatch(order.status, order.invoice?.status) && (
                       <input
                         type="checkbox"
                         checked={selectedOrderIds.includes(order.id)}

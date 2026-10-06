@@ -38,9 +38,10 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function Invoice() {
-  const { invoices } = useCustomerStore()
+  const { invoices, orders } = useCustomerStore()
   const [selectedInvoiceId, setSelectedInvoiceId] = useState(invoices[0]?.id ?? '')
   const invoice = invoices.find((item) => item.id === selectedInvoiceId) ?? invoices[0] ?? null
+  const selectedOrder = invoice ? orders.find((order) => order.id === invoice.orderId) ?? null : null
   if (!invoice) {
     return (
       <div className="space-y-5 pb-8">
@@ -57,9 +58,18 @@ export default function Invoice() {
   }
 
   const total = `₦${invoice.total.toLocaleString()}`
+  const invoiceItems =
+    selectedOrder?.lines?.map((item) => ({
+      label: item.category,
+      service: item.service,
+      quantity: item.quantity,
+      unitPrice: item.unitPrice,
+      amount: item.quantity * item.unitPrice,
+    })) ?? []
+  const itemizedTotal = invoiceItems.reduce((sum, item) => sum + item.amount, 0)
+  const pricingAdjustment = Math.round((invoice.total - itemizedTotal) * 100) / 100
   const paymentBreakdown = [
-    { label: 'Subtotal', value: total },
-    { label: 'Service', value: 'Included' },
+    { label: 'Invoice total', value: total },
     { label: 'Status', value: invoice.status },
   ]
 
@@ -76,27 +86,22 @@ export default function Invoice() {
         </span>
       </header>
 
-      {invoices.length > 1 && (
-        <section className="rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-100 sm:p-5">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h3 className="font-bold text-slate-900">Invoice history</h3>
-              <p className="mt-1 text-sm text-slate-500">Select an order invoice to view its final billing details.</p>
-            </div>
-            <select
-              value={invoice.id}
-              onChange={(event) => setSelectedInvoiceId(event.target.value)}
-              className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
-            >
-              {invoices.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.orderReference} · {item.status} · ₦{item.total.toLocaleString()}
-                </option>
-              ))}
-            </select>
-          </div>
-        </section>
-      )}
+      <section className="print:hidden rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-100 sm:p-5">
+        <label className="block">
+          <span className="mb-2 block text-sm font-semibold text-slate-700">Select order</span>
+          <select
+            value={invoice.id}
+            onChange={(event) => setSelectedInvoiceId(event.target.value)}
+            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-700 focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
+          >
+            {invoices.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.orderReference} · {item.status} · ₦{item.total.toLocaleString()}
+              </option>
+            ))}
+          </select>
+        </label>
+      </section>
 
       <section className="rounded-[28px] bg-gradient-to-br from-brand-primary via-brand-primary to-brand-primary-hover p-5 text-white shadow-lg shadow-brand-border sm:p-6">
         <div className="flex items-start justify-between gap-4">
@@ -113,30 +118,67 @@ export default function Invoice() {
         <div className="min-w-0 rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-100 sm:p-5">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <h3 className="text-lg font-bold text-slate-900">Laundry summary</h3>
-              <p className="mt-1 text-sm text-slate-500">This invoice reflects your active bag count</p>
+              <h3 className="text-lg font-bold text-slate-900">Items and charges</h3>
+              <p className="mt-1 text-sm text-slate-500">Vendor-confirmed items for this order</p>
             </div>
             <button
               type="button"
               onClick={() => window.print()}
               aria-label="Print invoice"
               title="Print invoice"
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-600 transition hover:border-slate-300 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
+              className="print:hidden flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-600 transition hover:border-slate-300 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
             >
               <Printer className="h-4 w-4" aria-hidden="true" />
             </button>
           </div>
 
-          <div className="mt-5 space-y-3">
-            {invoice.items.map((item) => (
-              <div key={item.label} className="flex items-center justify-between rounded-2xl bg-slate-50 p-3">
+          <div className="mt-5 overflow-x-auto rounded-2xl border border-slate-200">
+            <table className="w-full min-w-[620px] text-left text-sm">
+              <thead className="border-b border-slate-200 bg-slate-50 text-xs font-semibold text-slate-500">
+                <tr>
+                  <th scope="col" className="px-4 py-3">Item</th>
+                  <th scope="col" className="px-4 py-3 text-right">Quantity</th>
+                  <th scope="col" className="px-4 py-3 text-right">Unit rate</th>
+                  <th scope="col" className="px-4 py-3 text-right">Amount</th>
+                </tr>
+              </thead>
+            {invoiceItems.length > 0 ? (
+              <tbody className="divide-y divide-slate-100">
+                {invoiceItems.map((item, index) => (
+                  <tr key={`${item.label}-${item.service}-${index}`}>
+                    <th scope="row" className="px-4 py-3 font-semibold text-slate-900">
+                      <span className="block">{item.label}</span>
+                      <span className="mt-0.5 block text-xs font-normal text-slate-500">{item.service}</span>
+                    </th>
+                    <td className="px-4 py-3 text-right text-slate-600">{item.quantity}</td>
+                    <td className="px-4 py-3 text-right text-slate-600">₦{item.unitPrice.toLocaleString()}</td>
+                    <td className="px-4 py-3 text-right font-semibold text-slate-900">₦{item.amount.toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            ) : (
+              <tbody className="divide-y divide-slate-100">
+                {invoice.items.map((item) => (
+                  <tr key={item.label}>
+                    <th scope="row" className="px-4 py-3 font-semibold text-slate-900">{item.label}</th>
+                    <td className="px-4 py-3 text-right text-slate-600" colSpan={2}>{item.quantity}</td>
+                    <td className="px-4 py-3 text-right font-semibold text-slate-900">₦{item.amount.toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            )}
+            </table>
+            {selectedOrder?.isSubscriptionOrder && invoiceItems.length > 0 && pricingAdjustment !== 0 && (
+              <div className="flex items-start justify-between gap-3 border-t border-slate-200 bg-amber-50 px-4 py-3 text-sm">
                 <div>
-                  <p className="font-semibold text-slate-900">{item.label}</p>
-                  <p className="mt-1 text-xs text-slate-500">{item.quantity}</p>
+                  <p className="font-semibold text-amber-900">Subscription pricing adjustment</p>
+                  <p className="mt-0.5 text-xs text-amber-800">Plan coverage and subscriber rates are reflected in the invoice total.</p>
                 </div>
-                <p className="font-semibold text-slate-900">₦{item.amount.toLocaleString()}</p>
+                <p className="shrink-0 font-semibold text-amber-900">
+                  {pricingAdjustment > 0 ? '+' : '−'}₦{Math.abs(pricingAdjustment).toLocaleString()}
+                </p>
               </div>
-            ))}
+            )}
           </div>
 
           {invoice.originalCount !== null && invoice.finalCount !== null && (
@@ -308,6 +350,34 @@ export default function Invoice() {
             Continue to delivery OTP
           </Link>
         </div>
+      </section>
+
+      <section className="rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-100 sm:p-5">
+        <h3 className="text-lg font-bold text-slate-900">Order details</h3>
+        <div className="mt-4 grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
+          <div>
+            <p className="text-slate-500">Order date</p>
+            <p className="mt-1 font-semibold text-slate-900">{selectedOrder?.date ?? invoice.dueDate}</p>
+          </div>
+          <div>
+            <p className="text-slate-500">Service</p>
+            <p className="mt-1 font-semibold text-slate-900">{selectedOrder?.service ?? 'Laundry service'}</p>
+          </div>
+          <div>
+            <p className="text-slate-500">Pickup location</p>
+            <p className="mt-1 font-semibold text-slate-900">{selectedOrder?.pickupLocation ?? 'Not available'}</p>
+          </div>
+          <div>
+            <p className="text-slate-500">Order status</p>
+            <p className="mt-1 font-semibold text-slate-900">{selectedOrder?.status ?? invoice.status}</p>
+          </div>
+        </div>
+        {selectedOrder?.notes && selectedOrder.notes !== 'No special instructions added.' && (
+          <div className="mt-4 border-t border-slate-100 pt-3 text-sm">
+            <p className="text-slate-500">Pickup instructions</p>
+            <p className="mt-1 break-words font-medium text-slate-900">{selectedOrder.notes}</p>
+          </div>
+        )}
       </section>
     </div>
   )

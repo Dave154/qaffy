@@ -147,6 +147,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   const auth = await requireRole(request, 'admin')
   if (!auth) return data<DashboardData>(emptyData, { status: 200 })
   const { supabase, headers } = auth
+  const activeOnDate = new Date().toISOString().slice(0, 10)
   const [
     { data: orders },
     { count: customers },
@@ -170,10 +171,14 @@ export async function loader({ request }: Route.LoaderArgs) {
     supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('role', 'customer'),
     supabase.from('vendors').select('id', { count: 'exact', head: true }).eq('status', 'approved'),
     supabase.from('logistics_agents').select('id', { count: 'exact', head: true }).eq('status', 'approved'),
-    supabase.from('subscriptions').select('id', { count: 'exact', head: true }).eq('status', 'active'),
+    supabase
+      .from('subscriptions')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'active')
+      .or(`end_date.is.null,end_date.gte.${activeOnDate}`),
     supabase.from('invoices').select('order_id, amount, status, created_at').order('created_at', { ascending: false }),
     supabase.from('plans').select('id, name, type, price, weekly_limit, active').order('created_at', { ascending: true }),
-    supabase.from('subscriptions').select('plan_id').eq('status', 'active'),
+    supabase.from('subscriptions').select('plan_id').eq('status', 'active').or(`end_date.is.null,end_date.gte.${activeOnDate}`),
     supabase.from('vendor_settlements').select('amount_due').order('created_at', { ascending: false }),
     supabase.from('vendors').select('id, business_name, status').order('created_at', { ascending: false }).limit(5),
     supabase.from('profiles').select('id, name, email').eq('role', 'customer').order('created_at', { ascending: false }).limit(5),
@@ -629,11 +634,11 @@ export default function Home() {
       tone: 'green',
     },
     {
-      label: 'Subscription purchases',
-      value: periodMetrics.subscriptionPurchases,
-      helper: 'Paid plans',
+      label: 'Active subscribers',
+      value: metrics.activeSubscriptions,
+      helper: 'Current subscriptions',
       icon: UsersRound,
-      href: '/admin/orders',
+      href: '/admin/plans',
       tone: 'pink',
     },
     {

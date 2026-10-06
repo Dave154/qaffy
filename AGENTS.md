@@ -399,7 +399,7 @@ Before updating UI components, verify:
 - After a successful pickup, the OTP input is cleared.
 - Logistics pickup and delivery results now show the globally unique public order reference (`QO-######`) for handoff and event history; UUIDs remain internal action identifiers.
 - The logistics pickup/delivery action validates the intent, requires logistics access when Supabase is configured, and uses separate pickup/delivery OTP error messages.
-- Delivery dispatch is restricted to paid orders; unpaid invoices cannot enter `out_for_delivery`.
+- Vendors may dispatch confirmed orders with paid or unpaid invoices. Logistics sees dispatched orders only after the invoice is paid, and the trusted final-delivery action independently verifies payment.
 - Final delivery atomically changes the status to `delivered` and clears `delivery_otp`, so a delivery OTP cannot be reused after handoff.
 - The duplicate pickup SQL statement was removed; do not reintroduce a second `update orders` in the pickup branch.
 - Pickup OTP search requires all four digits and performs an exact match; partial OTP input never reveals an order.
@@ -758,7 +758,7 @@ The first enables Realtime for wallets, wallet transactions, and subscriptions. 
 - An order placed during an active subscription is associated with a snapshot of that subscription's coverage and weekly limit. Coverage applies to eligible service components: a Wash-only plan covers the Wash component of Wash + Iron, while Iron is charged separately at its regular customer rate.
 - Only covered weighted units consume the weekly allowance. Allocation maximizes covered weighted units deterministically. Over-limit covered units use the saved global subscriber rate for that category/service; services outside the plan use their saved regular customer rate.
 - Subscriber rates are configured once per category/service, shared across plans, and saved with each order item at placement. Plan coverage and weekly limit are snapshotted when a subscription begins; later Admin plan changes apply to the customer's next subscription, while rate changes apply to orders placed afterward.
-- Customer discounts do not affect vendor payout rates or amounts. If the wallet cannot cover the final combined invoice, it remains unpaid and delivery is blocked until the customer tops up.
+- Customer discounts do not affect vendor payout rates or amounts. If the wallet cannot cover the final combined invoice, it remains unpaid; vendor dispatch may proceed, but Logistics cannot complete delivery until the customer pays.
 - Vendors enter bank name and account number in their dashboard; Paystack must verify and resolve the account before it can be used for payouts, and the vendor must confirm the resolved account name.
 
 ### Admin Build Order
@@ -799,7 +799,7 @@ Before production assignment or settlement work, add vendor ownership to orders.
 - Plan coverage and weekly limit are snapshotted when a subscription begins, so Admin plan changes affect new subscriptions only. Applicable regular and global subscriber rates are snapshotted on order-item creation.
 - A global subscriber-rate change applies to new orders from active subscribers; existing order-item snapshots remain unchanged.
 - Weekly covered-unit usage carries over across a midweek subscription change and resets Sunday at 00:00 in `Africa/Lagos`.
-- Vendor-confirmed quantities remain authoritative. Allowance is applied only to covered service components using deterministic allocation that maximizes weighted units. The full invoice must be paid before delivery.
+- Vendor-confirmed quantities remain authoritative. Allowance is applied only to covered service components using deterministic allocation that maximizes weighted units. The full invoice must be paid before final customer handoff; vendor dispatch may happen earlier.
 
 ### Implementation state
 

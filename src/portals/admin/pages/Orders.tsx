@@ -30,12 +30,32 @@ type AdminOrder = {
     amount: number
     status: 'unpaid' | 'paid'
     paid_at: string | null
-    billing_breakdown: { coveredUnits: number; subscriberAmount: number; regularAmount: number } | null
+    billing_breakdown: BillingBreakdown | null
   } | null
   mismatches: Array<{ id: string; details: unknown }>
 }
 
+type BillingBreakdown = { coveredUnits: number; subscriberAmount: number; regularAmount: number }
 type AdminOrdersData = { orders: AdminOrder[] }
+
+function normalizeBillingBreakdown(value: unknown): BillingBreakdown | null {
+  let breakdown = value
+  if (typeof breakdown === 'string') {
+    try {
+      breakdown = JSON.parse(breakdown)
+    } catch {
+      return null
+    }
+  }
+  if (!breakdown || typeof breakdown !== 'object') return null
+
+  const candidate = breakdown as Record<string, unknown>
+  const coveredUnits = Number(candidate.coveredUnits)
+  const subscriberAmount = Number(candidate.subscriberAmount)
+  const regularAmount = Number(candidate.regularAmount)
+  if (![coveredUnits, subscriberAmount, regularAmount].every(Number.isFinite)) return null
+  return { coveredUnits, subscriberAmount, regularAmount }
+}
 
 // eslint-disable-next-line react-refresh/only-export-components
 export async function loader({ request }: Route.LoaderArgs) {
@@ -83,7 +103,10 @@ export async function loader({ request }: Route.LoaderArgs) {
             unit_price: Number(item.unit_price),
             category: (categories ?? []).find((category) => category.id === item.category_id) ?? null,
           })),
-        invoice: (invoices ?? []).find((invoice) => invoice.order_id === order.id) ?? null,
+        invoice: (() => {
+          const invoice = (invoices ?? []).find((record) => record.order_id === order.id)
+          return invoice ? { ...invoice, billing_breakdown: normalizeBillingBreakdown(invoice.billing_breakdown) } : null
+        })(),
         mismatches: (mismatches ?? []).filter((mismatch) => mismatch.order_id === order.id),
       })),
     },

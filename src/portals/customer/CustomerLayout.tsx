@@ -93,14 +93,11 @@ export async function loader({ request }: Route.LoaderArgs) {
     .order('created_at', { ascending: false })
 
   const invoiceOrderIds = (orders ?? []).map((order) => order.id)
-  const { data: unpaidInvoices } =
+  const { data: orderInvoices, error: orderInvoicesError } =
     invoiceOrderIds.length > 0
-      ? await serverSupabase.from('invoices').select('order_id').in('order_id', invoiceOrderIds).eq('status', 'unpaid')
-      : { data: [] }
-  const { data: orderInvoices } =
-    invoiceOrderIds.length > 0
-      ? await serverSupabase.from('invoices').select('order_id, amount').in('order_id', invoiceOrderIds)
-      : { data: [] }
+      ? await serverSupabase.from('invoices').select('order_id, amount, status').in('order_id', invoiceOrderIds)
+      : { data: [], error: null }
+  if (orderInvoicesError) throw new Error(`Order payment status could not be loaded: ${orderInvoicesError.message}`)
 
   const { data: pickupLocations } = await serverSupabase
     .from('pickup_locations')
@@ -111,7 +108,10 @@ export async function loader({ request }: Route.LoaderArgs) {
   const orderIds = (orders ?? []).map((order) => order.id)
   const { data: orderItems } =
     orderIds.length > 0
-      ? await serverSupabase.from('order_items').select('id, order_id, category_id, quantity, service, unit_price').in('order_id', orderIds)
+      ? await serverSupabase
+          .from('order_items')
+          .select('id, order_id, category_id, quantity, confirmed_quantity, service, unit_price')
+          .in('order_id', orderIds)
       : { data: [] }
   const categoryIds = [...new Set((orderItems ?? []).map((item) => item.category_id))]
   const { data: orderCategories } =
@@ -245,7 +245,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       user: userData.user,
       profile,
       orders: orders ?? [],
-      unpaidInvoiceOrderIds: (unpaidInvoices ?? []).map((invoice) => invoice.order_id),
+      unpaidInvoiceOrderIds: (orderInvoices ?? []).filter((invoice) => invoice.status === 'unpaid').map((invoice) => invoice.order_id),
       invoiceAmountsByOrderId: Object.fromEntries((orderInvoices ?? []).map((invoice) => [invoice.order_id, Number(invoice.amount)])),
       pickupLocations: pickupLocations ?? [],
       orderItems: persistedOrderItems,
@@ -507,9 +507,11 @@ export default function CustomerLayout() {
 
       <div className="relative min-h-screen bg-[#fafafa] text-[#121212]">
         <div className="relative z-10 min-h-screen lg:flex">
-          <aside className="sticky top-0 hidden h-screen max-h-screen w-[221px] shrink-0 overflow-y-auto border-r border-[#f2f3f3] bg-white px-[13px] py-8 shadow-[1px_0_8px_rgba(18,18,18,0.04)] lg:flex lg:flex-col">
+          <aside className="sticky top-0 hidden h-screen max-h-screen w-[221px] shrink-0 overflow-y-auto border-r border-[#f2f3f3] bg-white px-[13px] py-8 shadow-[1px_0_8px_rgba(18,18,18,0.04)] lg:flex lg:flex-col print:hidden">
             <div className="px-3">
-              <QaffyLogo />
+              <NavLink to="/" aria-label="Go to customer home" className="inline-flex rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary">
+                <QaffyLogo />
+              </NavLink>
             </div>
 
             <nav className="mx-auto mt-12 w-[194px] space-y-[3px]">
@@ -559,7 +561,7 @@ export default function CustomerLayout() {
           </aside>
 
           <div className="min-w-0 flex-1">
-            <header className="sticky top-0 z-20 border-b border-[#f2f3f3] bg-white lg:hidden">
+            <header className="sticky top-0 z-20 border-b border-[#f2f3f3] bg-white lg:hidden print:hidden">
               <div className="mx-auto flex max-w-3xl items-center justify-between px-4 py-3.5 sm:px-6">
                 <button
                   type="button"
@@ -571,7 +573,9 @@ export default function CustomerLayout() {
                   {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
                 </button>
 
-                <QaffyLogo className="scale-[0.82]" />
+                <NavLink to="/" aria-label="Go to customer home" className="inline-flex rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary">
+                  <QaffyLogo className="scale-[0.82]" />
+                </NavLink>
 
                 <div className="flex items-center gap-2">
                   <NavLink
@@ -600,7 +604,7 @@ export default function CustomerLayout() {
             </header>
 
             {mobileMenuOpen && (
-              <div className="fixed inset-0 z-40 lg:hidden">
+              <div className="fixed inset-0 z-40 lg:hidden print:hidden">
                 <button
                   type="button"
                   aria-label="Close navigation menu"
@@ -610,7 +614,14 @@ export default function CustomerLayout() {
 
                 <aside className="relative z-10 flex h-full w-[82%] max-w-sm flex-col border-r border-[#e7e7e7] bg-white px-4 py-5 shadow-xl">
                   <div className="mb-6 flex items-center justify-between">
-                    <QaffyLogo className="scale-[0.82]" />
+                    <NavLink
+                      to="/"
+                      aria-label="Go to customer home"
+                      onClick={closeMobileMenu}
+                      className="inline-flex rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary"
+                    >
+                      <QaffyLogo className="scale-[0.82]" />
+                    </NavLink>
                     <button
                       type="button"
                       aria-label="Close navigation menu"

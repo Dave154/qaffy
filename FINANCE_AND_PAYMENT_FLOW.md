@@ -51,7 +51,7 @@ Approved operational billing model as of 2026-09-14.
 - Customer Transactions now combines Paystack payment rows and wallet ledger debits, with functional filters and real pending/success/failed statuses.
 - Customer Settings now saves profile name/phone, shows the live subscription end date and referral code, and renders recent payment rows from the payment store.
 - Customer OTP flow now selects the correct active order and does not expose OTPs for delivered orders.
-- Vendor confirmation now stores weighted final units for subscription orders and applies allowance only to plan-covered service components. Over-limit covered components use the saved global category/service subscriber rate; uncovered services use saved regular customer rates. Charges remain one invoice payable from the one-off wallet; if the balance is insufficient, delivery remains blocked.
+- Vendor confirmation now stores weighted final units for subscription orders and applies allowance only to plan-covered service components. Over-limit covered components use the saved global category/service subscriber rate; uncovered services use saved regular customer rates. Charges remain one invoice payable from the one-off wallet. Vendors may dispatch before payment, but Logistics only sees dispatched orders after payment and cannot complete the handoff while the invoice is unpaid.
 - Next billing-related customer work: run live payment, invoice, order, and OTP smoke tests after applying the pending Supabase migrations.
 - Orders now have a globally unique database-generated `public_order_number` in `QO-######` format for user-facing references; UUID order IDs remain internal keys.
 
@@ -84,7 +84,7 @@ Approved operational billing model as of 2026-09-14.
 - Subscription coverage now uses deterministic bounded allocation to maximize covered weighted units and no longer depends on database row order.
 - Vendor finalization now records a trusted confirmation event with the vendor actor, original and confirmed counts, mismatch detail, and invoice outcome.
 - New mismatch records now persist structured item lines and customer invoices show the itemized difference and extra-charge breakdown.
-- Invoice payment is now restricted to unpaid `invoiced` orders, cancelled subscription orders are excluded from the customer usage meter, and duplicate mismatch line rendering is safe.
+- Invoice payment is allowed for unpaid `invoiced` orders and unpaid `out_for_delivery` orders. Payment after dispatch preserves the dispatch state while issuing the delivery OTP. Cancelled subscription orders are excluded from the customer usage meter, and duplicate mismatch line rendering is safe.
 - Customer order changes now revalidate the customer layout in realtime, and lifecycle fields force the provider snapshot to refresh so pickup and related customer-visible state update without a reload.
 - Logistics order and event tables are now explicitly added to the Supabase realtime publication so new customer orders reach OTP search immediately.
 - Vendor order state has a visible-page fallback refresh so logistics pickup transitions cannot leave the vendor available-claim count stale when realtime setup is delayed.
@@ -96,7 +96,7 @@ Approved operational billing model as of 2026-09-14.
 - Pickup search requires the complete four-digit OTP and uses an exact match.
 - Confirmed pickup sets the order to `picked_up`, records the pickup date, and nullifies the pickup OTP in the same trusted database update.
 - Logistics pickup/delivery results and event history show the global public order reference (`QO-######`); UUIDs remain internal.
-- Logistics dispatch now requires the order status to be `paid`; `invoiced` or otherwise unpaid orders remain blocked from delivery.
+- Vendors may dispatch an order with a paid invoice (`paid`) or an unpaid finalized invoice (`invoiced`). Unpaid dispatched orders are hidden from Logistics until payment; payment preserves `out_for_delivery`, and the final Logistics handoff verifies a paid invoice as well as a valid delivery OTP.
 - Final delivery clears `delivery_otp` in the same trusted update that marks the order `delivered`, preventing OTP reuse.
 - Pickup/Delivery was moved out of the header and placed beside the date filter. The controls stay horizontal and compact on small screens. The header has padded spacing, a smaller Logistics label, and a red logout icon.
 - Remaining logistics audit work: delivery exceptions, public order number search, event-history visibility, and permission boundaries, then run live OTP/order smoke tests after applying migrations.
@@ -127,7 +127,7 @@ This platform uses a post-paid model.
 - The wallet is not treated as a pre-charge for the original order.
 - The wallet is used only to settle the final invoice generated after vendor confirmation.
 - If the final invoice amount is covered, the wallet deducts and the invoice becomes paid.
-- If the wallet balance is insufficient, the invoice remains unpaid and the order stays in a pending-payment state.
+- If the wallet balance is insufficient, the invoice remains unpaid and the order stays in a pending-payment state until vendor dispatch. Dispatch does not mark the invoice paid or release the order for customer handoff.
 
 ### 2. Under-count handling
 
@@ -185,9 +185,9 @@ If the wallet balance is insufficient after vendor confirmation:
 - Over-limit units for a service covered by the plan use the saved global subscriber rate for that category and service. Services outside the plan use their saved regular customer rate and do not receive the subscriber discount.
 - Regular and global subscriber rates are saved on order-item creation; plan coverage and weekly limit are snapshotted when the subscription starts. Admin plan edits apply to new subscriptions, while subscriber-rate edits apply to orders placed afterward, including orders from active subscribers.
 - Vendor payout amounts are not reduced by customer subscriber discounts.
-- If the wallet cannot cover the final invoice, the invoice remains unpaid and delivery is blocked.
+- If the wallet cannot cover the final invoice, the invoice remains unpaid. Vendor dispatch may proceed, but Logistics cannot complete final delivery until payment.
 - The customer is prompted to top up the general wallet before the order can be paid and released for delivery.
-- The implementation must not partially release or deliver an order while any charge remains unpaid.
+- The implementation must not partially pay or complete final customer handoff while any charge remains unpaid.
 
 ## Operational rules for admins
 

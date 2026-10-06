@@ -44,6 +44,25 @@ test('builds separate vendor previews using only paid, confirmed, unsettled orde
   )
 })
 
+test('keeps paid dispatched orders eligible for payout while excluding unpaid dispatched orders', () => {
+  const previews = buildSettlementVendorPreviews(
+    [vendors[0]],
+    [
+      { id: 'dispatched-paid', vendor_id: 'vendor-a', status: 'out_for_delivery', clothes_count_vendor: 1, invoice_status: 'paid' },
+      { id: 'dispatched-unpaid', vendor_id: 'vendor-a', status: 'out_for_delivery', clothes_count_vendor: 1, invoice_status: 'unpaid' },
+    ],
+    [
+      { id: 'item-dispatched-paid', order_id: 'dispatched-paid', category_id: 'shirts', confirmed_quantity: 1, service: 'wash', unit_price: 99 },
+      { id: 'item-dispatched-unpaid', order_id: 'dispatched-unpaid', category_id: 'shirts', confirmed_quantity: 5, service: 'wash', unit_price: 99 },
+    ],
+    rates,
+    [],
+  )
+
+  assert.deepEqual(previews[0].orderIds, ['dispatched-paid'])
+  assert.equal(previews[0].amount, 125)
+})
+
 test('marks vendors with no payable orders ineligible', () => {
   const previews = buildSettlementVendorPreviews(
     [vendors[0]],

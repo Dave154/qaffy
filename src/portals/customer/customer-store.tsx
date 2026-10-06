@@ -20,6 +20,8 @@ export type OrderLine = {
   quantity: number
   unitPrice: number
   subscriptionUnits?: number
+  vendorCountDifference?: number
+  vendorAdded?: boolean
 }
 
 export type PickupLocationOption = {
@@ -34,11 +36,13 @@ export type PersistedOrderItem = {
   category_id: string
   category_name: string
   quantity: number
+  confirmed_quantity: number | null
   service: 'wash' | 'iron' | 'wash_iron'
   unit_price: number
 }
 
 export type MismatchLine = {
+  itemId?: string
   category: string
   service: 'wash' | 'iron' | 'wash_iron'
   originalQuantity: number
@@ -306,6 +310,16 @@ function mapDatabaseOrder(
   }
 
   const mismatch = orderMismatches.find((item) => item.order_id === order.id)
+  const mismatchLines = Array.isArray(mismatch?.details) ? mismatch.details : []
+  const paymentStatus = unpaidInvoiceOrderIds
+    ? unpaidInvoiceOrderIds.has(order.id)
+      ? 'Pending'
+      : Object.prototype.hasOwnProperty.call(invoiceAmountsByOrderId ?? {}, order.id)
+        ? 'Paid'
+        : 'Pending'
+    : ['paid', 'out_for_delivery', 'delivered'].includes(order.status)
+      ? 'Paid'
+      : 'Pending'
 
   return {
     id: order.id,
@@ -321,31 +335,29 @@ function mapDatabaseOrder(
     items: order.clothes_count_customer,
     action: 'View details',
     pickupOtp: order.pickup_otp ?? '',
-    deliveryOtp: order.delivery_otp ?? undefined,
+    deliveryOtp: paymentStatus === 'Paid' ? order.delivery_otp ?? undefined : undefined,
     pickedUp: order.status !== 'pending_pickup',
     notes: order.notes ?? '',
     service: serviceMap[order.order_type],
-    paymentStatus: unpaidInvoiceOrderIds
-      ? unpaidInvoiceOrderIds.has(order.id)
-        ? 'Pending'
-        : Object.prototype.hasOwnProperty.call(invoiceAmountsByOrderId ?? {}, order.id)
-          ? 'Paid'
-          : 'Pending'
-      : ['paid', 'out_for_delivery', 'delivered'].includes(order.status)
-        ? 'Paid'
-        : 'Pending',
+    paymentStatus,
     isSubscriptionOrder: order.is_subscription_order,
     pickupLocation:
       pickupLocations.find((location) => location.id === order.pickup_location_id)?.name ??
       (order.pickup_location_id ? 'Pickup location pending' : 'Pickup location pending'),
     lines: persistedItems
       .filter((item) => item.order_id === order.id)
-      .map((item) => ({
-        category: item.category_name,
-        service: item.service === 'wash_iron' ? 'Wash + Iron' : item.service === 'iron' ? 'Iron' : 'Wash',
-        quantity: item.quantity,
-        unitPrice: Number(item.unit_price),
-      })),
+      .map((item) => {
+        const mismatchLine = mismatchLines.find((line) => line.itemId === item.id)
+        return {
+          category: item.category_name,
+          service: item.service === 'wash_iron' ? 'Wash + Iron' : item.service === 'iron' ? 'Iron' : 'Wash',
+          quantity: item.confirmed_quantity ?? item.quantity,
+          unitPrice: Number(item.unit_price),
+          vendorCountDifference:
+            item.confirmed_quantity == null ? undefined : item.confirmed_quantity - item.quantity,
+          vendorAdded: mismatchLine?.originalQuantity === 0 && mismatchLine.confirmedQuantity > 0,
+        }
+      }),
     mismatch: mismatch
       ? {
           id: mismatch.id,

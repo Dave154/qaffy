@@ -41,6 +41,11 @@ export async function action({ request }: Route.ActionArgs) {
     set status = 'delivered', delivery_otp = null
     where id = ${orderId}
       and status = 'out_for_delivery'
+      and exists (
+        select 1 from invoices
+        where invoices.order_id = orders.id
+          and invoices.status = 'paid'
+      )
       and right(regexp_replace(coalesce(delivery_otp, ''), '[^0-9]', '', 'g'), 4) = ${otp}
     returning id, customer_id, public_order_number, picked_up_date, status`
         : sql`update orders

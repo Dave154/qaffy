@@ -12,7 +12,11 @@ export default function OtpFlow() {
 
   const otpSteps = [
     { label: 'Pickup OTP', detail: 'Share this when dropping off your bag', value: order?.pickedUp ? undefined : order?.pickupOtp },
-    { label: 'Delivery OTP', detail: 'Use this to collect your clean clothes', value: order?.deliveryOtp },
+    {
+      label: 'Delivery OTP',
+      detail: 'Use this to collect your clean clothes',
+      value: order?.paymentStatus === 'Paid' ? order.deliveryOtp : undefined,
+    },
   ]
 
   const currentStep = otpSteps[activeStep]

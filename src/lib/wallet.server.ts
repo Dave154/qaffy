@@ -296,7 +296,7 @@ async function sendReferralRewardNotifications(recipients: ReferralRewardRecipie
 export async function payFromWallet(customerId: string, invoiceId: string, balanceType: WalletBalanceType) {
   const result = await sql.begin(async (tx) => {
     const [invoice] = await tx`
-      select i.*, o.customer_id, o.id as order_id, o.public_order_number
+      select i.*, o.customer_id, o.id as order_id, o.public_order_number, o.status as order_status
       from invoices i
       join orders o on o.id = i.order_id
       where i.id = ${invoiceId}
@@ -306,14 +306,19 @@ export async function payFromWallet(customerId: string, invoiceId: string, balan
     if (!invoice) throw new Error('Invoice not found')
     if (invoice.customer_id !== customerId) throw new Error('Not authorized for this invoice')
     if (invoice.status === 'paid') throw new Error('Invoice already paid')
-    if (invoice.status !== 'unpaid' || invoice.order_status !== 'invoiced')
+    if (invoice.status !== 'unpaid' || !['invoiced', 'out_for_delivery'].includes(invoice.order_status))
       throw new Error('Invoice is not payable in its current order state')
 
     const { newBalance } = await debitWalletForInvoice(tx, customerId, invoiceId, Number(invoice.amount), balanceType)
     const deliveryOtp = generateFourDigitOtp()
 
     await tx`update invoices set status = 'paid', paid_at = now() where id = ${invoiceId}`
-    await tx`update orders set status = 'paid', delivery_otp = ${deliveryOtp} where id = ${invoice.order_id}`
+    await tx`
+      update orders
+      set status = case when status = 'out_for_delivery' then status else 'paid' end,
+          delivery_otp = ${deliveryOtp}
+      where id = ${invoice.order_id}
+    `
     const referralRewardRecipients = await issueReferralRewards(tx, customerId, invoice.order_id, Number(invoice.amount))
 
     return {
@@ -740,7 +745,7 @@ export async function creditWallet(customerId: string, balanceType: WalletBalanc
         from invoices i
         join orders o on o.id = i.order_id
         where o.customer_id = ${customerId}
-          and o.status = 'invoiced'
+          and o.status in ('invoiced', 'out_for_delivery')
           and i.status = 'unpaid'
         order by o.created_at desc
         for update of i, o
@@ -754,7 +759,12 @@ export async function creditWallet(customerId: string, balanceType: WalletBalanc
         const deliveryOtp = generateFourDigitOtp()
         await tx`update wallets set one_off_balance = ${settledBalance}, updated_at = now() where customer_id = ${customerId}`
         await tx`update invoices set status = 'paid', paid_at = now() where id = ${invoice.id}`
-        await tx`update orders set status = 'paid', delivery_otp = ${deliveryOtp} where id = ${invoice.order_id}`
+        await tx`
+          update orders
+          set status = case when status = 'out_for_delivery' then status else 'paid' end,
+              delivery_otp = ${deliveryOtp}
+          where id = ${invoice.order_id}
+        `
         if (invoiceAmount > 0) {
           await tx`
             insert into wallet_transactions (customer_id, balance_type, txn_type, amount, balance_after, related_invoice_id)
@@ -884,11 +894,11 @@ export async function chargeSubscriptionInvoice(customerId: string, invoiceId: s
     await tx`insert into wallets (customer_id) values (${customerId}) on conflict (customer_id) do nothing`
 
     const [invoice] = await tx`
-      select i.*, o.customer_id, o.is_subscription_order, o.id as order_id, o.public_order_number
+      select i.*, o.customer_id, o.is_subscription_order, o.id as order_id, o.public_order_number, o.status as order_status
       from invoices i
       join orders o on o.id = i.order_id
       where i.id = ${invoiceId}
-      for update of i
+      for update of i, o
     `
 
     if (!invoice || invoice.customer_id !== customerId || !invoice.is_subscription_order) throw new Error('Invoice not found')
@@ -900,11 +910,19 @@ export async function chargeSubscriptionInvoice(customerId: string, invoiceId: s
         publicOrderNumber: invoice.public_order_number,
       }
 
+    if (invoice.status !== 'unpaid' || !['invoiced', 'out_for_delivery'].includes(invoice.order_status))
+      throw new Error('Invoice is not payable in its current order state')
+
     const amount = Number(invoice.amount)
     const { newBalance } = await debitWalletForInvoice(tx, customerId, invoiceId, amount, 'one_off')
     const deliveryOtp = generateFourDigitOtp()
     await tx`update invoices set status = 'paid', paid_at = now() where id = ${invoiceId}`
-    await tx`update orders set status = 'paid', delivery_otp = ${deliveryOtp} where id = ${invoice.order_id}`
+    await tx`
+      update orders
+      set status = case when status = 'out_for_delivery' then status else 'paid' end,
+          delivery_otp = ${deliveryOtp}
+      where id = ${invoice.order_id}
+    `
     const referralRewardRecipients = await issueReferralRewards(tx, customerId, invoice.order_id, amount)
 
     return {

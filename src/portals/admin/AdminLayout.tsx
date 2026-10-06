@@ -116,11 +116,19 @@ export default function AdminLayout() {
         <div className="scrollbar-hidden flex min-h-0 flex-1 flex-col overflow-y-auto">
           <div className={`mb-8 flex flex-col gap-3 ${isCollapsed ? 'items-center text-center' : ''}`}>
             {isCollapsed ? (
-              <span className="mt-2 block text-3xl leading-[33px] text-brand-primary" style={{ fontFamily: 'Pacifico, cursive' }}>
+              <NavLink
+                to="/admin"
+                aria-label="Go to admin home"
+                title="Admin home"
+                className="mt-2 rounded-sm text-3xl leading-[33px] text-brand-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary"
+                style={{ fontFamily: 'Pacifico, cursive' }}
+              >
                 Q
-              </span>
+              </NavLink>
             ) : (
-              <QaffyLogo className="mt-2 origin-left px-3 scale-[0.78]" />
+              <NavLink to="/admin" aria-label="Go to admin home" className="inline-flex rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary">
+                <QaffyLogo className="mt-2 origin-left px-3 scale-[0.78]" />
+              </NavLink>
             )}
             <p className={`text-[10px] font-semibold capitalize tracking-[0.22em] text-brand-primary ${isCollapsed ? 'sr-only' : 'px-3'}`}>
               Admin
@@ -240,7 +248,9 @@ export default function AdminLayout() {
           <Menu size={18} />
         </button>
         <div className="flex flex-col items-center justify-center gap-3">
-          <QaffyLogo className="scale-[0.82]" />
+          <NavLink to="/admin" aria-label="Go to admin home" className="inline-flex rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary">
+            <QaffyLogo className="scale-[0.82]" />
+          </NavLink>
           <span className="text-[10px] font-semibold capitalize tracking-[0.18em] text-brand-primary">Admin</span>
         </div>
         <div className="w-9" aria-hidden="true" />
@@ -256,7 +266,14 @@ export default function AdminLayout() {
           <aside className="relative z-10 flex h-full w-[84%] max-w-sm flex-col overflow-y-auto bg-white px-[13px] py-5 shadow-xl">
             <div className="mb-6 flex items-center justify-between">
               <div className="flex flex-1 flex-col items-start gap-3">
-                <QaffyLogo className="scale-[0.78] origin-left px-0" />
+                <NavLink
+                  to="/admin"
+                  aria-label="Go to admin home"
+                  onClick={closeMobileMenu}
+                  className="inline-flex rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary"
+                >
+                  <QaffyLogo className="scale-[0.78] origin-left px-0" />
+                </NavLink>
                 <p className="text-[10px] font-semibold capitalize tracking-[0.22em] text-brand-primary">Admin</p>
               </div>
               <button

@@ -8,7 +8,7 @@
     "build": "react-router build",
     "start": "react-router-serve ./build/server/index.js",
     "typecheck": "react-router typegen && tsc",
-    "test": "node --test src/lib/rate-card.test.mjs src/lib/payout-outcomes.test.mjs src/lib/payout-workflow.test.mjs src/lib/payout-webhooks.test.mjs src/lib/revenue-reporting.test.mjs src/lib/subscription-week.test.mjs src/lib/subscription-billing.test.mjs src/lib/order-lines.test.mjs src/lib/vendor-received-counts.test.mjs",
+    "test": "node --test src/lib/rate-card.test.mjs src/lib/payout-outcomes.test.mjs src/lib/payout-workflow.test.mjs src/lib/payout-webhooks.test.mjs src/lib/revenue-reporting.test.mjs src/lib/subscription-week.test.mjs src/lib/subscription-billing.test.mjs src/lib/order-lines.test.mjs src/lib/vendor-received-counts.test.mjs src/lib/session-cookie-options.test.mjs src/lib/order-lifecycle.test.mjs",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
