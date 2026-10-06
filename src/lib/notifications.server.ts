@@ -1,6 +1,21 @@
 import { sql } from './db.server'
 import { sendCustomerPush, type PushPayload } from './push.server'
 
+export function walletInvoicePaidNotification(amount: number, publicOrderNumber: string, orderId: string): PushPayload {
+  const formattedAmount = `₦${amount.toLocaleString()}`
+  return {
+    title: 'Wallet payment successful',
+    body: `${formattedAmount} has been deducted from your wallet for order ${publicOrderNumber}.`,
+    details: [
+      `Amount deducted: ${formattedAmount}`,
+      `Order: ${publicOrderNumber}`,
+      'Your order can continue to delivery.',
+    ],
+    url: `/orders?order=${encodeURIComponent(publicOrderNumber)}`,
+    tag: `order:${orderId}:payment`,
+  }
+}
+
 type NotificationInput = {
   eventKey: string
   customerId: string

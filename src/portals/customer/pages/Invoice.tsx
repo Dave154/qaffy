@@ -5,7 +5,7 @@ import type { Route } from './+types/Invoice'
 import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
 import { useCustomerStore } from '../customer-store-hook'
 import { InsufficientBalanceError, payFromWallet } from '../../../lib/wallet.server'
-import { sendCustomerNotification } from '../../../lib/notifications.server'
+import { sendCustomerNotification, walletInvoicePaidNotification } from '../../../lib/notifications.server'
 
 // eslint-disable-next-line react-refresh/only-export-components
 export async function action({ request }: Route.ActionArgs) {
@@ -26,13 +26,7 @@ export async function action({ request }: Route.ActionArgs) {
       customerId: userData.user.id,
       notificationType: 'payment_confirmed',
       orderId: result.orderId,
-      payload: {
-        title: 'Payment confirmed',
-        body: `Your invoice for ${result.publicOrderNumber} has been paid.`,
-        details: [`Order: ${result.publicOrderNumber}`, 'The invoice is fully paid.', 'Your order can continue to delivery.'],
-        url: `/orders?order=${encodeURIComponent(result.publicOrderNumber)}`,
-        tag: `order:${result.orderId}:payment`,
-      },
+      payload: walletInvoicePaidNotification(result.amount, result.publicOrderNumber, result.orderId),
     })
     return data({ ok: true, deliveryOtp: result.deliveryOtp }, { headers })
   } catch (error) {

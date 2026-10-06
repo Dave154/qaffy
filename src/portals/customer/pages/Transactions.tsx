@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { useNavigation } from 'react-router'
+import { Link, useNavigation } from 'react-router'
+import { ArrowUpRight } from 'lucide-react'
 import { useCustomerStore } from '../customer-store-hook'
 import CopyableOrderId from '../../../components/CopyableOrderId'
 
@@ -109,12 +110,25 @@ export default function Transactions() {
                   </span>
                   <div className="min-w-0 flex-1">
                     <p className="truncate font-semibold text-slate-900">{transaction.title}</p>
-                    <CopyableOrderId
-                      id={transaction.reference}
-                      label="Transaction reference"
-                      className="mt-0.5 max-w-full text-xs text-slate-500"
-                    />
-                    <p className="mt-1 text-[11px] text-slate-400">{transaction.date}</p>
+                    {transaction.orderReference && (
+                      <Link
+                        to={`/orders?order=${encodeURIComponent(transaction.orderReference)}&returnTo=%2Ftransactions`}
+                        aria-label={`View order ${transaction.orderReference}`}
+                        className="mt-1.5 inline-flex max-w-full items-center gap-1.5 rounded-lg border border-brand-border bg-brand-soft/60 px-2 py-1 text-xs font-semibold text-brand-primary transition hover:border-brand-primary/40 hover:bg-brand-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-1"
+                      >
+                        <span className="shrink-0 text-slate-500">Order</span>
+                        <span className="truncate">{transaction.orderReference}</span>
+                        <ArrowUpRight className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                      </Link>
+                    )}
+                    {!transaction.orderReference && (
+                      <CopyableOrderId
+                        id={transaction.reference}
+                        label="Transaction reference"
+                        className="mt-0.5 max-w-full text-xs text-slate-500"
+                      />
+                    )}
+                    <p className="mt-1.5 text-[11px] text-slate-400">{transaction.date}</p>
                   </div>
                 </div>
                 <div className="shrink-0 text-right">

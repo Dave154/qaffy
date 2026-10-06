@@ -66,7 +66,7 @@ export function getRateValueFromItem(
   type: 'customer' | 'vendor' = 'customer',
 ) {
   const configured = getRateValue(rate, item.service, type)
-  return configured > 0 ? configured : Number(item.unit_price ?? 0)
+  return type === 'vendor' || configured > 0 ? configured : Number(item.unit_price ?? 0)
 }
 
 export function buildSettlementVendorPreviews(

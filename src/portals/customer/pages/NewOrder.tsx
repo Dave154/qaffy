@@ -256,60 +256,6 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
           </button>
         </header>
 
-        {isReadOnly && (
-          <section className="mt-6 grid gap-3 sm:grid-cols-2">
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5 shadow-sm">
-              <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-slate-500">Payment status</p>
-              <p className="mt-2.5 font-semibold text-slate-900">{order?.paymentStatus}</p>
-            </div>
-            {!order?.pickedUp && order?.pickupOtp && (
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm sm:p-5">
-                <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-slate-500">Pickup OTP</p>
-                <div className="mt-2.5">
-                  <ProtectedOtp value={order?.pickupOtp} digitClassName="h-9 w-9 text-sm" />
-                </div>
-              </div>
-            )}
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5 shadow-sm">
-              <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-slate-500">Delivery OTP</p>
-              {order?.status === 'Delivered' ? (
-                <p className="mt-2.5 text-sm font-medium text-slate-600">Unavailable: order already delivered.</p>
-              ) : order?.deliveryOtp ? (
-                <div className="mt-2.5">
-                  <ProtectedOtp value={order.deliveryOtp} digitClassName="h-9 w-9 text-sm" />
-                </div>
-              ) : (
-                <p className="mt-2.5 text-sm font-medium text-slate-600">Not available yet: payment is required.</p>
-              )}
-            </div>
-          </section>
-        )}
-
-        {isReadOnly && order?.mismatch && (
-          <section className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-4 sm:p-5">
-            <p className="text-sm font-semibold text-amber-800">
-              {order.mismatch.direction === 'over' ? 'Extra items confirmed' : 'Fewer items confirmed'}
-            </p>
-            <p className="mt-1.5 break-words text-sm text-amber-700">{order.mismatch.detail}</p>
-          </section>
-        )}
-
-        {isReadOnly && order?.status === 'Pending payment' && (
-          <section className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-4 sm:p-5">
-            <p className="text-sm font-semibold text-amber-800">Payment needed before delivery</p>
-            <p className="mt-1.5 text-sm text-amber-700">
-              Your final invoice is ready. Pay it from your wallet, or top up your wallet first if your balance is insufficient.
-            </p>
-            <Link
-              to="/invoice"
-              onClick={onClose}
-              className="mt-4 inline-flex w-full items-center justify-center rounded-2xl bg-brand-primary px-4 py-3 text-sm font-semibold text-white transition hover:bg-brand-primary-hover"
-            >
-              View invoice and payment options
-            </Link>
-          </section>
-        )}
-
         <section className="mt-6 rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-sm">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
@@ -510,6 +456,60 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
             </div>
           )}
         </section>
+
+        {isReadOnly && (
+          <section className="mt-6 grid gap-3 sm:grid-cols-2">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5 shadow-sm">
+              <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-slate-500">Payment status</p>
+              <p className="mt-2.5 font-semibold text-slate-900">{order?.paymentStatus}</p>
+            </div>
+            {!order?.pickedUp && order?.pickupOtp && (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm sm:p-5">
+                <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-slate-500">Pickup OTP</p>
+                <div className="mt-2.5">
+                  <ProtectedOtp value={order?.pickupOtp} digitClassName="h-9 w-9 text-sm" />
+                </div>
+              </div>
+            )}
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5 shadow-sm">
+              <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-slate-500">Delivery OTP</p>
+              {order?.status === 'Delivered' ? (
+                <p className="mt-2.5 text-sm font-medium text-slate-600">Unavailable: order already delivered.</p>
+              ) : order?.deliveryOtp ? (
+                <div className="mt-2.5">
+                  <ProtectedOtp value={order.deliveryOtp} digitClassName="h-9 w-9 text-sm" />
+                </div>
+              ) : (
+                <p className="mt-2.5 text-sm font-medium text-slate-600">Not available yet: payment is required.</p>
+              )}
+            </div>
+          </section>
+        )}
+
+        {isReadOnly && order?.mismatch && (
+          <section className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-4 sm:p-5">
+            <p className="text-sm font-semibold text-amber-800">
+              {order.mismatch.direction === 'over' ? 'Extra items confirmed' : 'Fewer items confirmed'}
+            </p>
+            <p className="mt-1.5 break-words text-sm text-amber-700">{order.mismatch.detail}</p>
+          </section>
+        )}
+
+        {isReadOnly && order?.status === 'Pending payment' && (
+          <section className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-4 sm:p-5">
+            <p className="text-sm font-semibold text-amber-800">Payment needed before delivery</p>
+            <p className="mt-1.5 text-sm text-amber-700">
+              Your final invoice is ready. Pay it from your wallet, or top up your wallet first if your balance is insufficient.
+            </p>
+            <Link
+              to="/invoice"
+              onClick={onClose}
+              className="mt-4 inline-flex w-full items-center justify-center rounded-2xl bg-brand-primary px-4 py-3 text-sm font-semibold text-white transition hover:bg-brand-primary-hover"
+            >
+              View invoice and payment options
+            </Link>
+          </section>
+        )}
 
         <section className="mt-6 rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-sm">
           <label>

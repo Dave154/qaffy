@@ -7,7 +7,7 @@ import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../li
 import { requireRole } from '../../../lib/auth.server'
 import { finalizeVendorOrder } from '../../../lib/wallet.server'
 import { toast } from '../../../lib/toast'
-import { sendCustomerNotification } from '../../../lib/notifications.server'
+import { sendCustomerNotification, walletInvoicePaidNotification } from '../../../lib/notifications.server'
 import VendorOrderReviewDialog, {
   getInitialReceivedCounts,
   type VendorReviewAddedItem,
@@ -112,13 +112,7 @@ export async function action({ request }: Route.ActionArgs) {
         customerId: result.customerId,
         notificationType: 'payment_confirmed',
         orderId,
-        payload: {
-          title: 'Payment confirmed',
-          body: `Your invoice for ${result.publicOrderNumber} has been paid.`,
-          details: [`Order: ${result.publicOrderNumber}`, 'The invoice is fully paid.', 'Your order can now move to delivery.'],
-          url: `/orders?order=${encodeURIComponent(result.publicOrderNumber)}`,
-          tag: `order:${orderId}:payment`,
-        },
+        payload: walletInvoicePaidNotification(result.amount, result.publicOrderNumber, orderId),
       })
     }
     return data({ ok: true, amount: result.amount, invoiceStatus: result.invoiceStatus }, { headers })
