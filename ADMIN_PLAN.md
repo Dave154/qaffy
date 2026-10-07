@@ -3,7 +3,7 @@
 Referral product rules and implementation sequencing are documented in [REFERRAL_PLAN.md](REFERRAL_PLAN.md). Treat that document as the source of truth before building referral attribution, campaigns, or rewards.
 
 **Status:** Approved planning baseline + current execution snapshot
-**Updated:** 2026-09-22
+**Updated:** 2026-10-07
 
 Read this before implementing the admin portal. Confirmed product decisions are binding unless the user changes them.
 
@@ -14,12 +14,14 @@ The admin work is now substantially implemented and aligned with the live platfo
 - Responsive admin navigation and mobile drawer behavior
 - Live overview metrics, charts, and date filters across day/week/month/all-time ranges
 - Live admin orders with search, filter, and read-only detail views
+- Server-side pagination for Admin Users and Orders; filters and search execute before paging
+- CSV exports for all rows matching the active filters, independent of the current page
 - Vendor/logistics partner management, category and rate management, and mismatch review
 - Finance summary pages with historical admin withdrawal ledger totals and settlement snapshots
 - Notification center and referral-aware customer UI updates outside the admin portal
 - Customer-facing correctness fixes such as timestamp-based recent-order sorting and pending referral reward wording
 
-The trusted settlement payout release flow through verified Paystack Transfers is implemented. The remaining high-priority payout work is stateful fake-provider coverage, staging migration verification, and Paystack test-mode validation before production use.
+Settlement payout release through verified Paystack Transfers is complete. Staging migration verification and a Paystack test-mode transfer have passed; additional SQL-adapter and asynchronous reconciliation tests are optional follow-up confidence work.
 
 ## Product Rules
 
@@ -49,25 +51,30 @@ The trusted settlement payout release flow through verified Paystack Transfers i
 - Admin Overview trend, revenue, workload, and subscriber bars expose exact values through hover, focus, and tap-friendly tooltips.
 - Customer notification center work is implemented separately from Admin reporting: persisted notification events, unread state, realtime updates, safe internal links, and concise title/body rendering are available at `/notifications`.
 
-## Outstanding Admin Work
+## Admin Work Status and Roadmap
 
-These items are **not complete yet**:
+This section retains the implementation checkpoints and separates completed capabilities from remaining rollout/deferred work:
 
 ### High Priority
 
-- **Admin Orders date filter:** filter orders by date range. **Implemented 2026-09-16** using created date.
-- **Admin Orders CSV export:** export only the currently filtered order results. **Implemented 2026-09-16** with search, status, and date filters applied.
+- **Admin Orders date filter:** implemented using created date; it is applied server-side before pagination.
+- **Admin Orders CSV export:** implemented for every order matching active search, status, and created-date filters, regardless of the visible page.
+- **Admin Users server pagination and export:** implemented with server-side search/role/joined-date filters, ten customers per page, and a filtered all-pages CSV export.
+- **Admin Orders server pagination:** implemented with ten orders per page, server-side search/status/date filters, paginated detail data, and filtered all-pages CSV export.
+- **Admin list loading behavior:** Users and Orders show an in-table loading row during page/filter navigation instead of the global Qaffy loader.
+- **Admin list indexes:** supporting indexes are defined by migrations `20261007100000_admin_user_pagination_indexes.sql` and `20261007110000_admin_order_pagination_indexes.sql`. These migrations are in the repository and must be applied to the intended database after confirming the linked environment.
 - **Admin Overview date filter:** implemented 2026-09-16 with independent general and chart date ranges using All time, This month, Last month, and Custom options.
 - **Admin Overview date filter:** implemented with All time, Today, This week, Last week, This month, Last month, and Custom options. Today uses hourly chart buckets; other ranges use daily buckets.
 - **Admin Overview service metrics:** implemented 2026-09-16 with live Wash, Iron, and Wash + Iron clothes counts from order items.
 - **Admin Overview chart metrics:** implemented 2026-09-16 with Orders, Revenue, and New customers chart options.
 - **Admin Overview chart values:** implemented 2026-09-22 with hover/focus/tap values for trend points, revenue bars, workload bars, and plan subscriber bars.
 - **Admin mobile navigation:** implemented 2026-09-22 with a full-screen drawer below the desktop breakpoint and no desktop sidebar space on mobile.
-- **Settlement payout release:** trusted Admin transfer, reconciliation, explicit retry, transfer metadata, and duplicate prevention are implemented. Provider timeouts/unknown results remain processing and can be reconciled by the original reference when no transfer code was returned. Foundational fake-provider outcome tests exist; full persistence/error-path tests and Paystack test-mode verification remain before production use.
+- **Settlement payout release:** completed, including trusted Admin transfer, reconciliation, explicit retry, transfer metadata, and duplicate prevention. Provider timeouts/unknown results remain processing and can be reconciled by the original reference when no transfer code was returned. Staging migration verification and the Paystack test-mode transfer have passed; further SQL-adapter/error-path coverage is follow-up testing.
 
 ### Medium Priority
 
-- **Automatic subscription dates:** derive subscription start/end dates from the selected plan and semester settings in Admin User Details.
+- **Automatic subscription dates:** standard plan-aware subscription dates are implemented. Semester subscriptions end on the configured semester end date.
+- **Admin subscription end-date editing:** implemented for active subscriptions in Admin User Details; ended/cancelled history remains read-only.
 - **Settlement transfer audit trail:** implemented in `vendor_settlement_transfers` with actor, reference, recipient snapshot, timestamps, provider response, status, and failure reason.
 - **Duplicate payout prevention:** implemented with a unique transfer per settlement, locked state checks, and a stable Paystack reference reused after a confirmed failure.
 - **Finance loading/error states:** show dedicated loading and query-error states in Admin and Vendor Finance.
@@ -84,8 +91,10 @@ These items are **not complete yet**:
 
 #### Admin Orders
 
-- Add date-range filtering to the Orders page.
-- Add CSV export for the currently filtered order results only, using the active search/status/date filters.
+- Orders use server-side pagination (10 rows per page); search, status, and created-date filters are applied in the database before paging.
+- CSV export streams all orders matching the active search/status/date filters, independent of the currently visible page.
+- The order detail view can load an order by its internal ID even when it is not on the current result page.
+- Show an in-table loading state during same-route pagination/filter updates; do not display the global Qaffy loader for these transitions.
 - Keep export data aligned with the visible order table and avoid exporting internal OTPs or unnecessary sensitive fields.
 - **Order cancellation:** customers and admins may cancel an order only while it is awaiting pickup (`pending_pickup` and not picked up). Pickup makes cancellation unavailable. Cancellation changes only the order status to `cancelled`, sends no notification, and hides the order from customer, vendor, and logistics views while retaining it for admins. Apply `supabase/migrations/20261006110000_hide_cancelled_orders.sql` to enforce admin-only visibility through RLS.
 
@@ -99,9 +108,15 @@ These items are **not complete yet**:
 #### Admin User Details
 
 - Hide the Cancelled order metric for now; retain the underlying status data for future use.
-- Subscription start and end dates should populate automatically from the selected plan and current semester settings when an admin creates a subscription. Manual date overrides should not be required for the standard flow.
+- Subscription start and end dates populate from the selected plan and current semester settings when an admin creates a subscription. Semester plans use the configured semester end date.
 - Admins can cancel an active subscription by changing its existing status to `cancelled`. This stops it qualifying as active for future orders, sends no customer notification, and preserves the subscription record and existing order snapshots.
 - Admins can edit the end date of an active subscription in customer details; ended and cancelled subscription history stays read-only.
+
+#### Admin Users
+
+- Users use server-side pagination (10 customers per page). Search, role, and joined-date filters are applied before pagination; the server returns only the current page and the bounded order detail data needed by its customer rows.
+- CSV export includes every customer matching the active filters, not just the visible page.
+- Keep paging/filter updates in-table with a loading row rather than a global route loader.
 
 ### Phase 1 Progress
 
@@ -116,6 +131,8 @@ These items are **not complete yet**:
 - Finance now renders Paystack balance failures as `Unavailable` with an explanatory state instead of silently showing `₦0`.
 - Finance cards and payout panels have responsive containment; million-level amounts use compact notation such as `₦7.36M`.
 - Admin Plans supports plan edits and semester configuration settings.
+- Admin Users and Orders use database-side pagination, filtering, and bounded result queries; their CSV resource routes stream matching rows in batches and do not export only the current page.
+- Supporting user/order query indexes have migrations in the repository. Verify the target Supabase project before applying them; code presence does not mean the migrations are deployed.
 - Admin sidebar links now use `/admin/*` paths instead of leaving the admin portal.
 - Trusted settlement transfer execution is implemented; delivery verification and wallet/messaging/archive layers remain future work.
 
@@ -277,12 +294,12 @@ Mostly complete for core operational screens.
 
 ### Phase 3: Finance
 
-Vendor-side finance preparation is complete; Admin payout execution remains the next workstream.
+Vendor-side finance preparation and the trusted Admin payout execution path are implemented and the settlement release work is complete. Staging migration verification and a Paystack test-mode transfer have passed; keep the remaining regression/reconciliation checks as follow-up confidence work, not as unfinished settlement implementation.
 - Revenue and payout summary views are active.
 - Invoice/payment and settlement summary data are being surfaced.
 - Vendor ownership, confirmed-quantity payout calculation, settlement generation, and vendor payout-account verification are implemented.
 - Vendor Finance is the single vendor settlement destination and excludes orders already assigned to settlement batches from outstanding payable totals.
-- Admin still needs the trusted settlement release and payout-transfer workflow, including transfer metadata, Paystack recipient/transfer handling, and paid-settlement audit records.
+- Admin settlement release and payout transfers are complete with transfer metadata, Paystack recipient/transfer handling, reconciliation, and paid-settlement audit records. Staging and Paystack test-mode verification have passed.
 - Historical payout-rate snapshots are implemented for settlement items through `supabase/migrations/20260917110000_admin_finance_ledger_and_settlement_snapshots.sql`.
 - Finance-specific loading and query-error states remain future work.
 - Manual wallet adjustment workflow still needs full validation against the approved wallet service rules.
@@ -296,14 +313,11 @@ Vendor-side finance preparation is complete; Admin payout execution remains the 
 - Customer Settings shows referral sharing, referral history, and reward status.
 - Remaining referral governance work is Admin reward history/export and audited exceptional reversal or correction workflows.
 
-### Next Admin Workstream: Payout Validation and Rollout
+### Settlement Payout Release — Completed
 
-The trusted payout release, reconciliation, retry, transfer ledger, and audit path are implemented. Settlement creation immediately attempts each payout. Do not enable production transfers until the remaining checks below pass:
+The trusted payout release, reconciliation, retry, transfer ledger, and audit path are implemented. Settlement creation immediately attempts each payout. Staging migration verification and a Paystack test-mode ₦200 transfer have passed; the test transfer was confirmed by Paystack and the local ledger.
 
-- Confirm the approved vendor payout-rate formula; do not change the implemented rate-card calculation without product sign-off.
-- Add disposable-Postgres integration coverage for the production SQL adapter; current transactional fake-store workflow tests cover persisted outcomes, duplicate prevention, reference reuse, reconciliation by code/reference, reversal, database/audit rollback, and retry-after-failure, but do not execute the SQL adapter.
-- Staging migration verification and a Paystack test-mode ₦200 transfer have passed. The test transfer was confirmed by Paystack and the local ledger; an asynchronous provider-pending reconciliation was not exercised against Paystack.
-- Keep settlement reversal and partial payment disabled until explicitly approved.
+Settlement release is complete. Further disposable-Postgres integration coverage for the production SQL adapter and a Paystack asynchronous provider-pending reconciliation exercise are recommended follow-up tests; their absence does not mean the settlement workflow is still unimplemented. Keep settlement reversal and partial payment disabled until explicitly approved.
 
 #### Payout Error Handling Contract
 

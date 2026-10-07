@@ -4,7 +4,7 @@
 
 This document outlines the content structure, features, and requirements for the Qaffy laundry service platform based on analysis of the legacy system and product specifications.
 
-## Current status snapshot (2026-09-22)
+## Current status snapshot (2026-10-07)
 
 The repository is now in a product-validated implementation phase across all major portals. Recent work includes:
 
@@ -13,6 +13,7 @@ The repository is now in a product-validated implementation phase across all maj
 - Logistics portal fixups: agent-scoped dashboards, pickup/delivery workflow accuracy, and identity-aware event history for the signed-in operator
 - Vendor portal polish: consistent branded header spacing, responsive layout, and settlement/finance state handling
 - Product-level correctness: recent orders now sort strictly by timestamp, referral messaging now explains pending reward status, and portal branding is aligned across customer, vendor, logistics, and admin shells
+- Admin scalability and account management: Users and Orders use server-side pagination/filtering with all-filtered CSV exports; admin subscription end dates and profile-completion routing have been refined
 
 These updates are active in the repo and should be treated as the current operating baseline unless a more recent change is explicitly documented.
 
@@ -471,9 +472,9 @@ Before updating UI components, verify:
 
 #### Next Admin reporting slice
 
-- Admin Orders: date filtering and CSV export based on the current filters **implemented 2026-09-16**. Date filtering currently uses created date.
+- Admin Orders: created-date filtering and filtered CSV export were implemented 2026-09-16; server-side pagination and all-matching filtered CSV export were added 2026-10-07. See Part 15 for query and migration details.
 - Admin Overview: date filtering for the order graph and related statistics, plus live Wash, Iron, and Wash + Iron clothes metrics.
-- Admin User Details: the Cancelled metric is hidden for now; subscription dates should derive automatically from the selected plan and semester settings.
+- Admin User Details: the Cancelled metric is hidden for now; standard subscription dates derive from the selected plan and semester settings, and Admins can edit an active subscription's end date.
 
 #### Admin UX and reporting continuation update (2026-09-22)
 
@@ -486,11 +487,9 @@ Before updating UI components, verify:
 - Vendor, logistics, and admin auth flows now preserve portal-specific Google callback errors, sign out invalid sessions, and show clear access-denial messages. Admin denial uses `This email is not approved for admin access.`; vendor and logistics require both approved role and approved partner records.
 - Customer SSR date output uses an explicit `en-GB` locale for overview and notification timestamps to prevent server/client hydration mismatches.
 
-Outstanding Admin work is highlighted in `ADMIN_PLAN.md` under **Outstanding Admin Work**. The highest-priority unfinished item is trusted settlement payout release through Paystack Transfers, including transfer metadata, duplicate-transfer prevention, and paid-settlement audit records.
+Settlement payout release through Paystack Transfers is complete, including transfer metadata, duplicate-transfer prevention, reconciliation, and paid-settlement audit records. Staging migration verification and a Paystack test-mode transfer have passed. Remaining SQL-adapter integration and asynchronous pending-result reconciliation coverage are follow-up confidence tests, not unfinished implementation; see `ADMIN_PLAN.md`.
 
-The initial trusted payout release and reconciliation implementation is now present in `src/lib/payouts.server.ts` and Admin Finance. It is not production-complete until fake-provider regression tests, Paystack test-mode verification, and reconciliation smoke tests have passed.
-
-Payout error handling is part of that same unfinished workstream. The Admin must see an actionable distinction between local validation rejection, provider rejection, processing/unknown provider results, confirmed success, and internal recording failure. Provider calls must be idempotent, unknown results must be reconciled before retry, failed transfers must leave settlements unpaid, and no payout may be marked paid without confirmed provider success. Use the error-handling contract in `ADMIN_PLAN.md` and `FINANCE_AND_PAYMENT_FLOW.md` as the source of truth.
+The settlement path in `src/lib/payouts.server.ts` and Admin Finance distinguishes local validation rejection, provider rejection, processing/unknown provider results, confirmed success, and internal recording failure. Provider calls are idempotent; unknown results must be reconciled before retry; failed transfers leave settlements unpaid; and a settlement is marked paid only after confirmed provider success. Use `ADMIN_PLAN.md` and `FINANCE_AND_PAYMENT_FLOW.md` as the source of truth for the contract.
 
 - `src/portals/admin/pages/Home.tsx` loads live dashboard metrics, revenue, vendor/logistics counts, recent activity, and subscription analytics.
 - `src/portals/admin/pages/Orders.tsx` is routed at `/admin/orders` and supports search, filtering, and read-only detail views.
@@ -687,8 +686,7 @@ The first enables Realtime for wallets, wallet transactions, and subscriptions. 
 1. Apply `supabase/migrations/20260912100000_partner_access_roles.sql` and `supabase/migrations/20260917110000_admin_finance_ledger_and_settlement_snapshots.sql` to the deployed Supabase project. The local repository has the migrations, but the live database must be linked and migrated before relying on multi-role access or the new Finance ledger/snapshot paths in production. The Supabase CLI is not currently installed locally.
 2. Run a live smoke test with real data: sign in with multiple roles, switch logistics Pickup/Delivery tabs, search picked-up orders, verify OTP visibility and clearing, inspect customer Home/Orders, and check the responsive vendor Orders table.
 3. Continue the logistics operational audit, including delivery exceptions, public-order-number search, event-history visibility, and permission boundaries.
-4. Implement trusted Admin settlement payout release using verified vendor payout accounts and Paystack Transfers. Persist transfer reference, recipient metadata, actor, timestamps, status, and failure reason; prevent duplicate transfers. Do not add payout transfers to the vendor portal.
-5. After that, prioritize admin user management, messaging, wallet/credits, and historical archive views.
+4. Apply the new Admin Users/Orders index migrations only after confirming the intended Supabase environment; continue live smoke testing and prioritize messaging and historical archive views afterward.
 
 ### Referral Implementation Handoff
 
@@ -785,7 +783,7 @@ Before production assignment or settlement work, add vendor ownership to orders.
 - `src/portals/admin/pages/Finance.tsx` loads live payout/settlement summaries and supports settlement recording actions.
 - `src/portals/admin/pages/Plans.tsx` supports plan creation/editing and semester settings.
 - Admin sidebar paths were corrected to `/admin/*`.
-- Delivery verification and the final customer-facing payout workflow remain the next major operational gaps.
+- Delivery verification remains an operational gap. Vendor settlement payout release is complete; do not conflate it with delivery verification or the separate disabled platform-profit withdrawal workflow.
 
 ## Part 14: Subscription Service Pricing Handoff (2026-10-02)
 
@@ -812,6 +810,34 @@ Before production assignment or settlement work, add vendor ownership to orders.
 - `src/portals/customer/pages/Invoice.tsx` presents the compact persisted billing breakdown.
 - `src/lib/subscription-billing.test.mjs` and `src/lib/order-lines.test.mjs` cover the new pricing and line-merge rules.
 - Vendor customer-count visibility edits remain in `src/portals/vendor/pages/Home.tsx` and `src/portals/vendor/pages/Orders.tsx`; preserve them.
+
+## Part 15: Admin Pagination and Account Management Handoff (2026-10-07)
+
+Read this section first when continuing the latest Admin Users/Orders and account-management work. The implementation is present in the working tree; the new query-index migrations are not confirmed as applied to any remote database.
+
+### Admin Users and Orders scalability
+
+- Admin Users and Orders use server-side pagination with a page size of 10. Search and filters are applied in database queries before pagination; the browser does not fetch all matching records to paginate locally.
+- Users search/role/joined-date filtering and page aggregates are in `src/lib/admin-users.server.ts`. The users export resource route is `src/routes/admin-users-export.ts`.
+- Orders search/status/created-date filtering and detail queries are in `src/lib/admin-orders.server.ts`. The orders export resource route is `src/routes/admin-orders-export.ts`.
+- CSV exports ignore the current page and include every row matching the active filters. The server streams bounded keyset batches; users and orders are exported through separate resource routes registered in `src/routes.ts`.
+- Pagination and filtering preserve URL search parameters. Same-route updates render an in-table loading row rather than the global Qaffy loader; the suppression logic is in `src/root.tsx`.
+- Order details can be loaded by internal order ID even when the order is not present on the current page. Customer-facing order references remain public `QO-######` values; do not export OTPs or unrelated sensitive fields.
+- User list queries return a bounded page of customers and only the latest ten orders per customer for the details modal. Do not regress to loading the full user/order data set in the browser.
+- Supporting indexes are defined in `supabase/migrations/20261007100000_admin_user_pagination_indexes.sql` and `supabase/migrations/20261007110000_admin_order_pagination_indexes.sql`. These files are in the repository; verify the target project and migration status before applying them.
+
+### Profile and subscription administration
+
+- Complete Profile is for authenticated users whose required profile is incomplete. Name and phone are required; unauthenticated users are directed to login, and users with complete profiles are directed home. See `src/portals/customer/pages/CompleteProfile.tsx`.
+- Standard subscription creation derives dates from the selected plan and current semester configuration. Semester subscriptions end on the configured semester end date.
+- Admin User Details allows editing the end date of an active subscription. Saving commits the edit and exits edit mode; do not restore separate Save and Done buttons. Ended/cancelled subscription history remains read-only.
+- Plan price inputs support whole-Naira values without a small fixed increment. Preserve existing price validation and trusted server-side subscription logic.
+
+### Validation and rollout
+
+- Relevant project checks: `npm test`, `npm run typecheck`, `npm run build`, and `npm run lint`. Full lint has previously reported unrelated baseline issues; use focused lint for touched files where needed and distinguish baseline failures from regressions.
+- The Admin Users/Orders pagination and export implementation was browser-checked, and typecheck/build/focused lint/diff checks passed for this work.
+- No commit or remote migration application is part of this handoff. Before applying new migrations, confirm that the linked Supabase project is the intended environment and inspect the migration dry run.
 
 ### Validation and deployment status
 
