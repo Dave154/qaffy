@@ -508,6 +508,7 @@ The settlement path in `src/lib/payouts.server.ts` and Admin Finance distinguish
 ### Important Existing Conventions
 
 - Pickup and delivery OTPs are exactly four numeric digits.
+- Customer, vendor, and logistics phone-number inputs accept digits only and are capped at 11 digits.
 - Do not expose pickup OTP after an order has been picked up.
 - Use `profile_roles` for new role checks; do not reintroduce exclusive-role logic.
 - Keep same-page logistics tab switching local so changing tabs does not trigger a route loader or page transition.

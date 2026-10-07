@@ -19,7 +19,7 @@ export async function action({ request }: Route.ActionArgs) {
     const name = String(formData.get('name') ?? '').trim()
     const phone = String(formData.get('phone') ?? '').trim()
     if (!name) return data({ ok: false, message: 'Enter your full name.' }, { status: 400, headers })
-    if (phone && !/^[+\d][\d\s()-]{6,}$/.test(phone))
+    if (phone && (!/^[+\d][\d\s()-]{6,}$/.test(phone) || (phone.match(/\d/g) ?? []).length > 11))
       return data({ ok: false, message: 'Enter a valid phone number.' }, { status: 400, headers })
     const { error } = await supabase
       .from('profiles')
@@ -211,7 +211,14 @@ export default function Settings() {
               <span className="mb-1.5 block text-sm font-medium text-slate-600">Phone number</span>
               <input
                 name="phone"
+                type="tel"
+                inputMode="numeric"
+                autoComplete="tel-national"
+                maxLength={11}
                 defaultValue={customerPhone}
+                onInput={(event) => {
+                  event.currentTarget.value = event.currentTarget.value.replace(/\D/g, '').slice(0, 11)
+                }}
                 className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-base text-slate-900 focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
               />
             </label>

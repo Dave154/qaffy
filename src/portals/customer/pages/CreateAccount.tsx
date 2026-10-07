@@ -213,9 +213,12 @@ export default function CreateAccount() {
                     <input
                       type="tel"
                       aria-label="Phone number"
+                      inputMode="numeric"
+                      autoComplete="tel-national"
+                      maxLength={11}
                       value={phone}
-                      onChange={(event) => setPhone(event.target.value)}
-                      placeholder="0803 123 4567"
+                      onChange={(event) => setPhone(event.target.value.replace(/\D/g, '').slice(0, 11))}
+                      placeholder="08031234567"
                       className="h-14 w-full rounded-lg border border-brand-border bg-white px-4 text-[14px] font-semibold text-black shadow-sm outline-none transition placeholder:text-field-placeholder focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
                     />
                   </label>
