@@ -1,10 +1,9 @@
-import { Search, SlidersHorizontal, UserRound, X } from 'lucide-react'
-import { data, useLoaderData, useNavigate } from 'react-router'
-import { useMemo, useState } from 'react'
+import { ChevronLeft, ChevronRight, LoaderCircle, Search, SlidersHorizontal, UserRound, X } from 'lucide-react'
+import { Form, useLoaderData, useNavigate, useNavigation } from 'react-router'
+import { useState } from 'react'
 import type { Route } from './+types/Users'
-import { requireRole } from '../../../lib/auth.server'
 import { toast } from '../../../lib/toast'
-import { successfulPlanPayments } from '../../../lib/revenue-reporting'
+import { loadUsers } from '../../../lib/admin-users.server'
 
 type CustomerOrder = {
   id: string
@@ -29,102 +28,29 @@ type Customer = {
   activePlan: string | null
   orders: CustomerOrder[]
 }
-type UsersData = { customers: Customer[] }
-
+type UsersData = {
+  customers: Customer[]
+  page: number
+  pageSize: number
+  total: number
+  query: string
+  roleFilter: string
+  dateMode: 'all' | 'this_month' | 'last_month' | 'custom'
+  startDate: string
+  endDate: string
+}
 function money(value: number) {
   return `₦${value.toLocaleString()}`
 }
 function date(value: string | null) {
   return value ? new Date(value).toLocaleDateString() : 'Not recorded'
 }
-const csvValue = (value: string | number | null) => `"${String(value ?? '').replace(/"/g, '""')}"`
-const csvText = (value: string | null) => `="${String(value ?? '').replace(/"/g, '""')}"`
 const inputDate = (value: Date) =>
   `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`
 
 // eslint-disable-next-line react-refresh/only-export-components
 export async function loader({ request }: Route.LoaderArgs) {
-  const auth = await requireRole(request, 'admin')
-  if (!auth) return data<UsersData>({ customers: [] }, { status: 200 })
-  const { supabase, headers } = auth
-  const [
-    { data: profiles },
-    { data: orders },
-    { data: invoices },
-    { data: wallets },
-    { data: subscriptions },
-    { data: plans },
-    { data: payments },
-  ] = await Promise.all([
-      supabase
-        .from('profiles')
-        .select('id, qaffy_id, name, email, phone, created_at')
-        .eq('role', 'customer')
-        .order('created_at', { ascending: false }),
-      supabase.from('orders').select('id, customer_id, status, created_at').order('created_at', { ascending: false }),
-      supabase.from('invoices').select('order_id, amount, status'),
-      supabase.from('wallets').select('customer_id, one_off_balance, subscription_balance'),
-      supabase
-        .from('subscriptions')
-        .select('customer_id, plan_id, status, created_at')
-        .eq('status', 'active')
-        .order('created_at', { ascending: false }),
-      supabase.from('plans').select('id, name'),
-      supabase.from('payments').select('customer_id, amount, status, plan_id').eq('status', 'success').not('plan_id', 'is', null),
-    ])
-  const invoiceByOrder = new Map((invoices ?? []).map((invoice) => [invoice.order_id, invoice]))
-  const walletByCustomer = new Map((wallets ?? []).map((wallet) => [wallet.customer_id, wallet]))
-  const planById = new Map((plans ?? []).map((plan) => [plan.id, plan.name]))
-  const planSpendByCustomer = new Map<string, number>()
-  for (const payment of successfulPlanPayments(payments ?? []))
-    planSpendByCustomer.set(payment.customer_id, (planSpendByCustomer.get(payment.customer_id) ?? 0) + Number(payment.amount))
-  const subscriptionByCustomer = new Map<string, string>()
-  for (const subscription of subscriptions ?? [])
-    if (!subscriptionByCustomer.has(subscription.customer_id))
-      subscriptionByCustomer.set(subscription.customer_id, planById.get(subscription.plan_id) ?? 'Active plan')
-  const profileIds = (profiles ?? []).map((profile) => profile.id)
-  const { data: roleRows } = profileIds.length
-    ? await supabase.from('profile_roles').select('profile_id, role').in('profile_id', profileIds).eq('status', 'approved')
-    : { data: [] }
-  const rolesByCustomer = new Map<string, string[]>()
-  for (const role of roleRows ?? []) rolesByCustomer.set(role.profile_id, [...(rolesByCustomer.get(role.profile_id) ?? []), role.role])
-  return data<UsersData>(
-    {
-      customers: (profiles ?? []).map((profile) => {
-        const customerOrders = (orders ?? []).filter((order) => order.customer_id === profile.id)
-        const customerWallet = walletByCustomer.get(profile.id)
-        const customerOrderDetails = customerOrders.map((order) => {
-          const invoice = invoiceByOrder.get(order.id)
-          return {
-            id: order.id,
-            status: order.status,
-            createdAt: order.created_at,
-            amount: invoice ? Number(invoice.amount) : null,
-            invoiceStatus: invoice?.status ?? null,
-          }
-        })
-        return {
-          id: profile.id,
-          qaffyId: profile.qaffy_id,
-          name: profile.name ?? 'Unnamed customer',
-          email: profile.email,
-          phone: profile.phone,
-          roles: rolesByCustomer.get(profile.id) ?? ['customer'],
-          joinedAt: profile.created_at,
-          orderCount: customerOrders.length,
-          totalSpend:
-            customerOrderDetails.reduce((sum, order) => sum + (order.invoiceStatus === 'paid' ? (order.amount ?? 0) : 0), 0) +
-            (planSpendByCustomer.get(profile.id) ?? 0),
-          lastOrder: customerOrders[0]?.created_at ?? null,
-          oneOffBalance: Number(customerWallet?.one_off_balance ?? 0),
-          subscriptionBalance: Number(customerWallet?.subscription_balance ?? 0),
-          activePlan: subscriptionByCustomer.get(profile.id) ?? null,
-          orders: customerOrderDetails,
-        }
-      }),
-    },
-    { headers, status: 200 },
-  )
+  return loadUsers(request)
 }
 
 function CopyValue({ value, label }: { value: string | null; label: string }) {
@@ -200,8 +126,10 @@ export function CustomerDetails({ customer, onClose }: { customer: Customer; onC
         </section>
         <section className="mt-5 rounded-2xl border border-slate-200 p-4">
           <div className="flex items-center justify-between">
-            <h4 className="font-bold text-slate-900">Order history</h4>
-            <span className="text-sm text-slate-500">{customer.orderCount} orders</span>
+              <h4 className="font-bold text-slate-900">Recent orders</h4>
+              <span className="text-sm text-slate-500">
+                {customer.orderCount} total · latest {customer.orders.length}
+              </span>
           </div>
           <div className="mt-4 space-y-2">
             {customer.orders.length === 0 ? (
@@ -353,85 +281,77 @@ function UserFilterDrawer({
 }
 
 export default function Users() {
-  const { customers } = useLoaderData<typeof loader>()
+  const { customers, page, pageSize, total, query, roleFilter, dateMode, startDate, endDate } = useLoaderData<typeof loader>()
   const navigate = useNavigate()
-  const [query, setQuery] = useState('')
-  const [roleFilter, setRoleFilter] = useState('all')
-  const [startDate, setStartDate] = useState('')
-  const [endDate, setEndDate] = useState('')
-  const [dateMode, setDateMode] = useState<'all' | 'this_month' | 'last_month' | 'custom'>('all')
+  const navigation = useNavigation()
   const [isFilterOpen, setIsFilterOpen] = useState(false)
-  const dateRange = useMemo(() => {
-    if (dateMode === 'custom') return { start: startDate, end: endDate }
-    if (dateMode === 'all') return { start: '', end: '' }
-    const today = new Date()
-    return dateMode === 'this_month'
-      ? {
-          start: inputDate(new Date(today.getFullYear(), today.getMonth(), 1)),
-          end: inputDate(new Date(today.getFullYear(), today.getMonth() + 1, 0)),
-        }
-      : {
-          start: inputDate(new Date(today.getFullYear(), today.getMonth() - 1, 1)),
-          end: inputDate(new Date(today.getFullYear(), today.getMonth(), 0)),
-        }
-  }, [dateMode, endDate, startDate])
-  const filteredCustomers = useMemo(
-    () =>
-      customers.filter((customer) => {
-        const text = `${customer.name} ${customer.email ?? ''} ${customer.phone ?? ''} ${customer.qaffyId ?? ''}`.toLowerCase()
-        const joinedDate = customer.joinedAt.slice(0, 10)
-        return (
-          text.includes(query.toLowerCase()) &&
-          (roleFilter === 'all' || customer.roles.includes(roleFilter)) &&
-          (!dateRange.start || joinedDate >= dateRange.start) &&
-          (!dateRange.end || joinedDate <= dateRange.end)
-        )
-      }),
-    [customers, dateRange, query, roleFilter],
-  )
-  const exportCsv = () => {
-    const header = ['Name', 'Qaffy ID', 'Roles', 'Email', 'Phone', 'Joined', 'Orders', 'Total paid', 'Wallet', 'Plan']
-    const lines = filteredCustomers.map((customer) =>
-      [
-        csvValue(customer.name),
-        csvValue(customer.qaffyId),
-        csvValue(customer.roles.join(', ')),
-        csvValue(customer.email),
-        csvText(customer.phone),
-        csvValue(date(customer.joinedAt)),
-        csvValue(customer.orderCount),
-        csvValue(customer.totalSpend),
-        csvValue(customer.oneOffBalance + customer.subscriptionBalance),
-        csvValue(customer.activePlan ?? 'One-time'),
-      ].join(','),
-    )
-    const blob = new Blob([[header.map(csvValue).join(','), ...lines].join('\n')], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = 'qaffy-admin-users.csv'
-    link.click()
-    URL.revokeObjectURL(url)
+  const isLoadingPage =
+    navigation.state === 'loading' && navigation.location?.pathname === '/admin/users'
+  const pageCount = Math.max(1, Math.ceil(total / pageSize))
+  const buildSearch = (values: {
+    page: number
+    query?: string
+    roleFilter?: string
+    dateMode?: UsersData['dateMode']
+    startDate?: string
+    endDate?: string
+  }) => {
+    const search = new URLSearchParams()
+    if (values.page > 1) search.set('page', String(values.page))
+    if (values.query) search.set('q', values.query)
+    if (values.roleFilter && values.roleFilter !== 'all') search.set('role', values.roleFilter)
+    if (values.dateMode && values.dateMode !== 'all') search.set('date', values.dateMode)
+    if (values.startDate) search.set('from', values.startDate)
+    if (values.endDate) search.set('to', values.endDate)
+    return `?${search.toString()}`
   }
+  const updateFilters = (filters: {
+    roleFilter?: string
+    dateMode?: UsersData['dateMode']
+    startDate?: string
+    endDate?: string
+  }) => {
+    navigate(
+      buildSearch({
+        page: 1,
+        query,
+        roleFilter: filters.roleFilter ?? roleFilter,
+        dateMode: filters.dateMode ?? dateMode,
+        startDate: filters.startDate ?? startDate,
+        endDate: filters.endDate ?? endDate,
+      }),
+    )
+  }
+  const csvExportParams = new URLSearchParams(
+    buildSearch({ page: 1, query, roleFilter, dateMode, startDate, endDate }).slice(1),
+  )
+  csvExportParams.set('export', 'csv')
+  const csvExportUrl = `/admin/users/export?${csvExportParams.toString()}`
   return (
     <div className="space-y-6">
       <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="flex flex-col gap-3 border-b border-slate-200 p-4">
           <div>
             <p className="text-sm text-slate-500">
-              {filteredCustomers.length} of {customers.length} registered customers
+              {total.toLocaleString()} matching registered customers
             </p>
           </div>
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div className="relative w-full lg:max-w-md">
+            <Form method="get" className="relative w-full lg:max-w-md">
               <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input type="hidden" name="role" value={roleFilter} />
+              <input type="hidden" name="date" value={dateMode} />
+              <input type="hidden" name="from" value={startDate} />
+              <input type="hidden" name="to" value={endDate} />
               <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
+                key={query}
+                name="q"
+                defaultValue={query}
                 placeholder="Search name, email, phone, or Qaffy ID"
+                aria-label="Search users"
                 className="h-10 w-full rounded-lg border border-slate-200 pl-9 pr-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
               />
-            </div>
+            </Form>
             <div className="flex items-center gap-2 self-end lg:self-auto">
               <button
                 type="button"
@@ -447,8 +367,13 @@ export default function Users() {
               </button>
               <button
                 type="button"
-                onClick={exportCsv}
-                disabled={filteredCustomers.length === 0}
+                onClick={() => {
+                  const link = document.createElement('a')
+                  link.href = csvExportUrl
+                  link.download = 'qaffy-admin-users.csv'
+                  link.click()
+                }}
+                disabled={total === 0}
                 className="h-10 rounded-full bg-brand-primary px-5 text-sm font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Export CSV
@@ -471,7 +396,16 @@ export default function Users() {
               </tr>
             </thead>
             <tbody>
-              {filteredCustomers.map((customer) => (
+              {isLoadingPage ? (
+                <tr>
+                  <td colSpan={8} className="px-5 py-12">
+                    <div className="flex items-center justify-center gap-2 text-sm text-slate-500" role="status">
+                      <LoaderCircle size={18} className="animate-spin text-brand-primary" />
+                      Loading customers…
+                    </div>
+                  </td>
+                </tr>
+              ) : customers.map((customer) => (
                 <tr
                   key={customer.id}
                   tabIndex={0}
@@ -521,20 +455,70 @@ export default function Users() {
               ))}
             </tbody>
           </table>
-          {filteredCustomers.length === 0 && <p className="p-10 text-center text-sm text-slate-500">No matching customers.</p>}
+          {!isLoadingPage && customers.length === 0 && (
+            <p className="p-10 text-center text-sm text-slate-500">No matching customers.</p>
+          )}
         </div>
+        {total > 0 && (
+          <div className="flex flex-col gap-3 border-t border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-slate-500">
+              Showing {(page - 1) * pageSize + 1}–
+              {Math.min(page * pageSize, total)} of {total.toLocaleString()} customers
+            </p>
+            <div className="flex items-center justify-between gap-3 sm:justify-end">
+              <button
+                type="button"
+                onClick={() => navigate(buildSearch({ page: page - 1, query, roleFilter, dateMode, startDate, endDate }))}
+                disabled={page === 1 || isLoadingPage}
+                className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-200 px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <ChevronLeft size={16} />
+                Previous
+              </button>
+              <span className="whitespace-nowrap text-sm text-slate-600">
+                Page {page} of {pageCount}
+              </span>
+              <button
+                type="button"
+                onClick={() => navigate(buildSearch({ page: page + 1, query, roleFilter, dateMode, startDate, endDate }))}
+                disabled={page === pageCount || isLoadingPage}
+                className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-200 px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Next
+                <ChevronRight size={16} />
+              </button>
+            </div>
+          </div>
+        )}
       </section>
       <UserFilterDrawer
         isOpen={isFilterOpen}
-        onClose={() => setIsFilterOpen(false)}
+        onClose={() => {
+          setIsFilterOpen(false)
+        }}
         roleFilter={roleFilter}
-        setRoleFilter={setRoleFilter}
+        setRoleFilter={(value) => updateFilters({ roleFilter: value })}
         dateMode={dateMode}
-        setDateMode={setDateMode}
+        setDateMode={(value) => {
+          const today = new Date()
+          if (value === 'this_month')
+            updateFilters({
+              dateMode: value,
+              startDate: inputDate(new Date(today.getFullYear(), today.getMonth(), 1)),
+              endDate: inputDate(new Date(today.getFullYear(), today.getMonth() + 1, 0)),
+            })
+          else if (value === 'last_month')
+            updateFilters({
+              dateMode: value,
+              startDate: inputDate(new Date(today.getFullYear(), today.getMonth() - 1, 1)),
+              endDate: inputDate(new Date(today.getFullYear(), today.getMonth(), 0)),
+            })
+          else updateFilters({ dateMode: value, startDate: '', endDate: '' })
+        }}
         startDate={startDate}
-        setStartDate={setStartDate}
+        setStartDate={(value) => updateFilters({ dateMode: 'custom', startDate: value })}
         endDate={endDate}
-        setEndDate={setEndDate}
+        setEndDate={(value) => updateFilters({ dateMode: 'custom', endDate: value })}
       />
     </div>
   )

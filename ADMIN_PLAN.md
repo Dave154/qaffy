@@ -101,6 +101,7 @@ These items are **not complete yet**:
 - Hide the Cancelled order metric for now; retain the underlying status data for future use.
 - Subscription start and end dates should populate automatically from the selected plan and current semester settings when an admin creates a subscription. Manual date overrides should not be required for the standard flow.
 - Admins can cancel an active subscription by changing its existing status to `cancelled`. This stops it qualifying as active for future orders, sends no customer notification, and preserves the subscription record and existing order snapshots.
+- Admins can edit the end date of an active subscription in customer details; ended and cancelled subscription history stays read-only.
 
 ### Phase 1 Progress
 
@@ -168,6 +169,7 @@ Filters/search:
 - Mismatch state
 
 Order detail modal should show customer, location, item lines, prices, invoice, payments, logistics events, mismatch details, notes, and status history. Active OTPs must not be exposed unnecessarily. Paid and settled orders are read-only.
+The Admin Orders table uses server-side pagination and applies search, status, and created-date filters before returning each page. CSV export includes every matching order across pages.
 
 ### Users
 
@@ -189,6 +191,7 @@ Customer detail:
 - Controlled wallet adjustment with an audit/ledger entry
 
 Search by name, email, Qaffy ID, or phone. Export should be CSV where appropriate.
+The customer table uses server-side pagination and applies search and joined-date/role filters before returning each page. CSV export includes every customer matching the active filters, independent of the current page.
 
 ### Vendors
 

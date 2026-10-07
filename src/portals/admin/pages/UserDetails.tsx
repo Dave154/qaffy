@@ -1,4 +1,4 @@
-import { ArrowLeft, Copy, Save, WalletCards } from 'lucide-react'
+import { ArrowLeft, Copy, Pencil, Save, WalletCards } from 'lucide-react'
 import { data, Form, Link, useActionData, useFetcher, useLoaderData, useNavigation } from 'react-router'
 import { useEffect, useRef, useState } from 'react'
 import type { Route } from './+types/UserDetails'
@@ -75,6 +75,7 @@ type UserDetailsData = {
   payments: DetailPayment[]
   transactions: DetailTransaction[]
   referrals: DetailReferral[]
+  semesterEndDate: string | null
   plans: Array<{
     id: string
     name: string
@@ -92,6 +93,9 @@ function date(value: string | null) {
 }
 function dateInput(value: Date) {
   return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`
+}
+function dateOnly(value: Date | string | null | undefined) {
+  return value instanceof Date ? value.toISOString().slice(0, 10) : value?.slice(0, 10) ?? null
 }
 function addMonth(value: string) {
   const start = new Date(`${value}T12:00:00`)
@@ -150,6 +154,12 @@ export async function loader({ request, params }: Route.LoaderArgs) {
       .eq('referrer_id', customerId)
       .order('created_at', { ascending: false }),
   ])
+  const [semesterSettings] = await sql<{ semester_end_date: Date | string | null }[]>`
+    select semester_end_date
+    from app_settings
+    where key = 'semester'
+    limit 1
+  `
   if (!profile) return data<UserDetailsData | null>(null, { headers, status: 404 })
   const planById = new Map((plans ?? []).map((plan) => [plan.id, plan]))
   const invoiceByOrder = new Map((invoices ?? []).map((invoice) => [invoice.order_id, invoice]))
@@ -221,6 +231,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
         rewardValue: referral.reward_value === null ? null : Number(referral.reward_value),
         createdAt: referral.created_at,
       })),
+      semesterEndDate: dateOnly(semesterSettings?.semester_end_date),
       plans: (plans ?? []).map((plan) => ({
         id: plan.id,
         name: plan.name,
@@ -306,6 +317,46 @@ export async function action({ request, params }: Route.ActionArgs) {
       return data({ ok: false, message: 'The subscription could not be cancelled. Please try again.' }, { status: 500, headers: auth.headers })
     }
   }
+  if (intent === 'update-subscription-end-date') {
+    const subscriptionId = String(formData.get('subscriptionId') ?? '')
+    const rawEndDate = String(formData.get('endDate') ?? '').trim()
+    const endDate = rawEndDate || null
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(subscriptionId)) {
+      return data({ ok: false, message: 'Invalid subscription.' }, { status: 400, headers: auth.headers })
+    }
+    if (endDate) {
+      const parsedEndDate = new Date(`${endDate}T00:00:00Z`)
+      if (
+        !/^\d{4}-\d{2}-\d{2}$/.test(endDate) ||
+        Number.isNaN(parsedEndDate.getTime()) ||
+        parsedEndDate.toISOString().slice(0, 10) !== endDate
+      ) {
+        return data({ ok: false, message: 'Enter a valid subscription end date.' }, { status: 400, headers: auth.headers })
+      }
+    }
+
+    try {
+      const [updatedSubscription] = await sql`
+        update subscriptions
+        set end_date = ${endDate}
+        where id = ${subscriptionId}
+          and customer_id = ${customerId}
+          and status = 'active'
+          and (${endDate}::date is null or ${endDate}::date >= start_date)
+        returning id
+      `
+      if (!updatedSubscription) {
+        return data(
+          { ok: false, message: 'Only active subscriptions can be edited, and the end date cannot be before the start date.' },
+          { status: 409, headers: auth.headers },
+        )
+      }
+      return data({ ok: true, message: 'Subscription end date updated.' }, { headers: auth.headers })
+    } catch (error) {
+      console.error('[admin-user-details] Subscription end-date update failed', error)
+      return data({ ok: false, message: 'The subscription end date could not be updated. Please try again.' }, { status: 500, headers: auth.headers })
+    }
+  }
   return data({ ok: false, message: 'Unknown action.' }, { status: 400 })
 }
 
@@ -359,7 +410,15 @@ function UserStats({ stats }: { stats: UserDetailsData['stats'] }) {
   )
 }
 
-function ManualSubscription({ plans, isSaving }: { plans: UserDetailsData['plans']; isSaving: boolean }) {
+function ManualSubscription({
+  plans,
+  semesterEndDate,
+  isSaving,
+}: {
+  plans: UserDetailsData['plans']
+  semesterEndDate: string | null
+  isSaving: boolean
+}) {
   const today = dateInput(new Date())
   const [planId, setPlanId] = useState('')
   const [startDate, setStartDate] = useState(today)
@@ -371,7 +430,7 @@ function ManualSubscription({ plans, isSaving }: { plans: UserDetailsData['plans
       setEndDate('')
       return
     }
-    setEndDate(plan.type === 'semester' ? (plan.semesterEndDate ?? '') : addMonth(nextStartDate))
+    setEndDate(plan.type === 'semester' ? (semesterEndDate ?? '') : addMonth(nextStartDate))
   }
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5">
@@ -410,6 +469,7 @@ function ManualSubscription({ plans, isSaving }: { plans: UserDetailsData['plans
             type="date"
             value={endDate}
             onChange={(event) => setEndDate(event.target.value)}
+            readOnly={plans.find((plan) => plan.id === planId)?.type === 'semester'}
             className="h-10 rounded-lg border border-slate-200 px-3 text-sm"
           />
         </div>
@@ -429,8 +489,19 @@ export default function UserDetails() {
   const details = useLoaderData<typeof loader>()
   const actionData = useActionData<typeof action>()
   const navigation = useNavigation()
+  const handledActionResponse = useRef<typeof actionData>(null)
   const cancelFetcher = useFetcher<typeof action>()
   const handledCancelResponse = useRef<typeof cancelFetcher.data>(null)
+  const subscriptionDateFetcher = useFetcher<typeof action>()
+  const handledSubscriptionDateResponse = useRef<typeof subscriptionDateFetcher.data>(null)
+  const [editingSubscriptionId, setEditingSubscriptionId] = useState<string | null>(null)
+  const [subscriptionEndDateDraft, setSubscriptionEndDateDraft] = useState('')
+  useEffect(() => {
+    if (navigation.state !== 'idle' || !actionData?.message || handledActionResponse.current === actionData) return
+    handledActionResponse.current = actionData
+    if (actionData.ok) toast.success(actionData.message)
+    else toast.error(actionData.message)
+  }, [actionData, navigation.state])
   useEffect(() => {
     const result = cancelFetcher.data
     if (cancelFetcher.state !== 'idle' || !result || handledCancelResponse.current === result) return
@@ -438,6 +509,13 @@ export default function UserDetails() {
     if (result.ok) toast.success(result.message)
     else toast.error(result.message)
   }, [cancelFetcher.data, cancelFetcher.state])
+  useEffect(() => {
+    const result = subscriptionDateFetcher.data
+    if (subscriptionDateFetcher.state !== 'idle' || !result || handledSubscriptionDateResponse.current === result) return
+    handledSubscriptionDateResponse.current = result
+    if (result.ok) toast.success(result.message)
+    else toast.error(result.message)
+  }, [subscriptionDateFetcher.data, subscriptionDateFetcher.state])
   if (!details) return <div className="rounded-2xl border border-slate-200 bg-white p-8 text-sm text-slate-500">Customer not found.</div>
   const isSaving = navigation.state !== 'idle'
   return (
@@ -453,11 +531,6 @@ export default function UserDetails() {
         </p>
       </header>
       <UserStats stats={details.stats} />
-      {actionData?.message && (
-        <p className={`rounded-lg px-3 py-2 text-sm ${actionData.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
-          {actionData.message}
-        </p>
-      )}
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="mb-4 flex items-center gap-2">
           <Save size={17} className="text-brand-primary" />
@@ -519,18 +592,18 @@ export default function UserDetails() {
             </button>
           </Form>
         </div>
-        <ManualSubscription plans={details.plans} isSaving={isSaving} />
+        <ManualSubscription plans={details.plans} semesterEndDate={details.semesterEndDate} isSaving={isSaving} />
       </section>
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <h3 className="font-bold text-slate-900">Subscriptions</h3>
         <div className="mt-4 overflow-x-auto">
-          <table className="w-full min-w-[620px] text-left text-sm">
+          <table className="w-full min-w-[760px] text-left text-sm">
             <thead className="text-xs capitalize tracking-[0.12em] text-slate-500">
               <tr>
                 <th className="pb-3">Plan</th>
                 <th className="pb-3">Status</th>
                 <th className="pb-3">Start</th>
-                <th className="pb-3">End</th>
+                <th className="pb-3">End date</th>
                 <th className="pb-3 text-right">Action</th>
               </tr>
             </thead>
@@ -542,28 +615,82 @@ export default function UserDetails() {
                   </td>
                   <td className="py-3 capitalize">{subscription.status}</td>
                   <td className="py-3">{subscription.startDate}</td>
-                  <td className="py-3">{subscription.endDate ?? 'Open ended'}</td>
-                  <td className="py-3 text-right">
+                  <td className="py-3">
+                    {subscription.status === 'active' && editingSubscriptionId === subscription.id ? (
+                        <input
+                          type="date"
+                          value={subscriptionEndDateDraft}
+                          onChange={(event) => setSubscriptionEndDateDraft(event.target.value)}
+                          min={subscription.startDate}
+                          className="h-9 w-full min-w-[140px] rounded-lg border border-slate-200 px-2 text-xs"
+                          aria-label={`End date for ${subscription.planName}`}
+                        />
+                    ) : (
+                      subscription.endDate ?? 'Open ended'
+                    )}
+                  </td>
+                  <td className="py-3">
                     {subscription.status === 'active' && (
-                      <cancelFetcher.Form
-                        method="post"
-                        onSubmit={(event) => {
-                          if (!window.confirm('Are you sure you want to cancel this subscription?')) event.preventDefault()
-                        }}
-                      >
-                        <input type="hidden" name="intent" value="cancel-subscription" />
-                        <input type="hidden" name="subscriptionId" value={subscription.id} />
-                        <button
-                          type="submit"
-                          disabled={cancelFetcher.state !== 'idle'}
-                          className="rounded-lg border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      <div className="flex items-center justify-end gap-2">
+                        {editingSubscriptionId === subscription.id ? (
+                          <button
+                            type="button"
+                            disabled={subscriptionDateFetcher.state !== 'idle'}
+                            onClick={() =>
+                              {
+                                subscriptionDateFetcher.submit(
+                                  {
+                                    intent: 'update-subscription-end-date',
+                                    subscriptionId: subscription.id,
+                                    endDate: subscriptionEndDateDraft,
+                                  },
+                                  { method: 'post' },
+                                )
+                                setEditingSubscriptionId(null)
+                              }
+                            }
+                            className="inline-flex items-center gap-1 rounded-lg border border-brand-border px-3 py-2 text-xs font-semibold text-brand-primary hover:bg-brand-soft disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <Save size={13} />
+                            {subscriptionDateFetcher.state !== 'idle' &&
+                            subscriptionDateFetcher.formData?.get('subscriptionId') === subscription.id
+                              ? 'Saving…'
+                              : 'Save'}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSubscriptionEndDateDraft(subscription.endDate ?? '')
+                              setEditingSubscriptionId(subscription.id)
+                            }}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
+                            aria-label={`Edit end date for ${subscription.planName}`}
+                            title="Edit end date"
+                          >
+                            <Pencil size={14} />
+                          </button>
+                        )}
+                        <cancelFetcher.Form
+                          method="post"
+                          onSubmit={(event) => {
+                            if (!window.confirm('Are you sure you want to cancel this subscription?')) event.preventDefault()
+                          }}
                         >
-                          {cancelFetcher.state !== 'idle' &&
-                          cancelFetcher.formData?.get('subscriptionId') === subscription.id
-                            ? 'Cancelling…'
-                            : 'Cancel'}
-                        </button>
-                      </cancelFetcher.Form>
+                          <input type="hidden" name="intent" value="cancel-subscription" />
+                          <input type="hidden" name="subscriptionId" value={subscription.id} />
+                          <button
+                            type="submit"
+                            disabled={cancelFetcher.state !== 'idle'}
+                            className="rounded-lg border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {cancelFetcher.state !== 'idle' &&
+                            cancelFetcher.formData?.get('subscriptionId') === subscription.id
+                              ? 'Cancelling…'
+                              : 'Cancel'}
+                          </button>
+                        </cancelFetcher.Form>
+                      </div>
                     )}
                   </td>
                 </tr>
