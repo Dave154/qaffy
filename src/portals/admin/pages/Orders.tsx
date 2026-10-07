@@ -1,11 +1,12 @@
-import { data, useFetcher, useLoaderData, useSearchParams } from 'react-router'
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { SlidersHorizontal, X } from 'lucide-react'
+import { data, Form, useFetcher, useLoaderData, useNavigate, useNavigation, useSearchParams } from 'react-router'
+import { useEffect, useRef, useState } from 'react'
+import { ChevronLeft, ChevronRight, LoaderCircle, SlidersHorizontal, X } from 'lucide-react'
 import type { Route } from './+types/Orders'
 import { requireRole } from '../../../lib/auth.server'
 import { getInitialReceivedCounts } from '../../../lib/order-counts'
 import { sql } from '../../../lib/db.server'
 import { toast } from '../../../lib/toast'
+import { loadAdminOrders } from '../../../lib/admin-orders.server'
 
 type AdminOrder = {
   id: string
@@ -15,6 +16,7 @@ type AdminOrder = {
   order_type: 'wash' | 'wash_iron' | 'mixed'
   status: 'pending_pickup' | 'picked_up' | 'at_vendor' | 'invoiced' | 'paid' | 'out_for_delivery' | 'delivered' | 'cancelled'
   clothes_count_customer: number
+  item_count: number
   clothes_count_vendor: number | null
   notes: string | null
   is_subscription_order: boolean
@@ -36,9 +38,7 @@ type AdminOrder = {
   } | null
   mismatches: Array<{ id: string; details: unknown }>
 }
-
 type BillingBreakdown = { coveredUnits: number; subscriberAmount: number; regularAmount: number }
-type AdminOrdersData = { orders: AdminOrder[] }
 
 // eslint-disable-next-line react-refresh/only-export-components
 export async function action({ request }: Route.ActionArgs) {
@@ -77,80 +77,9 @@ export async function action({ request }: Route.ActionArgs) {
   }
 }
 
-function normalizeBillingBreakdown(value: unknown): BillingBreakdown | null {
-  let breakdown = value
-  if (typeof breakdown === 'string') {
-    try {
-      breakdown = JSON.parse(breakdown)
-    } catch {
-      return null
-    }
-  }
-  if (!breakdown || typeof breakdown !== 'object') return null
-
-  const candidate = breakdown as Record<string, unknown>
-  const coveredUnits = Number(candidate.coveredUnits)
-  const subscriberAmount = Number(candidate.subscriberAmount)
-  const regularAmount = Number(candidate.regularAmount)
-  if (![coveredUnits, subscriberAmount, regularAmount].every(Number.isFinite)) return null
-  return { coveredUnits, subscriberAmount, regularAmount }
-}
-
 // eslint-disable-next-line react-refresh/only-export-components
 export async function loader({ request }: Route.LoaderArgs) {
-  const auth = await requireRole(request, 'admin')
-  if (!auth) return data<AdminOrdersData>({ orders: [] }, { status: 200 })
-  const { supabase, headers } = auth
-  const { data: orders } = await supabase.from('orders').select('*').order('created_at', { ascending: false })
-  const orderRows = orders ?? []
-  const orderIds = orderRows.map((order) => order.id)
-  const customerIds = [...new Set(orderRows.map((order) => order.customer_id))]
-  const locationIds = [...new Set(orderRows.map((order) => order.pickup_location_id).filter(Boolean))] as string[]
-  const [{ data: profiles }, { data: locations }, { data: items }, { data: invoices }, { data: mismatches }] = await Promise.all([
-    customerIds.length
-      ? supabase.from('profiles').select('id, name, qaffy_id, email, phone').in('id', customerIds)
-      : Promise.resolve({ data: [] }),
-    locationIds.length ? supabase.from('pickup_locations').select('id, name').in('id', locationIds) : Promise.resolve({ data: [] }),
-    orderIds.length
-      ? supabase
-          .from('order_items')
-          .select('id, order_id, category_id, quantity, confirmed_quantity, service, unit_price')
-          .in('order_id', orderIds)
-      : Promise.resolve({ data: [] }),
-    orderIds.length
-      ? supabase.from('invoices').select('order_id, amount, status, paid_at, billing_breakdown').in('order_id', orderIds)
-      : Promise.resolve({ data: [] }),
-    orderIds.length
-      ? supabase.from('mismatches').select('id, order_id, details').in('order_id', orderIds)
-      : Promise.resolve({ data: [] }),
-  ])
-  const categoryIds = [...new Set((items ?? []).map((item) => item.category_id))]
-  const { data: categories } = categoryIds.length
-    ? await supabase.from('cloth_categories').select('id, name').in('id', categoryIds)
-    : { data: [] }
-
-  return data<AdminOrdersData>(
-    {
-      orders: orderRows.map((order) => ({
-        ...order,
-        customer: (profiles ?? []).find((profile) => profile.id === order.customer_id) ?? null,
-        location: (locations ?? []).find((location) => location.id === order.pickup_location_id) ?? null,
-        items: (items ?? [])
-          .filter((item) => item.order_id === order.id)
-          .map((item) => ({
-            ...item,
-            unit_price: Number(item.unit_price),
-            category: (categories ?? []).find((category) => category.id === item.category_id) ?? null,
-          })),
-        invoice: (() => {
-          const invoice = (invoices ?? []).find((record) => record.order_id === order.id)
-          return invoice ? { ...invoice, billing_breakdown: normalizeBillingBreakdown(invoice.billing_breakdown) } : null
-        })(),
-        mismatches: (mismatches ?? []).filter((mismatch) => mismatch.order_id === order.id),
-      })),
-    },
-    { headers, status: 200 },
-  )
+  return loadAdminOrders(request)
 }
 
 const statusLabels: Record<AdminOrder['status'], string> = {
@@ -187,7 +116,6 @@ const formatDate = (value: string | null) =>
       })
     : 'Not recorded'
 const money = (value: number) => `\u20A6${value.toLocaleString()}`
-const csvValue = (value: string | number | null) => `"${String(value ?? '').replace(/"/g, '""')}"`
 const inputDate = (date: Date) =>
   `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 
@@ -502,93 +430,71 @@ function OrderFilterDrawer({
 }
 
 export default function Orders() {
-  const { orders } = useLoaderData<typeof loader>()
-  const [searchParams, setSearchParams] = useSearchParams()
-  const [query, setQuery] = useState('')
-  const [selectedOrder, setSelectedOrder] = useState<AdminOrder | null>(null)
-  const [startDate, setStartDate] = useState('')
-  const [endDate, setEndDate] = useState('')
-  const [dateMode, setDateMode] = useState<'all' | 'this_month' | 'last_month' | 'custom'>('all')
-  const [statusFilter, setStatusFilter] = useState('all')
+  const { orders, selectedOrder, page, pageSize, total, query, statusFilter, dateMode, startDate, endDate } = useLoaderData<typeof loader>()
+  const [, setSearchParams] = useSearchParams()
+  const navigate = useNavigate()
+  const navigation = useNavigation()
   const [isFilterOpen, setIsFilterOpen] = useState(false)
-  const dateRange = useMemo(() => {
-    if (dateMode === 'custom') return { start: startDate, end: endDate }
-    if (dateMode === 'all') return { start: '', end: '' }
-
-    const today = new Date()
-    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1)
-    if (dateMode === 'this_month')
-      return { start: inputDate(monthStart), end: inputDate(new Date(today.getFullYear(), today.getMonth() + 1, 0)) }
-    return {
-      start: inputDate(new Date(today.getFullYear(), today.getMonth() - 1, 1)),
-      end: inputDate(new Date(today.getFullYear(), today.getMonth(), 0)),
-    }
-  }, [dateMode, endDate, startDate])
-  const filteredOrders = useMemo(
-    () =>
-      orders.filter((order) => {
-        const text =
-          `${order.public_order_number} ${order.customer?.name ?? ''} ${order.customer?.qaffy_id ?? ''} ${order.customer?.email ?? ''} ${order.customer?.phone ?? ''} ${order.location?.name ?? ''}`.toLowerCase()
-        const createdDate = order.created_at.slice(0, 10)
-        return (
-          (statusFilter === 'all' || order.status === statusFilter) &&
-          text.includes(query.toLowerCase()) &&
-          (!dateRange.start || createdDate >= dateRange.start) &&
-          (!dateRange.end || createdDate <= dateRange.end)
-        )
-      }),
-    [dateRange, orders, query, statusFilter],
-  )
-
-  useEffect(() => {
-    const targetOrderId = searchParams.get('orderId')
-    if (!targetOrderId) {
-      setSelectedOrder(null)
-      return
-    }
-
-    const matchedOrder = orders.find((order) => order.id === targetOrderId)
-    setSelectedOrder(matchedOrder ?? null)
-  }, [orders, searchParams])
-
-  const exportCsv = () => {
-    const header = ['Order', 'Created', 'Pickup', 'Customer', 'Qaffy ID', 'Order type', 'Location', 'Items', 'Payment', 'Status']
-    const lines = filteredOrders.map((order) =>
-      [
-        order.public_order_number,
-        formatDate(order.created_at),
-        formatDate(order.picked_up_date),
-        order.customer?.name ?? 'Customer',
-        order.customer?.qaffy_id ?? 'Unavailable',
-        orderTypeLabels[order.order_type],
-        order.location?.name ?? 'Location pending',
-        order.items.length > 0 ? getCustomerItemCount(order) : 'Not recorded',
-        order.invoice?.status === 'paid' ? 'Paid' : 'Pending',
-        statusLabels[order.status],
-      ]
-        .map(csvValue)
-        .join(','),
-    )
-    const blob = new Blob([[header.map(csvValue).join(','), ...lines].join('\n')], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = 'qaffy-admin-orders.csv'
-    link.click()
-    URL.revokeObjectURL(url)
+  const isLoadingPage = navigation.state === 'loading' && navigation.location?.pathname === '/admin/orders'
+  const pageCount = Math.max(1, Math.ceil(total / pageSize))
+  const buildSearch = (values: {
+    page: number
+    query?: string
+    statusFilter?: string
+    dateMode?: typeof dateMode
+    startDate?: string
+    endDate?: string
+  }) => {
+    const params = new URLSearchParams()
+    if (values.page > 1) params.set('page', String(values.page))
+    if (values.query) params.set('q', values.query)
+    if (values.statusFilter && values.statusFilter !== 'all') params.set('status', values.statusFilter)
+    if (values.dateMode && values.dateMode !== 'all') params.set('date', values.dateMode)
+    if (values.startDate) params.set('from', values.startDate)
+    if (values.endDate) params.set('to', values.endDate)
+    return `?${params.toString()}`
   }
+  const updateFilters = (filters: {
+    statusFilter?: string
+    dateMode?: typeof dateMode
+    startDate?: string
+    endDate?: string
+  }) => {
+    navigate(
+      buildSearch({
+        page: 1,
+        query,
+        statusFilter: filters.statusFilter ?? statusFilter,
+        dateMode: filters.dateMode ?? dateMode,
+        startDate: filters.startDate ?? startDate,
+        endDate: filters.endDate ?? endDate,
+      }),
+    )
+  }
+  const exportParams = new URLSearchParams(
+    buildSearch({ page: 1, query, statusFilter, dateMode, startDate, endDate }).slice(1),
+  )
+  const csvExportUrl = `/admin/orders/export?${exportParams.toString()}`
 
   return (
     <div className="space-y-4">
       <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="flex flex-col gap-3 border-b border-slate-200 p-4">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search order, customer, Qaffy ID, email, or phone"
-              className="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm outline-none focus:border-brand-primary lg:max-w-lg"
-            />
+            <Form method="get" className="w-full lg:max-w-lg">
+              <input type="hidden" name="status" value={statusFilter} />
+              <input type="hidden" name="date" value={dateMode} />
+              <input type="hidden" name="from" value={startDate} />
+              <input type="hidden" name="to" value={endDate} />
+              <input
+                key={query}
+                name="q"
+                defaultValue={query}
+                placeholder="Search order, customer, Qaffy ID, email, or phone"
+                aria-label="Search orders"
+                className="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm outline-none focus:border-brand-primary"
+              />
+            </Form>
             <div className="flex items-center gap-2 self-end lg:self-auto">
               <button
                 type="button"
@@ -604,8 +510,13 @@ export default function Orders() {
               </button>
               <button
                 type="button"
-                onClick={exportCsv}
-                disabled={filteredOrders.length === 0}
+                onClick={() => {
+                  const link = document.createElement('a')
+                  link.href = csvExportUrl
+                  link.download = 'qaffy-admin-orders.csv'
+                  link.click()
+                }}
+                disabled={total === 0}
                 className="h-10 rounded-full bg-brand-primary px-5 text-sm font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Export CSV
@@ -631,14 +542,23 @@ export default function Orders() {
               </tr>
             </thead>
             <tbody>
-              {filteredOrders.length === 0 ? (
+              {isLoadingPage ? (
+                <tr>
+                  <td colSpan={11} className="px-4 py-12">
+                    <div className="flex items-center justify-center gap-2 text-sm text-slate-500" role="status">
+                      <LoaderCircle size={18} className="animate-spin text-brand-primary" />
+                      Loading orders…
+                    </div>
+                  </td>
+                </tr>
+              ) : orders.length === 0 ? (
                 <tr>
                   <td colSpan={11} className="px-4 py-8 text-center text-sm text-slate-500">
                     No orders found.
                   </td>
                 </tr>
               ) : (
-                filteredOrders.map((order) => (
+                orders.map((order) => (
                   <tr key={order.id} className="border-b border-slate-100 align-top last:border-0">
                     <td className="px-4 py-4 text-sm text-slate-700">{formatDate(order.created_at)}</td>
                     <td className="px-4 py-4 text-sm font-semibold text-slate-700">{order.public_order_number}</td>
@@ -667,7 +587,6 @@ export default function Orders() {
                       <button
                         type="button"
                         onClick={() => {
-                          setSelectedOrder(order)
                           setSearchParams((current) => {
                             const next = new URLSearchParams(current)
                             next.set('orderId', order.id)
@@ -690,19 +609,61 @@ export default function Orders() {
         isOpen={isFilterOpen}
         onClose={() => setIsFilterOpen(false)}
         statusFilter={statusFilter}
-        setStatusFilter={setStatusFilter}
+        setStatusFilter={(value) => updateFilters({ statusFilter: value })}
         dateMode={dateMode}
-        setDateMode={setDateMode}
+        setDateMode={(value) => {
+          const today = new Date()
+          if (value === 'this_month')
+            updateFilters({
+              dateMode: value,
+              startDate: inputDate(new Date(today.getFullYear(), today.getMonth(), 1)),
+              endDate: inputDate(new Date(today.getFullYear(), today.getMonth() + 1, 0)),
+            })
+          else if (value === 'last_month')
+            updateFilters({
+              dateMode: value,
+              startDate: inputDate(new Date(today.getFullYear(), today.getMonth() - 1, 1)),
+              endDate: inputDate(new Date(today.getFullYear(), today.getMonth(), 0)),
+            })
+          else updateFilters({ dateMode: value, startDate: '', endDate: '' })
+        }}
         startDate={startDate}
-        setStartDate={setStartDate}
+        setStartDate={(value) => updateFilters({ dateMode: 'custom', startDate: value })}
         endDate={endDate}
-        setEndDate={setEndDate}
+        setEndDate={(value) => updateFilters({ dateMode: 'custom', endDate: value })}
       />
+      {total > 0 && (
+        <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm text-slate-500">
+            Showing {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, total)} of {total.toLocaleString()} orders
+          </p>
+          <div className="flex items-center justify-between gap-3 sm:justify-end">
+            <button
+              type="button"
+              onClick={() => navigate(buildSearch({ page: page - 1, query, statusFilter, dateMode, startDate, endDate }))}
+              disabled={page === 1 || isLoadingPage}
+              className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-200 px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <ChevronLeft size={16} />
+              Previous
+            </button>
+            <span className="whitespace-nowrap text-sm text-slate-600">Page {page} of {pageCount}</span>
+            <button
+              type="button"
+              onClick={() => navigate(buildSearch({ page: page + 1, query, statusFilter, dateMode, startDate, endDate }))}
+              disabled={page === pageCount || isLoadingPage}
+              className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-200 px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Next
+              <ChevronRight size={16} />
+            </button>
+          </div>
+        </div>
+      )}
       {selectedOrder && (
         <OrderDetails
           order={selectedOrder}
           onClose={() => {
-            setSelectedOrder(null)
             setSearchParams((current) => {
               const next = new URLSearchParams(current)
               next.delete('orderId')

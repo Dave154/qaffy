@@ -300,7 +300,7 @@ export default function Plans() {
               <input
                 type="number"
                 min="1"
-                step="100"
+                step="1"
                 name="price"
                 defaultValue={25000}
                 className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
@@ -605,7 +605,7 @@ export default function Plans() {
                 <input
                   type="number"
                   min="1"
-                  step="100"
+                  step="1"
                   name="price"
                   defaultValue={editingPlan.price}
                   className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"

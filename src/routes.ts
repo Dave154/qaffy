@@ -6,6 +6,8 @@ export default [
   route('api/referrals/attribute', 'routes/referral-attribution.ts'),
   route('api/push-subscriptions', 'routes/push-subscriptions.ts'),
   route('api/notifications/subscriptions', 'routes/subscription-notifications.ts'),
+  route('admin/users/export', 'routes/admin-users-export.ts'),
+  route('admin/orders/export', 'routes/admin-orders-export.ts'),
   layout('portals/customer/CustomerLayout.tsx', [
     index('portals/customer/pages/Home.tsx'),
     route('transactions', 'portals/customer/pages/Transactions.tsx'),

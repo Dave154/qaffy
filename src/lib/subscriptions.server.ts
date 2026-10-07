@@ -50,6 +50,30 @@ export async function createManualSubscriptionWithSnapshot(input: SubscriptionSn
       for update
     `
     if (existing) throw new Error('Customer already has an active subscription.')
-    return insertSubscriptionWithSnapshot(tx, input)
+
+    const [plan] = await tx`
+      select type
+      from plans
+      where id = ${input.planId}
+      for share
+    `
+    if (!plan) throw new Error('Plan not found')
+
+    let endDate = input.endDate
+    if (plan.type === 'semester') {
+      const [semesterSettings] = await tx<{ semester_end_date: Date | string | null }[]>`
+        select semester_end_date
+        from app_settings
+        where key = 'semester'
+        limit 1
+      `
+      if (!semesterSettings?.semester_end_date) throw new Error('Set the semester end date in Admin Plans before creating this subscription.')
+      endDate =
+        semesterSettings.semester_end_date instanceof Date
+          ? semesterSettings.semester_end_date.toISOString().slice(0, 10)
+          : semesterSettings.semester_end_date.slice(0, 10)
+    }
+
+    return insertSubscriptionWithSnapshot(tx, { ...input, endDate })
   })
 }

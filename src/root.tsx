@@ -1,4 +1,4 @@
-import { isRouteErrorResponse, Links, Meta, Outlet, Scripts, ScrollRestoration } from 'react-router'
+import { isRouteErrorResponse, Links, Meta, Outlet, Scripts, ScrollRestoration, useLocation, useNavigation } from 'react-router'
 import type { Route } from './+types/root'
 import stylesheetUrl from './index.css?url'
 import { Toaster } from 'sonner'
@@ -69,14 +69,20 @@ export function Layout({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
+  const location = useLocation()
+  const navigation = useNavigation()
   useEffect(() => {
     initializePwaInstall()
   }, [])
 
+  const isAdminTableUpdate =
+    (location.pathname === '/admin/users' && navigation.location?.pathname === '/admin/users') ||
+    (location.pathname === '/admin/orders' && navigation.location?.pathname === '/admin/orders')
+
   return (
     <>
       <Outlet />
-      <RouteLoadingScreen />
+      <RouteLoadingScreen watchNavigation={!isAdminTableUpdate} />
     </>
   )
 }

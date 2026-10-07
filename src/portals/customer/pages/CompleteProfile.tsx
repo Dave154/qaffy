@@ -1,10 +1,33 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { useNavigate } from 'react-router'
+import { data, redirect } from 'react-router'
+import type { Route } from './+types/CompleteProfile'
 import QaffyLogo from '../../../components/QaffyLogo'
 import RouteLoadingScreen from '../../../components/RouteLoadingScreen'
 import { toast } from '../../../lib/toast'
 import { isSupabaseConfigured, supabase } from '../../../lib/supabase.client'
+import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
+
+// eslint-disable-next-line react-refresh/only-export-components
+export async function loader({ request }: Route.LoaderArgs) {
+  if (!isSupabaseServerConfigured) return data(null, { status: 503 })
+
+  const { supabase: serverSupabase, headers } = getSupabaseServerClient(request)
+  const { data: userData, error: userError } = await serverSupabase.auth.getUser()
+  if (userError || !userData.user) throw redirect('/login', { headers })
+
+  const { data: profile, error: profileError } = await serverSupabase
+    .from('profiles')
+    .select('name, phone')
+    .eq('id', userData.user.id)
+    .maybeSingle()
+
+  if (profileError) throw new Error(`Profile completion status could not be checked: ${profileError.message}`)
+  if (profile?.name?.trim() && /^\d{10}$/.test(profile.phone ?? '')) throw redirect('/', { headers })
+
+  return data(null, { headers })
+}
 
 export default function CompleteProfile() {
   const navigate = useNavigate()
@@ -81,6 +104,7 @@ export default function CompleteProfile() {
           <form onSubmit={handleSubmit} className="space-y-4">
             <input
               aria-label="Full name"
+              required
               value={name}
               onChange={(event) => setName(event.target.value)}
               placeholder="Enter your full name"
@@ -89,6 +113,7 @@ export default function CompleteProfile() {
             <input
               aria-label="Phone number"
               type="tel"
+              required
               inputMode="numeric"
               autoComplete="tel-national"
               maxLength={10}
