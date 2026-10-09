@@ -278,11 +278,12 @@ export default function VendorOrderReviewDialog({
                     Received
                     <input
                       type="number"
-                      min="1"
+                      min="0"
+                      step="1"
                       value={received[item.id] ?? ''}
                       disabled={!canEdit}
                       onChange={(event) =>
-                        onReceivedChange(item.id, event.target.value === '' ? undefined : Math.max(1, Number(event.target.value) || 1))
+                        onReceivedChange(item.id, event.target.value === '' ? undefined : Math.max(0, Number(event.target.value) || 0))
                       }
                       className="mt-1 h-11 w-full rounded-lg border border-slate-200 bg-white px-2 text-center text-base font-semibold text-slate-900 outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus disabled:bg-slate-100 disabled:text-slate-500"
                       aria-label={`Received ${item.name}`}
@@ -312,11 +313,12 @@ export default function VendorOrderReviewDialog({
                       <td className="py-3">
                         <input
                           type="number"
-                          min="1"
+                          min="0"
+                          step="1"
                           value={received[item.id] ?? ''}
                           disabled={!canEdit}
                           onChange={(event) =>
-                            onReceivedChange(item.id, event.target.value === '' ? undefined : Math.max(1, Number(event.target.value) || 1))
+                            onReceivedChange(item.id, event.target.value === '' ? undefined : Math.max(0, Number(event.target.value) || 0))
                           }
                           className="h-9 w-20 rounded-lg border border-slate-200 px-2 text-sm font-semibold outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus disabled:bg-slate-100 disabled:text-slate-500"
                           aria-label={`Received ${item.name}`}

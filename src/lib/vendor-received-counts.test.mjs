@@ -2,12 +2,19 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { isValidVendorReceivedItems } from './vendor-received-counts.ts'
 
-test('accepts a received count of one', () => {
+test('accepts zero and positive received counts', () => {
+  assert.equal(isValidVendorReceivedItems([{ itemId: 'item-1', quantity: 0 }]), true)
   assert.equal(isValidVendorReceivedItems([{ itemId: 'item-1', quantity: 1 }]), true)
+  assert.equal(
+    isValidVendorReceivedItems([
+      { itemId: 'item-zero', quantity: 0 },
+      { itemId: 'item-positive', quantity: 3 },
+    ]),
+    true,
+  )
 })
 
-test('rejects zero and negative received counts', () => {
-  assert.equal(isValidVendorReceivedItems([{ itemId: 'item-1', quantity: 0 }]), false)
+test('rejects negative received counts', () => {
   assert.equal(isValidVendorReceivedItems([{ itemId: 'item-1', quantity: -1 }]), false)
 })
 
