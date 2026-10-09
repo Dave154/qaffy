@@ -90,7 +90,7 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function Home() {
-  const { balance, subscriptionBalance, customerName, customerId, referralCode, orders, subscription, subscriptionEndDate, pendingTopUp } =
+  const { balance, subscriptionBalance, customerName, customerId, referralCode, orders, invoices, subscription, subscriptionEndDate, pendingTopUp } =
     useCustomerStore()
   const [searchParams, setSearchParams] = useSearchParams()
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false)
@@ -387,7 +387,12 @@ export default function Home() {
 
                 <div className="shrink-0 sm:ml-2">
                   {order.status === 'Pending payment' && order.total > 0 ? (
-                    <DeliveryOtpPaywall amount={order.total} walletBalance={balance} onClick={() => setIsTopUpModalOpen(true)} />
+                    <DeliveryOtpPaywall
+                      amount={order.total}
+                      walletBalance={balance}
+                      invoiceId={invoices.find((invoice) => invoice.orderId === order.id && invoice.status === 'Awaiting payment')?.id}
+                      onClick={() => setIsTopUpModalOpen(true)}
+                    />
                   ) : order.paymentStatus === 'Paid' && !order.dispatched && order.status !== 'Delivered' ? (
                     <DeliveryOtpStatus />
                   ) : getVisibleOtp(order) ? (

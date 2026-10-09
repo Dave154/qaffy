@@ -86,7 +86,7 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function Orders() {
-  const { orders, balance } = useCustomerStore()
+  const { orders, balance, invoices } = useCustomerStore()
   const cancelFetcher = useFetcher<typeof action>()
   const handledCancelResponse = useRef<typeof cancelFetcher.data>(null)
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false)
@@ -261,7 +261,12 @@ export default function Orders() {
 
                 <div className="shrink-0 sm:ml-2">
                   {order.status === 'Pending payment' && order.total > 0 ? (
-                    <DeliveryOtpPaywall amount={order.total} walletBalance={balance} onClick={() => navigate('/?topup=1')} />
+                    <DeliveryOtpPaywall
+                      amount={order.total}
+                      walletBalance={balance}
+                      invoiceId={invoices.find((invoice) => invoice.orderId === order.id && invoice.status === 'Awaiting payment')?.id}
+                      onClick={() => navigate('/?topup=1')}
+                    />
                   ) : order.paymentStatus === 'Paid' && !order.dispatched && order.status !== 'Delivered' ? (
                     <DeliveryOtpStatus />
                   ) : getVisibleOtp(order) ? (

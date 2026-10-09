@@ -457,7 +457,7 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
                         {item.service} · {item.quantity} item{item.quantity === 1 ? '' : 's'}
                         {isReadOnly && item.vendorAdded ? (
                           <span className="font-semibold text-emerald-600"> (+{item.quantity}, vendor-added)</span>
-                        ) : isReadOnly && item.vendorCountDifference ? (
+                        ) : isReadOnly && item.vendorCountDifference !== undefined ? (
                           <span className={`font-semibold ${item.vendorCountDifference > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
                             {' '}({item.vendorCountDifference > 0 ? '+' : ''}{item.vendorCountDifference})
                           </span>
