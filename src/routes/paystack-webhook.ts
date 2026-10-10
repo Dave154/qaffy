@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 import { data } from 'react-router'
 import { sql } from '../lib/db.server'
 import { activateSubscriptionFromPayment, creditWallet } from '../lib/wallet.server'
-import { sendCustomerNotification, walletInvoicePaidNotification } from '../lib/notifications.server'
+import { sendCustomerNotification, sendWalletInvoicePaidNotifications } from '../lib/notifications.server'
 import { processPaystackTransferWebhook } from '../lib/payouts.server'
 import { TransferWebhookValidationError } from '../lib/payout-webhooks'
 
@@ -125,15 +125,7 @@ export async function action({ request }: { request: Request }) {
         },
       })
     }
-    for (const invoice of result.settledInvoices) {
-      await sendCustomerNotification({
-        eventKey: `invoice:${invoice.invoiceId}:paid`,
-        customerId: payment.customer_id,
-        notificationType: 'payment_confirmed',
-        orderId: invoice.orderId,
-        payload: walletInvoicePaidNotification(invoice.amount, invoice.publicOrderNumber, invoice.orderId),
-      })
-    }
+    await sendWalletInvoicePaidNotifications(payment.customer_id, result.settledInvoices)
   }
   return data({ ok: true }, { status: 200 })
 }

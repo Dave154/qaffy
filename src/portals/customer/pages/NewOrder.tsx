@@ -28,6 +28,11 @@ const services = [
   { name: 'Wash + Iron', description: 'Clean, pressed and folded' },
 ]
 
+function getDefaultService(plan: { covers_wash: boolean; covers_iron: boolean } | null) {
+  if (!plan || (plan.covers_wash && plan.covers_iron)) return services[2]
+  return plan.covers_wash ? services[0] : services[1]
+}
+
 type NewOrderProps = { onClose: () => void; order?: CustomerOrder }
 
 const parsePositiveQuantity = (value: string) => {
@@ -54,7 +59,7 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
   const [catalogState, setCatalogState] = useState<'loading' | 'ready' | 'empty' | 'error'>(isReadOnly ? 'ready' : 'loading')
   const [catalogError, setCatalogError] = useState('')
   const [category, setCategory] = useState<Category | null>(null)
-  const [service, setService] = useState(services[2])
+  const [service, setService] = useState(() => getDefaultService(activePlan))
   const [quantity, setQuantity] = useState(1)
   const [quantityInput, setQuantityInput] = useState<string | null>(null)
   const [items, setItems] = useState<OrderLine[]>([])

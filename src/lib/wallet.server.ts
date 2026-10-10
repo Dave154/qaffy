@@ -1,7 +1,11 @@
 import { sql } from '@/lib/db.server'
 import type { WalletBalanceType } from '@/types/database.types'
 import type { TransactionSql } from 'postgres'
-import { sendCustomerNotification } from './notifications.server'
+import {
+  sendAdminWalletTopUpNotification,
+  sendCustomerNotification,
+  sendWalletInvoicePaidNotifications,
+} from './notifications.server'
 import { getSubscriptionWeekStart } from './subscription-week'
 import { insertSubscriptionWithSnapshot, lockCustomerSubscription } from './subscriptions.server'
 import { calculateSubscriptionBilling } from './subscription-billing'
@@ -672,27 +676,36 @@ export async function finalizeVendorOrder(
   return result
 }
 
-/** Credits the customer's wallet after a Paystack top-up payment is verified server-side. */
-export async function creditWallet(customerId: string, balanceType: WalletBalanceType, amount: number, paymentReference: string) {
+async function applyWalletCredit(
+  customerId: string,
+  balanceType: WalletBalanceType,
+  amount: number,
+  paymentReference: string | null,
+  applyCashback: boolean,
+) {
   if (amount <= 0) throw new Error('Amount must be positive')
   if (balanceType === 'promotional') throw new Error('Promotional balances are issued only by the referral reward service')
 
   const result = await sql.begin(async (tx) => {
     await tx`insert into wallets (customer_id) values (${customerId}) on conflict (customer_id) do nothing`
-    await tx`
-      insert into payments (customer_id, reference, amount, balance_type, status)
-      values (${customerId}, ${paymentReference}, ${amount}, ${balanceType}, 'pending')
-      on conflict (reference) do nothing
-    `
+    if (paymentReference) {
+      await tx`
+        insert into payments (customer_id, reference, amount, balance_type, status)
+        values (${customerId}, ${paymentReference}, ${amount}, ${balanceType}, 'pending')
+        on conflict (reference) do nothing
+      `
+    }
 
-    const [existingPayment] =
-      await tx`select id, status from payments where reference = ${paymentReference} and customer_id = ${customerId}`
+    const [existingPayment] = paymentReference
+      ? await tx`select id, status from payments where reference = ${paymentReference} and customer_id = ${customerId}`
+      : []
     if (existingPayment?.status === 'success') {
       const [wallet] = await tx`select one_off_balance, subscription_balance from wallets where customer_id = ${customerId}`
       return {
         newBalance: balanceType === 'subscription' ? Number(wallet.subscription_balance) : Number(wallet.one_off_balance),
         cashbackAmount: 0,
         alreadyCredited: true,
+        creditTransactionId: null,
         settledInvoices: [],
       }
     }
@@ -701,7 +714,7 @@ export async function creditWallet(customerId: string, balanceType: WalletBalanc
     const subscriptionDebt = Math.max(0, -Number(wallet.subscription_balance))
     const subscriptionCredit = balanceType === 'subscription' ? amount : Math.min(amount, subscriptionDebt)
     const oneOffCredit = balanceType === 'one_off' ? amount - subscriptionCredit : 0
-    const cashbackPercent = balanceType === 'one_off' ? await getCashbackPercentForTransaction(tx) : 0
+    const cashbackPercent = applyCashback && balanceType === 'one_off' ? await getCashbackPercentForTransaction(tx) : 0
     const cashbackAmount = cashbackPercent > 0 ? Math.round(((oneOffCredit * cashbackPercent) / 100) * 100) / 100 : 0
     const subscriptionBalance = Number(wallet.subscription_balance) + subscriptionCredit
     const oneOffBalance = Number(wallet.one_off_balance) + oneOffCredit + cashbackAmount
@@ -711,23 +724,30 @@ export async function creditWallet(customerId: string, balanceType: WalletBalanc
       set one_off_balance = ${oneOffBalance}, subscription_balance = ${subscriptionBalance}, updated_at = ${new Date()}
       where customer_id = ${customerId}
     `
-    const [payment] = await tx`
-      update payments
-      set status = 'success', succeeded_at = coalesce(succeeded_at, now())
-      where reference = ${paymentReference}
-      returning id
-    `
+    const [payment] = paymentReference
+      ? await tx`
+          update payments
+          set status = 'success', succeeded_at = coalesce(succeeded_at, now())
+          where reference = ${paymentReference}
+          returning id
+        `
+      : []
+    let creditTransactionId: string | null = null
     if (subscriptionCredit > 0) {
-      await tx`
+      const [transaction] = await tx`
         insert into wallet_transactions (customer_id, balance_type, txn_type, amount, balance_after, related_payment_id)
         values (${customerId}, 'subscription', 'topup', ${subscriptionCredit}, ${subscriptionBalance}, ${payment?.id ?? null})
+        returning id
       `
+      creditTransactionId = transaction.id
     }
     if (oneOffCredit > 0) {
-      await tx`
+      const [transaction] = await tx`
         insert into wallet_transactions (customer_id, balance_type, txn_type, amount, balance_after, related_payment_id)
         values (${customerId}, 'one_off', 'topup', ${oneOffCredit}, ${oneOffBalance}, ${payment?.id ?? null})
+        returning id
       `
+      creditTransactionId ??= transaction.id
     }
     if (cashbackAmount > 0) {
       await tx`
@@ -785,11 +805,27 @@ export async function creditWallet(customerId: string, balanceType: WalletBalanc
       newBalance: balanceType === 'subscription' ? subscriptionBalance : settledBalance,
       cashbackAmount,
       settledInvoices,
+      creditTransactionId,
       alreadyCredited: false,
       referralRewardRecipients,
     }
   })
   await sendReferralRewardNotifications(result.referralRewardRecipients ?? [])
+  return result
+}
+
+/** Credits the customer's wallet after a Paystack top-up payment is verified server-side. */
+export async function creditWallet(customerId: string, balanceType: WalletBalanceType, amount: number, paymentReference: string) {
+  return applyWalletCredit(customerId, balanceType, amount, paymentReference, true)
+}
+
+/** Credits a customer's one-off wallet from an admin action without creating a Paystack payment. */
+export async function creditAdminWallet(customerId: string, amount: number) {
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error('Top-up amount must be positive')
+  const result = await applyWalletCredit(customerId, 'one_off', amount, null, false)
+  if (!result.creditTransactionId) throw new Error('Admin wallet top-up transaction was not recorded')
+  await sendAdminWalletTopUpNotification(customerId, amount, result.creditTransactionId)
+  await sendWalletInvoicePaidNotifications(customerId, result.settledInvoices)
   return result
 }
 

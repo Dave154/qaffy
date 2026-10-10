@@ -3,7 +3,7 @@ import { data, Form, Link, useActionData, useFetcher, useLoaderData, useNavigati
 import { useEffect, useRef, useState } from 'react'
 import type { Route } from './+types/UserDetails'
 import { requireRole } from '../../../lib/auth.server'
-import { adjustWallet } from '../../../lib/wallet.server'
+import { adjustWallet, creditAdminWallet } from '../../../lib/wallet.server'
 import { createManualSubscriptionWithSnapshot } from '../../../lib/subscriptions.server'
 import { sql } from '../../../lib/db.server'
 import { toast } from '../../../lib/toast'
@@ -266,10 +266,18 @@ export async function action({ request, params }: Route.ActionArgs) {
     try {
       const amount = Number(formData.get('amount'))
       if (!Number.isInteger(amount)) return data({ ok: false, message: 'Wallet adjustments must use whole numbers.' }, { status: 400 })
+      if (amount > 0) {
+        const result = await creditAdminWallet(customerId, amount)
+        const paidInvoiceCount = result.settledInvoices.length
+        return data({
+          ok: true,
+          message: `Wallet topped up by ${money(amount)}.${paidInvoiceCount > 0 ? ` ${paidInvoiceCount} unpaid ${paidInvoiceCount === 1 ? 'invoice was' : 'invoices were'} paid.` : ''}`,
+        })
+      }
       const result = await adjustWallet(customerId, 'one_off', amount)
       return data({
         ok: true,
-        message: `${result.balanceType} wallet adjusted by ${money(result.amount)}.`,
+        message: `One-off wallet adjusted by ${money(result.amount)}.`,
       })
     } catch (error) {
       return data(
@@ -579,7 +587,7 @@ export default function UserDetails() {
               type="number"
               step="1"
               inputMode="numeric"
-              placeholder="Adjust one-off balance (+ or -)"
+              placeholder="Top-up amount (+) or adjustment (-)"
               required
               className="h-10 w-full rounded-lg border border-brand-border bg-white px-3 text-sm outline-none focus:border-brand-primary"
             />
@@ -588,7 +596,7 @@ export default function UserDetails() {
               disabled={isSaving}
               className="rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
             >
-              Adjust wallet
+              Apply wallet change
             </button>
           </Form>
         </div>

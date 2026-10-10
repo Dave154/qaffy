@@ -4,7 +4,7 @@
 
 This document outlines the content structure, features, and requirements for the Qaffy laundry service platform based on analysis of the legacy system and product specifications.
 
-## Current status snapshot (2026-10-07)
+## Current status snapshot (2026-10-10)
 
 The repository is now in a product-validated implementation phase across all major portals. Recent work includes:
 
@@ -14,6 +14,7 @@ The repository is now in a product-validated implementation phase across all maj
 - Vendor portal polish: consistent branded header spacing, responsive layout, and settlement/finance state handling
 - Product-level correctness: recent orders now sort strictly by timestamp, referral messaging now explains pending reward status, and portal branding is aligned across customer, vendor, logistics, and admin shells
 - Admin scalability and account management: Users and Orders use server-side pagination/filtering with all-filtered CSV exports; admin subscription end dates and profile-completion routing have been refined
+- Latest admin/customer refinements: Admin Orders can filter paid versus pending invoices server-side and carry the filter through pagination and CSV export; positive admin wallet changes follow top-up allocation without Paystack or cashback and notify customers; New Order defaults the service to the customer's active plan coverage
 
 These updates are active in the repo and should be treated as the current operating baseline unless a more recent change is explicitly documented.
 
@@ -570,7 +571,7 @@ The customer portal is the current completion target. Do not move to another por
 - The webhook validates `x-paystack-signature`, checks the stored customer payment and exact amount, and then credits the wallet through `creditWallet`.
 - The local `.env` now contains non-empty values for the required Supabase, Paystack secret, and direct database variables; restart the dev server after changing them.
 - Top-up initialization now uses React Router's `useFetcher` action submission and surfaces initialization errors in the modal; do not replace it with a raw `fetch('/?index')` call.
-- No Paystack callback or browser-side payment-status flow is used; the signed webhook is the sole path that credits the wallet.
+- No Paystack callback or browser-side payment-status flow is used; the signed webhook is the sole path that credits a Paystack top-up.
 - Paystack receives a return URL only for navigation back to `/`; it does not perform verification or wallet mutation.
 - Customer wallet and wallet-ledger realtime updates revalidate the customer loader after webhook changes; apply `supabase/migrations/20260915110000_customer_wallet_realtime.sql` before relying on live balance updates.
 - React Router action-origin protection must allow the active public webhook host during tunnel testing; update `react-router.config.ts` when the ngrok hostname changes, and replace it with the production host before deployment.
@@ -807,6 +808,7 @@ Before production assignment or settlement work, add vendor ownership to orders.
 - `src/lib/subscriptions.server.ts` snapshots terms for both Paystack activation and Admin manual grants.
 - `src/portals/admin/pages/Plans.tsx` edits service coverage; `src/portals/admin/pages/Categories.tsx` manages shared subscriber rates by category/service.
 - `src/portals/customer/pages/NewOrder.tsx` merges category/service lines and previews covered, subscriber-rate, and regular-rate amounts. `CustomerLayout.tsx` and `customer-store.tsx` load saved plan terms; category rates are global.
+- New Order defaults to Wash for Wash-only plans, Iron for Iron-only plans, and Wash + Iron for both-service plans or customers without an active plan. Customers may still change the selection.
 - `src/lib/subscription-billing.ts` calculates component-aware allowance and invoice amounts. `src/lib/wallet.server.ts` uses it for snapshot-linked orders and retains the legacy finalization path for pre-migration orders without `subscription_id`.
 - `src/portals/customer/pages/Invoice.tsx` presents the compact persisted billing breakdown.
 - `src/lib/subscription-billing.test.mjs` and `src/lib/order-lines.test.mjs` cover the new pricing and line-merge rules.
@@ -821,6 +823,7 @@ Read this section first when continuing the latest Admin Users/Orders and accoun
 - Admin Users and Orders use server-side pagination with a page size of 10. Search and filters are applied in database queries before pagination; the browser does not fetch all matching records to paginate locally.
 - Users search/role/joined-date filtering and page aggregates are in `src/lib/admin-users.server.ts`. The users export resource route is `src/routes/admin-users-export.ts`.
 - Orders search/status/created-date filtering and detail queries are in `src/lib/admin-orders.server.ts`. The orders export resource route is `src/routes/admin-orders-export.ts`.
+- Orders also filter by payment status (`all`, `pending`, or `paid`) server-side; pending means there is no paid invoice, matching the table's displayed status. The filter is preserved through search, pagination, and all-matching CSV export.
 - CSV exports ignore the current page and include every row matching the active filters. The server streams bounded keyset batches; users and orders are exported through separate resource routes registered in `src/routes.ts`.
 - Pagination and filtering preserve URL search parameters. Same-route updates render an in-table loading row rather than the global Qaffy loader; the suppression logic is in `src/root.tsx`.
 - Order details can be loaded by internal order ID even when the order is not present on the current page. Customer-facing order references remain public `QO-######` values; do not export OTPs or unrelated sensitive fields.
@@ -833,6 +836,7 @@ Read this section first when continuing the latest Admin Users/Orders and accoun
 - Standard subscription creation derives dates from the selected plan and current semester configuration. Semester subscriptions end on the configured semester end date.
 - Admin User Details allows editing the end date of an active subscription. Saving commits the edit and exits edit mode; do not restore separate Save and Done buttons. Ended/cancelled subscription history remains read-only.
 - Plan price inputs support whole-Naira values without a small fixed increment. Preserve existing price validation and trusted server-side subscription logic.
+- A positive wallet amount on Admin User Details is an admin top-up; it applies subscription debt first, then one-off balance, and may settle eligible unpaid invoices. A negative amount remains an adjustment. Admin top-ups do not create Paystack payment rows or cashback, appear in customer transaction history, and notify the customer; invoice-paid notifications continue for invoices settled by the credit.
 
 ### Validation and rollout
 

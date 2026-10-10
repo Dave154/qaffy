@@ -58,9 +58,10 @@ This section retains the implementation checkpoints and separates completed capa
 ### High Priority
 
 - **Admin Orders date filter:** implemented using created date; it is applied server-side before pagination.
-- **Admin Orders CSV export:** implemented for every order matching active search, status, and created-date filters, regardless of the visible page.
+- **Admin Orders payment-status filter:** implemented server-side for all, pending, and paid invoices; it is preserved through pagination and CSV export. Pending matches orders without a paid invoice, including orders with no invoice yet.
+- **Admin Orders CSV export:** implemented for every order matching active search, order status, payment status, and created-date filters, regardless of the visible page.
 - **Admin Users server pagination and export:** implemented with server-side search/role/joined-date filters, ten customers per page, and a filtered all-pages CSV export.
-- **Admin Orders server pagination:** implemented with ten orders per page, server-side search/status/date filters, paginated detail data, and filtered all-pages CSV export.
+- **Admin Orders server pagination:** implemented with ten orders per page, server-side search/order-status/payment-status/date filters, paginated detail data, and filtered all-pages CSV export.
 - **Admin list loading behavior:** Users and Orders show an in-table loading row during page/filter navigation instead of the global Qaffy loader.
 - **Admin list indexes:** supporting indexes are defined by migrations `20261007100000_admin_user_pagination_indexes.sql` and `20261007110000_admin_order_pagination_indexes.sql`. These migrations are in the repository and must be applied to the intended database after confirming the linked environment.
 - **Admin Overview date filter:** implemented 2026-09-16 with independent general and chart date ranges using All time, This month, Last month, and Custom options.
@@ -91,8 +92,8 @@ This section retains the implementation checkpoints and separates completed capa
 
 #### Admin Orders
 
-- Orders use server-side pagination (10 rows per page); search, status, and created-date filters are applied in the database before paging.
-- CSV export streams all orders matching the active search/status/date filters, independent of the currently visible page.
+- Orders use server-side pagination (10 rows per page); search, order status, payment status, and created-date filters are applied in the database before paging.
+- CSV export streams all orders matching the active search/order-status/payment-status/date filters, independent of the currently visible page.
 - The order detail view can load an order by its internal ID even when it is not on the current result page.
 - Show an in-table loading state during same-route pagination/filter updates; do not display the global Qaffy loader for these transitions.
 - Keep export data aligned with the visible order table and avoid exporting internal OTPs or unnecessary sensitive fields.
@@ -302,7 +303,7 @@ Vendor-side finance preparation and the trusted Admin payout execution path are 
 - Admin settlement release and payout transfers are complete with transfer metadata, Paystack recipient/transfer handling, reconciliation, and paid-settlement audit records. Staging and Paystack test-mode verification have passed.
 - Historical payout-rate snapshots are implemented for settlement items through `supabase/migrations/20260917110000_admin_finance_ledger_and_settlement_snapshots.sql`.
 - Finance-specific loading and query-error states remain future work.
-- Manual wallet adjustment workflow still needs full validation against the approved wallet service rules.
+- Admin User Details positive wallet entries now use the top-up flow: offset subscription debt, credit remaining one-off funds, and settle eligible unpaid invoices when the available balance covers them. Negative entries remain wallet adjustments. Admin credits earn no cashback, create no Paystack payment, are visible in customer transaction history, and trigger customer top-up plus any applicable invoice-paid notifications. Admin identity is not retained.
 
 ### Reward MVP
 
