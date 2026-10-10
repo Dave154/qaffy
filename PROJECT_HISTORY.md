@@ -218,7 +218,7 @@ The same product truth underpins all of it: the product became more robust each 
 
 ## Current state: real product, not fake completion
 
-As of 2026-10-07, Qaffy is in a strong implementation phase. The major portals are operating with product-like behavior:
+As of 2026-10-10, Qaffy is in a strong implementation phase. The major portals are operating with product-like behavior:
 
 - customer flows cover ordering, payment, subscriptions, invoices, notifications, settings, reward activity, and referral behavior
 - reward center covers both cashback configuration and referral campaigns in one admin surface
@@ -226,6 +226,8 @@ As of 2026-10-07, Qaffy is in a strong implementation phase. The major portals a
 - vendors can review and finalize counts with mismatch-aware logic
 - admin supports live analytics, operational management, categories, rates, plans, reward configuration, and financial summary views
 - Admin Users and Orders apply search and filters server-side before returning ten-row pages; their CSV exports include all filtered results rather than only the current page
+- Admin Orders additionally filters payment status server-side and keeps that filter in pagination and all-matching CSV exports; Admin User Details positive wallet credits follow top-up allocation, exclude Paystack cashback, and notify customers
+- Customer New Order defaults the service selector to match active plan coverage while keeping other services selectable
 - customer profile completion and subscription administration enforce required profile data and plan/semester-aware dates, with active subscription end-date editing for Admins
 
 At the same time, the project still has open work in the trust-heavy areas:
@@ -239,13 +241,23 @@ This is the state of a mature product conversation: not a finished system, but a
 
 ## October 6–7, 2026: account management and scalable admin tables
 
-The latest pass addressed two kinds of operational correctness. First, subscription and profile administration were tightened: required name and phone data are enforced on the authenticated incomplete-profile route; complete users are redirected home; semester subscriptions use the configured semester end date; and Admins can edit an active subscription's end date without a redundant completion button.
+The October 6–7 pass addressed two kinds of operational correctness. First, subscription and profile administration were tightened: required name and phone data are enforced on the authenticated incomplete-profile route; complete users are redirected home; semester subscriptions use the configured semester end date; and Admins can edit an active subscription's end date without a redundant completion button.
 
 Second, Admin Users and Orders no longer rely on loading the entire matching data set into the browser. Search and filters are applied server-side before pagination, each table returns ten rows per page, and page/filter navigation uses an in-table loading state rather than the global Qaffy loader. Separate export resource routes stream all matching filtered rows in bounded batches, regardless of the currently selected page. Order search/filter/detail queries and customer search/aggregate queries live in server-only modules, keeping privileged database logic outside browser bundles.
 
 Supporting query indexes were added as migrations `20261007100000_admin_user_pagination_indexes.sql` and `20261007110000_admin_order_pagination_indexes.sql`. Their presence in the repository is not evidence that they have been applied to a remote database. The deployment handoff must verify the linked Supabase environment and migration state before applying them.
 
 The new implementation was checked in the browser for pagination, details, CSV responses, and table-local loading, and validated with typecheck, build, focused lint, and diff checks. No commit or remote migration application was part of this pass. Settlement release and payout transfer work is complete: the staging migration and Paystack test-mode transfer were verified, with the transfer confirmed by Paystack and the local ledger. Further SQL-adapter and asynchronous pending-result tests are follow-up confidence work; see [ADMIN_PLAN.md](ADMIN_PLAN.md).
+
+## October 10, 2026: wallet operations and payment visibility
+
+Admin Orders gained a server-side paid/pending payment filter. Its state is preserved in URL navigation, pagination, and all-filtered CSV exports, so Admins can find unpaid orders across pages.
+
+Admin User Details now treats a positive wallet entry as an admin top-up. It uses the same debt-first and eligible-invoice auto-settlement allocation as a Paystack top-up, but does not create a Paystack payment or award cashback. The wallet ledger and customer Transactions identify the credit as an admin top-up; customers receive a top-up notification, and invoices settled by the credit continue to produce the usual invoice-paid notification. Negative entries remain adjustments. Admin identity is not recorded, and no migration is required.
+
+The customer New Order service selector now initially matches the active plan: Wash-only defaults to Wash, Iron-only to Iron, and both-service or no-plan customers default to Wash + Iron. Customers can still change the selection.
+
+These code changes passed typecheck, build, all 52 tests, and `git diff --check`. No new migration or remote database change was needed.
 
 ---
 

@@ -307,6 +307,8 @@ function OrderFilterDrawer({
   onClose,
   statusFilter,
   setStatusFilter,
+  paymentFilter,
+  setPaymentFilter,
   dateMode,
   setDateMode,
   startDate,
@@ -318,6 +320,8 @@ function OrderFilterDrawer({
   onClose: () => void
   statusFilter: string
   setStatusFilter: (value: string) => void
+  paymentFilter: 'all' | 'pending' | 'paid'
+  setPaymentFilter: (value: 'all' | 'pending' | 'paid') => void
   dateMode: 'all' | 'this_month' | 'last_month' | 'custom'
   setDateMode: (value: 'all' | 'this_month' | 'last_month' | 'custom') => void
   startDate: string
@@ -369,6 +373,18 @@ function OrderFilterDrawer({
                     {label}
                   </option>
                 ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-2.5 block text-xs font-semibold text-slate-500">Payment status</span>
+              <select
+                value={paymentFilter}
+                onChange={(event) => setPaymentFilter(event.target.value as typeof paymentFilter)}
+                className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
+              >
+                <option value="all">All payment statuses</option>
+                <option value="pending">Pending</option>
+                <option value="paid">Paid</option>
               </select>
             </label>
             <label className="block">
@@ -430,7 +446,8 @@ function OrderFilterDrawer({
 }
 
 export default function Orders() {
-  const { orders, selectedOrder, page, pageSize, total, query, statusFilter, dateMode, startDate, endDate } = useLoaderData<typeof loader>()
+  const { orders, selectedOrder, page, pageSize, total, query, statusFilter, paymentFilter, dateMode, startDate, endDate } =
+    useLoaderData<typeof loader>()
   const [, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
   const navigation = useNavigation()
@@ -441,6 +458,7 @@ export default function Orders() {
     page: number
     query?: string
     statusFilter?: string
+    paymentFilter?: typeof paymentFilter
     dateMode?: typeof dateMode
     startDate?: string
     endDate?: string
@@ -449,6 +467,7 @@ export default function Orders() {
     if (values.page > 1) params.set('page', String(values.page))
     if (values.query) params.set('q', values.query)
     if (values.statusFilter && values.statusFilter !== 'all') params.set('status', values.statusFilter)
+    if (values.paymentFilter && values.paymentFilter !== 'all') params.set('payment', values.paymentFilter)
     if (values.dateMode && values.dateMode !== 'all') params.set('date', values.dateMode)
     if (values.startDate) params.set('from', values.startDate)
     if (values.endDate) params.set('to', values.endDate)
@@ -456,6 +475,7 @@ export default function Orders() {
   }
   const updateFilters = (filters: {
     statusFilter?: string
+    paymentFilter?: typeof paymentFilter
     dateMode?: typeof dateMode
     startDate?: string
     endDate?: string
@@ -465,6 +485,7 @@ export default function Orders() {
         page: 1,
         query,
         statusFilter: filters.statusFilter ?? statusFilter,
+        paymentFilter: filters.paymentFilter ?? paymentFilter,
         dateMode: filters.dateMode ?? dateMode,
         startDate: filters.startDate ?? startDate,
         endDate: filters.endDate ?? endDate,
@@ -472,7 +493,7 @@ export default function Orders() {
     )
   }
   const exportParams = new URLSearchParams(
-    buildSearch({ page: 1, query, statusFilter, dateMode, startDate, endDate }).slice(1),
+    buildSearch({ page: 1, query, statusFilter, paymentFilter, dateMode, startDate, endDate }).slice(1),
   )
   const csvExportUrl = `/admin/orders/export?${exportParams.toString()}`
 
@@ -483,6 +504,7 @@ export default function Orders() {
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <Form method="get" className="w-full lg:max-w-lg">
               <input type="hidden" name="status" value={statusFilter} />
+              <input type="hidden" name="payment" value={paymentFilter} />
               <input type="hidden" name="date" value={dateMode} />
               <input type="hidden" name="from" value={startDate} />
               <input type="hidden" name="to" value={endDate} />
@@ -504,7 +526,7 @@ export default function Orders() {
                 className="relative flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 text-slate-600 hover:border-brand-primary hover:text-brand-primary"
               >
                 <SlidersHorizontal className="h-4 w-4" />
-                {(statusFilter !== 'all' || dateMode !== 'all') && (
+                {(statusFilter !== 'all' || paymentFilter !== 'all' || dateMode !== 'all') && (
                   <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-brand-primary" aria-label="Filters active" />
                 )}
               </button>
@@ -610,6 +632,8 @@ export default function Orders() {
         onClose={() => setIsFilterOpen(false)}
         statusFilter={statusFilter}
         setStatusFilter={(value) => updateFilters({ statusFilter: value })}
+        paymentFilter={paymentFilter}
+        setPaymentFilter={(value) => updateFilters({ paymentFilter: value })}
         dateMode={dateMode}
         setDateMode={(value) => {
           const today = new Date()
@@ -640,7 +664,7 @@ export default function Orders() {
           <div className="flex items-center justify-between gap-3 sm:justify-end">
             <button
               type="button"
-              onClick={() => navigate(buildSearch({ page: page - 1, query, statusFilter, dateMode, startDate, endDate }))}
+              onClick={() => navigate(buildSearch({ page: page - 1, query, statusFilter, paymentFilter, dateMode, startDate, endDate }))}
               disabled={page === 1 || isLoadingPage}
               className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-200 px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
             >
@@ -650,7 +674,7 @@ export default function Orders() {
             <span className="whitespace-nowrap text-sm text-slate-600">Page {page} of {pageCount}</span>
             <button
               type="button"
-              onClick={() => navigate(buildSearch({ page: page + 1, query, statusFilter, dateMode, startDate, endDate }))}
+              onClick={() => navigate(buildSearch({ page: page + 1, query, statusFilter, paymentFilter, dateMode, startDate, endDate }))}
               disabled={page === pageCount || isLoadingPage}
               className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-200 px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
             >

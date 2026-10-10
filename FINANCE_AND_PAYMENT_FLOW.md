@@ -18,7 +18,9 @@ Approved operational billing model as of 2026-09-14.
 - The top-up modal presents the amount to pay and expected wallet credit, but does not claim the balance has changed until the webhook confirms the payment.
 - Subscription purchases use the same Paystack gateway but carry `plan_id`; the webhook activates the subscription without adding the plan price to one-time or subscription wallet balances.
 - Subscription checkout returns to `/plans?payment=pending` only to refresh the customer loader until webhook activation is visible; the browser does not verify the payment.
-- Wallet changes are made only by the signed webhook; the customer sees the updated balance on the next data load or refresh.
+- Paystack wallet changes are made only by the signed webhook. Admin-issued one-off wallet credits use the trusted server wallet service, are not represented as Paystack payments, and do not earn cashback.
+- An admin top-up first offsets any subscription wallet debt, then credits the remaining amount to the one-off wallet. Eligible unpaid invoices are settled in full from the resulting available one-off funds, newest order first; any invoice that cannot be fully covered remains unpaid.
+- Admin credits and any subscription-debt allocation are recorded in the wallet ledger, shown as admin top-up activity in customer Transactions, and trigger a customer top-up notification. Invoices paid by the credit also trigger the normal wallet invoice-paid notification. Admin identity is not recorded.
 - The customer portal subscribes to wallet and wallet-ledger changes and revalidates the authoritative loader in real time after webhook crediting.
 - For local webhook testing through ngrok, the current ngrok hostname must be allowlisted in both `vite.config.ts` and `react-router.config.ts`; otherwise Vite returns `403` before the webhook handler runs.
 
@@ -36,12 +38,13 @@ Approved operational billing model as of 2026-09-14.
 ### Customer portal continuation checkpoint
 
 - One-time top-ups and subscription purchases share Paystack initialization but remain separate payment types.
-- One-time top-ups credit `one_off_balance` only through the signed webhook.
+- Customer-initiated Paystack top-ups credit `one_off_balance` only through the signed webhook.
 - Subscription purchases store `payments.plan_id` and activate `subscriptions` only through the signed webhook; they do not credit either wallet balance.
 - Customer plans are loaded from active database rows and duplicate active subscriptions are blocked at both UI and server levels.
 - Customer wallet and subscription updates use Supabase Realtime, with bounded return-page refresh fallback for webhook timing.
 - Apply `20260915110000_customer_wallet_realtime.sql`, `20260915120000_subscription_payment_plan.sql`, `20260915130000_authoritative_order_item_pricing.sql`, `20260915140000_public_order_numbers.sql`, `20261001120000_subscription_usage_applied_at.sql`, `20261002100000_service_specific_subscription_pricing.sql`, `20261002110000_subscription_invoice_billing_breakdown.sql`, and `20261002120000_global_subscription_category_rates.sql` to the intended target before live testing.
 - Customer NewOrder now loads active categories, customer Wash/Iron/Wash + Iron rates, and subscription units from Supabase. Order creation recalculates prices from the database and does not charge the wallet.
+- New Order defaults its service selector from the active plan's coverage: Wash-only defaults to Wash, Iron-only to Iron, and plans covering both (or no active plan) default to Wash + Iron. Customers can select another service.
 - Subscription orders remain unpaid at creation. Weekly subscription usage and coverage are evaluated from the vendor-confirmed final count, not the customer's original estimate.
 - Migration `20260915130000_authoritative_order_item_pricing.sql` overwrites client-supplied `order_items.unit_price` values from the selected customer rate in the database.
 - Validation for the NewOrder slice: `npm run typecheck` and `npm run build` pass.

@@ -186,7 +186,20 @@ function mapDatabaseTransaction(
   transaction: WalletTransaction,
   orderReferenceByInvoiceId: Map<string, string>,
 ): CustomerTransaction | null {
-  if (transaction.txn_type === 'topup') return null
+  if (transaction.txn_type === 'topup') {
+    if (transaction.related_payment_id) return null
+    return {
+      id: transaction.id,
+      title: transaction.balance_type === 'subscription' ? 'Admin top-up applied to subscription debt' : 'Admin wallet top-up',
+      reference: `Admin credit • ${transaction.id.slice(0, 8)}`,
+      date: new Date(transaction.created_at).toLocaleString(),
+      sortDate: transaction.created_at,
+      amount: `+₦${Number(transaction.amount).toLocaleString()}`,
+      direction: 'credit',
+      category: 'topup',
+      status: 'Successful',
+    }
+  }
 
   const isCredit = ['cashback', 'referral_reward'].includes(transaction.txn_type)
   const isReward = transaction.txn_type === 'cashback' || transaction.txn_type === 'referral_reward'

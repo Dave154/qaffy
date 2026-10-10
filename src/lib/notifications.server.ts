@@ -16,6 +16,40 @@ export function walletInvoicePaidNotification(amount: number, publicOrderNumber:
   }
 }
 
+export async function sendAdminWalletTopUpNotification(customerId: string, amount: number, transactionId: string) {
+  const formattedAmount = `₦${amount.toLocaleString()}`
+  await sendCustomerNotification({
+    eventKey: `wallet:admin-topup:${transactionId}`,
+    customerId,
+    notificationType: 'wallet_topup_confirmed',
+    payload: {
+      title: 'Wallet top-up received',
+      body: `An admin added ${formattedAmount} to your wallet.`,
+      details: [
+        `Top-up amount: ${formattedAmount}`,
+        'The credit was applied to any subscription debt and eligible unpaid invoices first.',
+      ],
+      url: '/transactions',
+      tag: `wallet:admin-topup:${transactionId}`,
+    },
+  })
+}
+
+export async function sendWalletInvoicePaidNotifications(
+  customerId: string,
+  invoices: Array<{ invoiceId: string; orderId: string; publicOrderNumber: string; amount: number }>,
+) {
+  for (const invoice of invoices) {
+    await sendCustomerNotification({
+      eventKey: `invoice:${invoice.invoiceId}:paid`,
+      customerId,
+      notificationType: 'payment_confirmed',
+      orderId: invoice.orderId,
+      payload: walletInvoicePaidNotification(invoice.amount, invoice.publicOrderNumber, invoice.orderId),
+    })
+  }
+}
+
 type NotificationInput = {
   eventKey: string
   customerId: string

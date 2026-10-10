@@ -50,6 +50,7 @@ type OrdersData = {
   total: number
   query: string
   statusFilter: string
+  paymentFilter: 'all' | 'pending' | 'paid'
   dateMode: 'all' | 'this_month' | 'last_month' | 'custom'
   startDate: string
   endDate: string
@@ -140,6 +141,7 @@ export async function loadAdminOrders(request: Request) {
         total: 0,
         query: '',
         statusFilter: 'all',
+        paymentFilter: 'all',
         dateMode: 'all',
         startDate: '',
         endDate: '',
@@ -152,6 +154,9 @@ export async function loadAdminOrders(request: Request) {
   const query = (params.get('q') ?? '').trim().slice(0, 120)
   const requestedStatus = params.get('status') ?? 'all'
   const statusFilter = ORDER_STATUSES.includes(requestedStatus as (typeof ORDER_STATUSES)[number]) ? requestedStatus : 'all'
+  const requestedPayment = params.get('payment') ?? 'all'
+  const paymentFilter =
+    requestedPayment === 'paid' || requestedPayment === 'pending' ? requestedPayment : 'all'
   const requestedDateMode = params.get('date') ?? 'all'
   const dateMode = DATE_MODES.includes(requestedDateMode as (typeof DATE_MODES)[number])
     ? (requestedDateMode as OrdersData['dateMode'])
@@ -175,6 +180,15 @@ export async function loadAdminOrders(request: Request) {
       or location.name ilike '%' || ${query} || '%'
     )
     and (${statusFilter} = 'all' or o.status::text = ${statusFilter})
+    and (
+      ${paymentFilter} = 'all'
+      or (${paymentFilter} = 'paid' and exists (
+        select 1 from invoices payment_invoice where payment_invoice.order_id = o.id and payment_invoice.status = 'paid'
+      ))
+      or (${paymentFilter} = 'pending' and not exists (
+        select 1 from invoices payment_invoice where payment_invoice.order_id = o.id and payment_invoice.status = 'paid'
+      ))
+    )
     and (${fromDate}::date is null or o.created_at >= ${fromDate}::date)
     and (${toDate}::date is null or o.created_at < ${toDate}::date + interval '1 day')
   `
@@ -338,6 +352,7 @@ export async function loadAdminOrders(request: Request) {
       total,
       query,
       statusFilter,
+      paymentFilter,
       dateMode,
       startDate,
       endDate,
