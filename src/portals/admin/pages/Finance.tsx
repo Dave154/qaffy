@@ -146,7 +146,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     { data: settlements },
     { data: settlementOrders },
     { data: settlementItems },
-    { data: settlementTransfers },
+    { data: settlementTransfers, error: settlementTransferError },
     { data: planPayments },
   ] = await Promise.all([
     supabase
@@ -170,7 +170,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     supabase.from('vendor_settlement_items').select('settlement_id, order_item_id, confirmed_quantity, vendor_unit_price, amount'),
     supabase
       .from('vendor_settlement_transfers')
-      .select('settlement_id, status, failure_reason, paystack_reference')
+      .select('settlement_id, amount, status, failure_reason, paystack_reference, completed_at')
       .order('created_at', { ascending: false }),
     supabase
       .from('payments')
@@ -178,6 +178,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       .eq('status', 'success')
       .not('plan_id', 'is', null),
   ])
+  if (settlementTransferError) throw settlementTransferError
   const linkedOrderIds = (settlementOrders ?? []).map((record) => record.order_id)
   const { data: linkedOrders } = linkedOrderIds.length
     ? await supabase.from('orders').select('id, public_order_number, status, clothes_count_vendor').in('id', linkedOrderIds)
@@ -309,8 +310,13 @@ export async function loader({ request }: Route.LoaderArgs) {
     return orderIds.length > 0 && orderIds.every((orderId) => invoiceByOrder.get(orderId)?.status === 'paid')
   })
   const subscriptionRevenue = sumSuccessfulPlanPayments(planPayments ?? [])
-  const totalCollected = vendorSummaries.reduce((sum, vendor) => sum + vendor.totalCollected, 0) + subscriptionRevenue
+  const totalCollected =
+    (invoices ?? []).filter((invoice) => invoice.status === 'paid').reduce((sum, invoice) => sum + Number(invoice.amount ?? 0), 0) +
+    subscriptionRevenue
   const totalVendorPayout = vendorSummaries.reduce((sum, vendor) => sum + vendor.totalVendorPayout, 0)
+  const completedVendorPayouts = (settlementTransfers ?? [])
+    .filter((transfer) => transfer.status === 'success' && transfer.completed_at)
+    .reduce((sum, transfer) => sum + Number(transfer.amount ?? 0), 0)
   const totalOwedToVendors = vendorSummaries.reduce((sum, vendor) => sum + vendor.vendorPayout, 0)
 
   return data(
@@ -319,7 +325,7 @@ export async function loader({ request }: Route.LoaderArgs) {
         totalCollected,
         subscriptionRevenue,
         totalVendorPayout,
-        platformProfit: totalCollected - totalVendorPayout - Number(withdrawalTotal),
+        platformProfit: totalCollected - completedVendorPayouts,
         pendingSettlements: eligiblePendingSettlements.length,
         pendingAmount: eligiblePendingSettlements.reduce((sum, settlement) => sum + Number(settlement.amount_due ?? 0), 0),
         paidSettlements: (settlements ?? []).filter((settlement) => settlement.status === 'paid').length,

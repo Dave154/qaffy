@@ -14,6 +14,7 @@ import { Link, data, useLoaderData } from 'react-router'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Route } from './+types/Home'
 import { requireRole } from '../../../lib/auth.server'
+import { getRateValueFromItem } from '../../../lib/rate-card'
 import { successfulPlanPayments, sumSuccessfulPlanPayments } from '../../../lib/revenue-reporting'
 
 type DailyPoint = {
@@ -32,6 +33,7 @@ type DailyPoint = {
   oneTimeRevenue: number
   subscriptionRevenue: number
   vendorPayouts: number
+  owedToVendors: number
 }
 type Activity = { id: string; title: string; detail: string; time: string; tone: 'cyan' | 'pink' | 'green' }
 type RecentVendor = { id: string; name: string; status: string }
@@ -157,10 +159,14 @@ export async function loader({ request }: Route.LoaderArgs) {
     { data: customerGrowthRows },
     { data: paymentRows },
     { data: payoutRows, error: payoutError },
+    { data: vendorRates, error: vendorRatesError },
+    { data: settlements, error: settlementsError },
+    { data: settlementOrders, error: settlementOrdersError },
+    { data: settlementItems, error: settlementItemsError },
   ] = await Promise.all([
     supabase
       .from('orders')
-      .select('id, created_at, status, clothes_count_customer, is_subscription_order, customer_id')
+      .select('id, created_at, status, clothes_count_customer, clothes_count_vendor, vendor_id, is_subscription_order, customer_id')
       .order('created_at', { ascending: false }),
     supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('role', 'customer'),
     supabase.from('vendors').select('id', { count: 'exact', head: true }).eq('status', 'approved'),
@@ -175,7 +181,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     supabase.from('subscriptions').select('plan_id').eq('status', 'active').or(`end_date.is.null,end_date.gte.${activeOnDate}`),
     supabase.from('vendors').select('id, business_name, status').order('created_at', { ascending: false }).limit(5),
     supabase.from('profiles').select('id, name, email').eq('role', 'customer').order('created_at', { ascending: false }).limit(5),
-    supabase.from('order_items').select('order_id, service, quantity, confirmed_quantity'),
+    supabase.from('order_items').select('id, order_id, category_id, service, quantity, confirmed_quantity, unit_price'),
     supabase.from('profiles').select('created_at').eq('role', 'customer'),
     supabase
       .from('payments')
@@ -187,8 +193,18 @@ export async function loader({ request }: Route.LoaderArgs) {
       .select('amount, status, completed_at')
       .eq('status', 'success')
       .not('completed_at', 'is', null),
+    supabase
+      .from('cloth_category_rates')
+      .select('category_id, vendor_wash_price, vendor_iron_price, vendor_wash_iron_price'),
+    supabase.from('vendor_settlements').select('id, status'),
+    supabase.from('vendor_settlement_orders').select('settlement_id, order_id'),
+    supabase.from('vendor_settlement_items').select('order_item_id, amount'),
   ])
   if (payoutError) throw payoutError
+  if (vendorRatesError) throw vendorRatesError
+  if (settlementsError) throw settlementsError
+  if (settlementOrdersError) throw settlementOrdersError
+  if (settlementItemsError) throw settlementItemsError
   const allOrders = orders ?? []
   const allInvoices = invoices ?? []
   const planPayments = successfulPlanPayments(paymentRows ?? [])
@@ -196,6 +212,41 @@ export async function loader({ request }: Route.LoaderArgs) {
   const today = localDayKey(new Date())
   const paidInvoices = allInvoices.filter((invoice) => invoice.status === 'paid')
   const orderById = new Map(allOrders.map((order) => [order.id, order]))
+  const paidInvoiceOrderIds = new Set(paidInvoices.map((invoice) => invoice.order_id))
+  const orderItemsByOrder = new Map<string, typeof orderItems>()
+  for (const item of orderItems ?? []) {
+    const items = orderItemsByOrder.get(item.order_id) ?? []
+    items.push(item)
+    orderItemsByOrder.set(item.order_id, items)
+  }
+  const paidSettlementIds = new Set((settlements ?? []).filter((settlement) => settlement.status === 'paid').map((settlement) => settlement.id))
+  const settledOrderIds = new Set(
+    (settlementOrders ?? [])
+      .filter((membership) => paidSettlementIds.has(membership.settlement_id))
+      .map((membership) => membership.order_id),
+  )
+  const vendorRateByCategory = new Map((vendorRates ?? []).map((rate) => [rate.category_id, rate]))
+  const settlementAmountByItem = new Map((settlementItems ?? []).map((item) => [item.order_item_id, Number(item.amount ?? 0)]))
+  const owedByOrder = new Map<string, number>()
+  for (const order of allOrders) {
+    if (
+      !order.vendor_id ||
+      order.status === 'cancelled' ||
+      order.clothes_count_vendor === null ||
+      !paidInvoiceOrderIds.has(order.id) ||
+      settledOrderIds.has(order.id)
+    ) {
+      continue
+    }
+    for (const item of orderItemsByOrder.get(order.id) ?? []) {
+      if (item.confirmed_quantity === null) continue
+      const snapshotAmount = settlementAmountByItem.get(item.id)
+      const amount =
+        snapshotAmount ??
+        getRateValueFromItem(item, vendorRateByCategory.get(item.category_id), 'vendor') * Number(item.confirmed_quantity)
+      owedByOrder.set(order.id, (owedByOrder.get(order.id) ?? 0) + amount)
+    }
+  }
   const revenueByType = paidInvoices.reduce(
     (totals, invoice) => {
       if (orderById.get(invoice.order_id)?.is_subscription_order) totals.subscription += Number(invoice.amount)
@@ -233,6 +284,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       oneTimeRevenue: 0,
       subscriptionRevenue: 0,
       vendorPayouts: 0,
+      owedToVendors: 0,
     }
     dailyMetrics.set(date, point)
     return point
@@ -274,6 +326,10 @@ export async function loader({ request }: Route.LoaderArgs) {
     if (!payout.completed_at) continue
     getDailyPoint(localDayKey(new Date(payout.completed_at))).vendorPayouts += Number(payout.amount)
   }
+  for (const order of allOrders) {
+    const owedAmount = owedByOrder.get(order.id) ?? 0
+    if (owedAmount > 0) getDailyPoint(localDayKey(new Date(order.created_at))).owedToVendors += owedAmount
+  }
   const trend = [...dailyMetrics.values()].sort((left, right) => left.date.localeCompare(right.date))
   const hourlyMetrics = new Map<string, DailyPoint>()
   const getHourlyPoint = (date: Date) => {
@@ -296,6 +352,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       oneTimeRevenue: 0,
       subscriptionRevenue: 0,
       vendorPayouts: 0,
+      owedToVendors: 0,
     }
     hourlyMetrics.set(key, point)
     return point
@@ -582,6 +639,7 @@ export default function Home() {
       subscriptionOrders: totals.subscriptionOrders + point.subscriptionOrders,
       subscriptionPurchases: totals.subscriptionPurchases + point.subscriptionPurchases,
       vendorPayouts: totals.vendorPayouts + point.vendorPayouts,
+      owedToVendors: totals.owedToVendors + point.owedToVendors,
       oneTimeRevenue: totals.oneTimeRevenue + point.oneTimeRevenue,
       subscriptionRevenue: totals.subscriptionRevenue + point.subscriptionRevenue,
       washClothes: totals.washClothes + point.washClothes,
@@ -596,6 +654,7 @@ export default function Home() {
       subscriptionOrders: 0,
       subscriptionPurchases: 0,
       vendorPayouts: 0,
+      owedToVendors: 0,
       oneTimeRevenue: 0,
       subscriptionRevenue: 0,
       washClothes: 0,
@@ -619,6 +678,14 @@ export default function Home() {
       helper: 'Settled',
       icon: Store,
       href: '/admin/partners/vendors',
+      tone: 'pink',
+    },
+    {
+      label: 'Owed to vendors',
+      value: money(periodMetrics.owedToVendors),
+      helper: 'Unsettled',
+      icon: Store,
+      href: '/admin/finance',
       tone: 'pink',
     },
     {
