@@ -464,7 +464,7 @@ Before updating UI components, verify:
 #### Admin and Finance continuation update (2026-09-17)
 
 - `src/portals/admin/pages/Mismatches.tsx` is read-only for accountability. It has compact/truncated rows, search and direction filters, a details modal, and a modal-only `View order` link to the exact `/admin/orders?orderId=<uuid>` detail view. The table no longer has a Reviewed/Resolve button.
-- Existing admin profit-withdrawal entries in `admin_finance_transactions` are subtracted from displayed platform profit. The Admin Finance withdrawal form and `record-withdrawal` action are disabled until a real, audited payout flow exists; do not treat ledger entries as bank transfers.
+- Admin Finance and Overview use the same platform-profit calculation: all paid customer invoices plus successful subscription-plan payments, minus confirmed successful vendor transfers. Recorded admin profit withdrawals do not change platform profit; the Finance withdrawal form and `record-withdrawal` action remain disabled until a real, audited payout flow exists, and ledger entries are not bank transfers.
 - Finance settlement batches snapshot each confirmed order-item quantity, vendor unit rate, and payout amount in `vendor_settlement_items`, so later rate-card edits do not rewrite historical payouts.
 - Paystack balance failures display as unavailable with an error message instead of being represented as `₦0`.
 - Apply `supabase/migrations/20260917110000_admin_finance_ledger_and_settlement_snapshots.sql` before using the new Finance ledger or settlement snapshot paths. The generated Supabase TypeScript types do not yet include these new tables; Finance uses a local snapshot row type until types are regenerated.

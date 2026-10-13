@@ -1,6 +1,7 @@
 import {
   data,
   Form,
+  Link,
   useFetcher,
   useLoaderData,
   useLocation,
@@ -30,7 +31,7 @@ type AdminOrder = {
   clothes_count_vendor: number | null
   notes: string | null
   is_subscription_order: boolean
-  customer: { name: string | null; qaffy_id: string | null; email: string | null; phone: string | null } | null
+  customer: { id: string; name: string | null; qaffy_id: string | null; email: string | null; phone: string | null } | null
   location: { name: string } | null
   items: Array<{
     id: string
@@ -96,6 +97,11 @@ function searchWithoutOrderId(url: URL) {
   const params = new URLSearchParams(url.searchParams)
   params.delete('orderId')
   return params.toString()
+}
+
+function getUserDetailsReturnPath(state: unknown) {
+  if (!state || typeof state !== 'object' || !('returnTo' in state) || typeof state.returnTo !== 'string') return null
+  return /^\/admin\/users\/[^/?#]+(?:\?[^#]*)?$/.test(state.returnTo) ? state.returnTo : null
 }
 
 export function shouldRevalidate({
@@ -214,7 +220,19 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
           </button>
         </header>
         <section className="mt-6 grid gap-4 rounded-2xl bg-slate-50 p-4 sm:grid-cols-4">
-          <Detail label="Customer ID" value={order.customer?.qaffy_id ?? 'Unavailable'} />
+          <div>
+            <p className="text-[10px] font-semibold capitalize tracking-[0.14em] text-slate-500">Customer ID</p>
+            {order.customer?.id ? (
+              <Link
+                to={`/admin/users/${encodeURIComponent(order.customer.id)}`}
+                className="mt-1 inline-block break-words text-sm font-semibold text-brand-primary hover:underline"
+              >
+                {order.customer.qaffy_id ?? 'Unavailable'}
+              </Link>
+            ) : (
+              <p className="mt-1 break-words text-sm font-semibold text-slate-900">{order.customer?.qaffy_id ?? 'Unavailable'}</p>
+            )}
+          </div>
           <Detail label="Order type" value={orderTypeLabels[order.order_type]} />
           <Detail label="Created" value={formatDate(order.created_at)} />
           <Detail label="Location" value={order.location?.name ?? 'Location pending'} />
@@ -497,6 +515,7 @@ export default function Orders() {
   const location = useLocation()
   const [isFilterOpen, setIsFilterOpen] = useState(false)
   const requestedOrderId = searchParams.get('orderId')
+  const userDetailsReturnPath = getUserDetailsReturnPath(location.state)
   const selectedOrder = requestedOrderId
     ? orders.find((order) => order.id === requestedOrderId) ??
       (loadedSelectedOrder?.id === requestedOrderId ? loadedSelectedOrder : null)
@@ -744,6 +763,10 @@ export default function Orders() {
         <OrderDetails
           order={selectedOrder}
           onClose={() => {
+            if (userDetailsReturnPath) {
+              navigate(userDetailsReturnPath)
+              return
+            }
             setSearchParams((current) => {
               const next = new URLSearchParams(current)
               next.delete('orderId')
