@@ -1,4 +1,14 @@
-import { data, Form, useFetcher, useLoaderData, useNavigate, useNavigation, useSearchParams } from 'react-router'
+import {
+  data,
+  Form,
+  useFetcher,
+  useLoaderData,
+  useLocation,
+  useNavigate,
+  useNavigation,
+  useSearchParams,
+  type ShouldRevalidateFunctionArgs,
+} from 'react-router'
 import { useEffect, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, LoaderCircle, SlidersHorizontal, X } from 'lucide-react'
 import type { Route } from './+types/Orders'
@@ -80,6 +90,28 @@ export async function action({ request }: Route.ActionArgs) {
 // eslint-disable-next-line react-refresh/only-export-components
 export async function loader({ request }: Route.LoaderArgs) {
   return loadAdminOrders(request)
+}
+
+function searchWithoutOrderId(url: URL) {
+  const params = new URLSearchParams(url.searchParams)
+  params.delete('orderId')
+  return params.toString()
+}
+
+export function shouldRevalidate({
+  currentUrl,
+  nextUrl,
+  formMethod,
+  defaultShouldRevalidate,
+}: ShouldRevalidateFunctionArgs) {
+  const onlyOrderSelectionChanged =
+    !formMethod &&
+    currentUrl.pathname === '/admin/orders' &&
+    nextUrl.pathname === '/admin/orders' &&
+    currentUrl.searchParams.get('orderId') !== nextUrl.searchParams.get('orderId') &&
+    searchWithoutOrderId(currentUrl) === searchWithoutOrderId(nextUrl)
+
+  return onlyOrderSelectionChanged ? false : defaultShouldRevalidate
 }
 
 const statusLabels: Record<AdminOrder['status'], string> = {
@@ -446,13 +478,37 @@ function OrderFilterDrawer({
 }
 
 export default function Orders() {
-  const { orders, selectedOrder, page, pageSize, total, query, statusFilter, paymentFilter, dateMode, startDate, endDate } =
-    useLoaderData<typeof loader>()
-  const [, setSearchParams] = useSearchParams()
+  const {
+    orders,
+    selectedOrder: loadedSelectedOrder,
+    page,
+    pageSize,
+    total,
+    query,
+    statusFilter,
+    paymentFilter,
+    dateMode,
+    startDate,
+    endDate,
+  } = useLoaderData<typeof loader>()
+  const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
   const navigation = useNavigation()
+  const location = useLocation()
   const [isFilterOpen, setIsFilterOpen] = useState(false)
-  const isLoadingPage = navigation.state === 'loading' && navigation.location?.pathname === '/admin/orders'
+  const requestedOrderId = searchParams.get('orderId')
+  const selectedOrder = requestedOrderId
+    ? orders.find((order) => order.id === requestedOrderId) ??
+      (loadedSelectedOrder?.id === requestedOrderId ? loadedSelectedOrder : null)
+    : null
+  const isOnlyOrderSelectionNavigation =
+    navigation.location?.pathname === '/admin/orders' &&
+    location.pathname === '/admin/orders' &&
+    navigation.location.search !== location.search &&
+    searchWithoutOrderId(new URL(`${location.pathname}${location.search}`, 'http://localhost')) ===
+      searchWithoutOrderId(new URL(`${navigation.location.pathname}${navigation.location.search}`, 'http://localhost'))
+  const isLoadingPage =
+    navigation.state === 'loading' && navigation.location?.pathname === '/admin/orders' && !isOnlyOrderSelectionNavigation
   const pageCount = Math.max(1, Math.ceil(total / pageSize))
   const buildSearch = (values: {
     page: number
