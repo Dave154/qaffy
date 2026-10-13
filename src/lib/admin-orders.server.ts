@@ -15,7 +15,7 @@ type AdminOrder = {
   clothes_count_vendor: number | null
   notes: string | null
   is_subscription_order: boolean
-  customer: { name: string | null; qaffy_id: string | null; email: string | null; phone: string | null } | null
+  customer: { id: string; name: string | null; qaffy_id: string | null; email: string | null; phone: string | null } | null
   location: { name: string } | null
   items: Array<{
     id: string
@@ -212,7 +212,7 @@ export async function loadAdminOrders(request: Request) {
       o.notes,
       o.is_subscription_order,
       case when customer.id is null then null else json_build_object(
-        'name', customer.name, 'qaffy_id', customer.qaffy_id, 'email', customer.email, 'phone', customer.phone
+        'id', customer.id, 'name', customer.name, 'qaffy_id', customer.qaffy_id, 'email', customer.email, 'phone', customer.phone
       ) end as customer,
       case when location.id is null then null else json_build_object('name', location.name) end as location,
       case when ${includeDetails} then coalesce((
@@ -321,7 +321,7 @@ export async function loadAdminOrders(request: Request) {
       select
         o.id, o.public_order_number, o.created_at, o.picked_up_date, o.order_type, o.status,
         o.clothes_count_customer, o.clothes_count_customer as item_count, o.clothes_count_vendor, o.notes, o.is_subscription_order,
-        json_build_object('name', customer.name, 'qaffy_id', customer.qaffy_id, 'email', customer.email, 'phone', customer.phone) as customer,
+        json_build_object('id', customer.id, 'name', customer.name, 'qaffy_id', customer.qaffy_id, 'email', customer.email, 'phone', customer.phone) as customer,
         case when location.id is null then null else json_build_object('name', location.name) end as location,
         coalesce((select json_agg(json_build_object(
           'id', oi.id, 'quantity', oi.quantity, 'confirmed_quantity', oi.confirmed_quantity,

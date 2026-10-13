@@ -31,6 +31,7 @@ type DailyPoint = {
   subscriptionPurchases: number
   oneTimeRevenue: number
   subscriptionRevenue: number
+  vendorPayouts: number
 }
 type Activity = { id: string; title: string; detail: string; time: string; tone: 'cyan' | 'pink' | 'green' }
 type RecentVendor = { id: string; name: string; status: string }
@@ -50,8 +51,6 @@ type DashboardData = {
     washClothes: number
     ironClothes: number
     washIronClothes: number
-    vendorPayouts: number
-    platformProfit: number
     subscriptionRevenue: number
     oneTimeRevenue: number
     oneTimeOrders: number
@@ -80,8 +79,6 @@ const emptyData: DashboardData = {
     washClothes: 0,
     ironClothes: 0,
     washIronClothes: 0,
-    vendorPayouts: 0,
-    platformProfit: 0,
     subscriptionRevenue: 0,
     oneTimeRevenue: 0,
     oneTimeOrders: 0,
@@ -100,9 +97,6 @@ function money(value: number) {
 }
 function formatTime(value: string) {
   return new Date(value).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
-}
-function dayKey(date: Date) {
-  return date.toISOString().slice(0, 10)
 }
 function localDayKey(date: Date) {
   return dateInput(date)
@@ -157,12 +151,12 @@ export async function loader({ request }: Route.LoaderArgs) {
     { data: invoices },
     { data: plans },
     { data: subscriptions },
-    { data: settlements },
     { data: vendorRows },
     { data: customerRows },
     { data: orderItems },
     { data: customerGrowthRows },
     { data: paymentRows },
+    { data: payoutRows, error: payoutError },
   ] = await Promise.all([
     supabase
       .from('orders')
@@ -176,10 +170,9 @@ export async function loader({ request }: Route.LoaderArgs) {
       .select('id', { count: 'exact', head: true })
       .eq('status', 'active')
       .or(`end_date.is.null,end_date.gte.${activeOnDate}`),
-    supabase.from('invoices').select('order_id, amount, status, created_at').order('created_at', { ascending: false }),
+    supabase.from('invoices').select('order_id, amount, status, created_at, paid_at').order('created_at', { ascending: false }),
     supabase.from('plans').select('id, name, type, price, weekly_limit, active').order('created_at', { ascending: true }),
     supabase.from('subscriptions').select('plan_id').eq('status', 'active').or(`end_date.is.null,end_date.gte.${activeOnDate}`),
-    supabase.from('vendor_settlements').select('amount_due').order('created_at', { ascending: false }),
     supabase.from('vendors').select('id, business_name, status').order('created_at', { ascending: false }).limit(5),
     supabase.from('profiles').select('id, name, email').eq('role', 'customer').order('created_at', { ascending: false }).limit(5),
     supabase.from('order_items').select('order_id, service, quantity, confirmed_quantity'),
@@ -189,12 +182,18 @@ export async function loader({ request }: Route.LoaderArgs) {
       .select('amount, status, plan_id, succeeded_at, created_at')
       .eq('status', 'success')
       .not('plan_id', 'is', null),
+    supabase
+      .from('vendor_settlement_transfers')
+      .select('amount, status, completed_at')
+      .eq('status', 'success')
+      .not('completed_at', 'is', null),
   ])
+  if (payoutError) throw payoutError
   const allOrders = orders ?? []
   const allInvoices = invoices ?? []
   const planPayments = successfulPlanPayments(paymentRows ?? [])
   const planPaymentRevenue = sumSuccessfulPlanPayments(planPayments)
-  const today = dayKey(new Date())
+  const today = localDayKey(new Date())
   const paidInvoices = allInvoices.filter((invoice) => invoice.status === 'paid')
   const orderById = new Map(allOrders.map((order) => [order.id, order]))
   const revenueByType = paidInvoices.reduce(
@@ -206,7 +205,6 @@ export async function loader({ request }: Route.LoaderArgs) {
     { subscription: 0, oneTime: 0 },
   )
   revenueByType.subscription += planPaymentRevenue
-  const vendorPayouts = (settlements ?? []).reduce((sum, settlement) => sum + Number(settlement.amount_due), 0)
   const clothesByService = (orderItems ?? []).reduce(
     (totals, item) => {
       const quantity = Number(item.confirmed_quantity ?? item.quantity)
@@ -234,12 +232,13 @@ export async function loader({ request }: Route.LoaderArgs) {
       subscriptionPurchases: 0,
       oneTimeRevenue: 0,
       subscriptionRevenue: 0,
+      vendorPayouts: 0,
     }
     dailyMetrics.set(date, point)
     return point
   }
   for (const order of allOrders) {
-    const point = getDailyPoint(dayKey(new Date(order.created_at)))
+    const point = getDailyPoint(localDayKey(new Date(order.created_at)))
     point.orders += 1
     point.clothes += order.clothes_count_customer
     if (order.status !== 'cancelled') {
@@ -250,27 +249,31 @@ export async function loader({ request }: Route.LoaderArgs) {
   for (const item of orderItems ?? []) {
     const order = orderById.get(item.order_id)
     if (!order) continue
-    const point = getDailyPoint(dayKey(new Date(order.created_at)))
+    const point = getDailyPoint(localDayKey(new Date(order.created_at)))
     const quantity = Number(item.confirmed_quantity ?? item.quantity)
     if (item.service === 'wash') point.washClothes += quantity
     if (item.service === 'iron') point.ironClothes += quantity
     if (item.service === 'wash_iron') point.washIronClothes += quantity
   }
   for (const invoice of paidInvoices) {
-    const point = getDailyPoint(dayKey(new Date(invoice.created_at)))
+    const point = getDailyPoint(localDayKey(new Date(invoice.paid_at ?? invoice.created_at)))
     const amount = Number(invoice.amount)
     point.revenue += amount
     if (orderById.get(invoice.order_id)?.is_subscription_order) point.subscriptionRevenue += amount
     else point.oneTimeRevenue += amount
   }
   for (const payment of planPayments) {
-    const point = getDailyPoint(dayKey(new Date(payment.succeeded_at ?? payment.created_at)))
+    const point = getDailyPoint(localDayKey(new Date(payment.succeeded_at ?? payment.created_at)))
     const amount = Number(payment.amount)
     point.revenue += amount
     point.subscriptionRevenue += amount
     point.subscriptionPurchases += 1
   }
-  for (const customer of customerGrowthRows ?? []) getDailyPoint(dayKey(new Date(customer.created_at))).customers += 1
+  for (const customer of customerGrowthRows ?? []) getDailyPoint(localDayKey(new Date(customer.created_at))).customers += 1
+  for (const payout of payoutRows ?? []) {
+    if (!payout.completed_at) continue
+    getDailyPoint(localDayKey(new Date(payout.completed_at))).vendorPayouts += Number(payout.amount)
+  }
   const trend = [...dailyMetrics.values()].sort((left, right) => left.date.localeCompare(right.date))
   const hourlyMetrics = new Map<string, DailyPoint>()
   const getHourlyPoint = (date: Date) => {
@@ -292,6 +295,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       subscriptionPurchases: 0,
       oneTimeRevenue: 0,
       subscriptionRevenue: 0,
+      vendorPayouts: 0,
     }
     hourlyMetrics.set(key, point)
     return point
@@ -311,9 +315,9 @@ export async function loader({ request }: Route.LoaderArgs) {
     }
   }
   for (const invoice of paidInvoices) {
-    const createdAt = new Date(invoice.created_at)
-    if (localDayKey(createdAt) !== localDayKey(localToday)) continue
-    const point = getHourlyPoint(createdAt)
+    const paidAt = new Date(invoice.paid_at ?? invoice.created_at)
+    if (localDayKey(paidAt) !== localDayKey(localToday)) continue
+    const point = getHourlyPoint(paidAt)
     const amount = Number(invoice.amount)
     point.revenue += amount
     if (orderById.get(invoice.order_id)?.is_subscription_order) point.subscriptionRevenue += amount
@@ -365,7 +369,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     {
       metrics: {
         totalOrders: allOrders.length,
-        ordersToday: allOrders.filter((order) => dayKey(new Date(order.created_at)) === today).length,
+        ordersToday: allOrders.filter((order) => localDayKey(new Date(order.created_at)) === today).length,
         customers: customers ?? 0,
         vendors: vendors ?? 0,
         logistics: logistics ?? 0,
@@ -379,8 +383,6 @@ export async function loader({ request }: Route.LoaderArgs) {
         washClothes: clothesByService.wash,
         ironClothes: clothesByService.iron,
         washIronClothes: clothesByService.wash_iron,
-        vendorPayouts,
-        platformProfit: paidInvoices.reduce((sum, invoice) => sum + Number(invoice.amount), 0) + planPaymentRevenue - vendorPayouts,
         subscriptionRevenue: revenueByType.subscription,
         oneTimeRevenue: revenueByType.oneTime,
         oneTimeOrders: allOrders.filter((order) => !order.is_subscription_order && order.status !== 'cancelled').length,
@@ -579,6 +581,7 @@ export default function Home() {
       oneTimeOrders: totals.oneTimeOrders + point.oneTimeOrders,
       subscriptionOrders: totals.subscriptionOrders + point.subscriptionOrders,
       subscriptionPurchases: totals.subscriptionPurchases + point.subscriptionPurchases,
+      vendorPayouts: totals.vendorPayouts + point.vendorPayouts,
       oneTimeRevenue: totals.oneTimeRevenue + point.oneTimeRevenue,
       subscriptionRevenue: totals.subscriptionRevenue + point.subscriptionRevenue,
       washClothes: totals.washClothes + point.washClothes,
@@ -592,6 +595,7 @@ export default function Home() {
       oneTimeOrders: 0,
       subscriptionOrders: 0,
       subscriptionPurchases: 0,
+      vendorPayouts: 0,
       oneTimeRevenue: 0,
       subscriptionRevenue: 0,
       washClothes: 0,
@@ -611,7 +615,7 @@ export default function Home() {
     },
     {
       label: 'Vendor payouts',
-      value: money(metrics.vendorPayouts),
+      value: money(periodMetrics.vendorPayouts),
       helper: 'Settled',
       icon: Store,
       href: '/admin/partners/vendors',
@@ -619,7 +623,7 @@ export default function Home() {
     },
     {
       label: 'Platform profit',
-      value: money(metrics.platformProfit),
+      value: money(periodMetrics.revenue - periodMetrics.vendorPayouts),
       helper: 'Net',
       icon: CircleDollarSign,
       href: '/admin/orders',

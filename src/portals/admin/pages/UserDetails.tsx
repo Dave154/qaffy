@@ -1,5 +1,5 @@
 import { ArrowLeft, Copy, Pencil, Save, WalletCards } from 'lucide-react'
-import { data, Form, Link, useActionData, useFetcher, useLoaderData, useNavigation } from 'react-router'
+import { data, Form, Link, useActionData, useFetcher, useLoaderData, useLocation, useNavigation } from 'react-router'
 import { useEffect, useRef, useState } from 'react'
 import type { Route } from './+types/UserDetails'
 import { requireRole } from '../../../lib/auth.server'
@@ -11,6 +11,7 @@ import { sumSuccessfulPlanPayments } from '../../../lib/revenue-reporting'
 
 type DetailOrder = {
   id: string
+  publicOrderNumber: string
   status: string
   createdAt: string
   customerCount: number
@@ -125,7 +126,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     supabase.from('wallets').select('one_off_balance, subscription_balance').eq('customer_id', customerId).maybeSingle(),
     supabase
       .from('orders')
-      .select('id, status, clothes_count_customer, clothes_count_vendor, created_at')
+      .select('id, public_order_number, status, clothes_count_customer, clothes_count_vendor, created_at')
       .eq('customer_id', customerId)
       .order('created_at', { ascending: false }),
     supabase
@@ -190,6 +191,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
       },
       orders: (orders ?? []).map((order) => ({
         id: order.id,
+        publicOrderNumber: order.public_order_number,
         status: order.status,
         createdAt: order.created_at,
         customerCount: order.clothes_count_customer,
@@ -495,6 +497,7 @@ function ManualSubscription({
 
 export default function UserDetails() {
   const details = useLoaderData<typeof loader>()
+  const location = useLocation()
   const actionData = useActionData<typeof action>()
   const navigation = useNavigation()
   const handledActionResponse = useRef<typeof actionData>(null)
@@ -725,7 +728,15 @@ export default function UserDetails() {
             <tbody>
               {details.orders.map((order) => (
                 <tr key={order.id} className="border-t border-slate-100">
-                  <td className="py-3 font-semibold">{order.id}</td>
+                  <td className="py-3 font-semibold">
+                    <Link
+                      to={`/admin/orders?orderId=${encodeURIComponent(order.id)}`}
+                      state={{ returnTo: `${location.pathname}${location.search}` }}
+                      className="text-brand-primary hover:underline"
+                    >
+                      {order.publicOrderNumber}
+                    </Link>
+                  </td>
                   <td className="py-3 capitalize">{order.status.replaceAll('_', ' ')}</td>
                   <td className="py-3" title="Customer-declared item count / vendor-confirmed item count">
                     {order.customerCount} / {order.vendorCount ?? 'Not confirmed'}

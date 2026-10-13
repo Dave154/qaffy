@@ -48,6 +48,7 @@ Settlement payout release through verified Paystack Transfers is complete. Stagi
 - Admin provisioning is implemented at `/admin/admins` under Settings. An existing or new email can receive approved Admin access through `profile_roles`; the action is server-side and audited.
 - Admin mobile navigation is implemented with a responsive drawer covering the full admin route tree, nested Partners/Settings links, backdrop dismissal, and mobile logout.
 - Admin Overview supports `Today`, weekly, monthly, custom, and all-time filters. The Today chart uses hourly points through the current hour; other ranges retain daily points.
+- Admin Overview gross revenue, successful vendor payouts, and platform profit follow the selected overview date range. Revenue is dated by invoice payment time and successful subscription payment time; vendor payouts are dated by confirmed transfer completion time. Platform profit is period gross revenue minus period vendor payouts.
 - Admin Overview trend, revenue, workload, and subscriber bars expose exact values through hover, focus, and tap-friendly tooltips.
 - Customer notification center work is implemented separately from Admin reporting: persisted notification events, unread state, realtime updates, safe internal links, and concise title/body rendering are available at `/notifications`.
 
@@ -66,6 +67,7 @@ This section retains the implementation checkpoints and separates completed capa
 - **Admin list indexes:** supporting indexes are defined by migrations `20261007100000_admin_user_pagination_indexes.sql` and `20261007110000_admin_order_pagination_indexes.sql`. These migrations are in the repository and must be applied to the intended database after confirming the linked environment.
 - **Admin Overview date filter:** implemented 2026-09-16 with independent general and chart date ranges using All time, This month, Last month, and Custom options.
 - **Admin Overview date filter:** implemented with All time, Today, This week, Last week, This month, Last month, and Custom options. Today uses hourly chart buckets; other ranges use daily buckets.
+- **Admin Overview financial metrics:** gross revenue, completed vendor payouts, and platform profit use the selected overview date range; profit is gross revenue minus successful vendor payouts.
 - **Admin Overview service metrics:** implemented 2026-09-16 with live Wash, Iron, and Wash + Iron clothes counts from order items.
 - **Admin Overview chart metrics:** implemented 2026-09-16 with Orders, Revenue, and New customers chart options.
 - **Admin Overview chart values:** implemented 2026-09-22 with hover/focus/tap values for trend points, revenue bars, workload bars, and plan subscriber bars.
