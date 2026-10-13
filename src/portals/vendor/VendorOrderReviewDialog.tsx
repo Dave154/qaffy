@@ -76,7 +76,7 @@ const orderStatusLabels: Record<VendorReviewOrder['orderStatus'], string> = {
   at_vendor: 'Processing',
   invoiced: 'Processing',
   paid: 'Processing',
-  out_for_delivery: 'Processing',
+  out_for_delivery: 'Dispatched',
   delivered: 'Delivered',
   cancelled: 'Cancelled',
 }

@@ -152,7 +152,7 @@ const statusLabels: Record<VendorOrder['status'], string> = {
   at_vendor: 'Processing',
   invoiced: 'Processing',
   paid: 'Processing',
-  out_for_delivery: 'Processing',
+  out_for_delivery: 'Dispatched',
   delivered: 'Completed',
   cancelled: 'Cancelled',
 }
@@ -233,7 +233,7 @@ export default function Orders() {
 
   const orderCounts = {
     available: rows.filter((order) => order.status === 'picked_up').length,
-    processing: rows.filter((order) => ['at_vendor', 'invoiced', 'paid', 'out_for_delivery'].includes(order.status)).length,
+    processing: rows.filter((order) => ['at_vendor', 'invoiced', 'paid'].includes(order.status)).length,
     ready: rows.filter((order) => isReadyForDispatch(order.status, order.invoice?.status)).length,
     dispatched: rows.filter((order) => order.status === 'out_for_delivery').length,
     delivered: rows.filter((order) => order.status === 'delivered').length,
@@ -275,7 +275,7 @@ export default function Orders() {
       activeTab === 'unclaimed'
         ? order.status === 'picked_up'
         : activeTab === 'processing'
-          ? ['at_vendor', 'invoiced', 'paid', 'out_for_delivery'].includes(order.status)
+          ? ['at_vendor', 'invoiced', 'paid'].includes(order.status)
           : activeTab === 'ready'
             ? isReadyForDispatch(order.status, order.invoice?.status)
             : activeTab === 'dispatched'
@@ -375,10 +375,11 @@ export default function Orders() {
         <p className="mt-2 text-sm text-slate-500">Review live customer orders and continue processing work.</p>
       </header>
 
-      <section className="grid grid-cols-3 gap-2 sm:gap-3">
+      <section className="grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3">
         {[
           ['Available', orderCounts.available],
           ['Processing', orderCounts.processing],
+          ['Dispatched', orderCounts.dispatched],
           ['Completed', orderCounts.delivered],
         ].map(([label, value]) => (
           <div key={label} className="min-h-24 min-w-0 rounded-[10px] border border-[#e9e9e9] bg-white p-2.5 sm:min-h-0 sm:p-4">

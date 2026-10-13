@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowRight, Check, ChevronRight, Clock3, PackageCheck, Search } from 'lucide-react'
+import { ArrowRight, Check, ChevronRight, Clock3, PackageCheck, Search, Truck } from 'lucide-react'
 import { data, Link, useFetcher, useLocation, useNavigate, useOutletContext, useRevalidator } from 'react-router'
 import type { Route } from './+types/Home'
 import { sql } from '../../../lib/db.server'
@@ -217,7 +217,7 @@ function mapLoaderOrder(order: VendorLoaderOrder): VendorOrder {
     at_vendor: 'Processing',
     invoiced: 'Processing',
     paid: 'Processing',
-    out_for_delivery: 'Processing',
+    out_for_delivery: 'Out for delivery',
     delivered: 'Completed',
     cancelled: 'Cancelled',
   }
@@ -377,10 +377,17 @@ export default function Home() {
     },
     {
       label: 'Active orders',
-      value: visibleOrders.filter((order) => ['at_vendor', 'invoiced', 'paid', 'out_for_delivery'].includes(order.orderStatus)).length,
-      helper: 'In progress or awaiting delivery',
+      value: visibleOrders.filter((order) => ['at_vendor', 'invoiced', 'paid'].includes(order.orderStatus)).length,
+      helper: 'In progress or ready to dispatch',
       icon: PackageCheck,
       tone: 'bg-brand-soft text-brand-primary',
+    },
+    {
+      label: 'Dispatched',
+      value: visibleOrders.filter((order) => order.orderStatus === 'out_for_delivery').length,
+      helper: 'Out for delivery',
+      icon: Truck,
+      tone: 'bg-teal-50 text-teal-700',
     },
     {
       label: 'Completed',

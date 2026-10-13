@@ -19,7 +19,7 @@ import {
   X,
 } from 'lucide-react'
 import { useState } from 'react'
-import { data, NavLink, Outlet, useLoaderData, useLocation, useNavigate } from 'react-router'
+import { data, NavLink, Outlet, useLoaderData, useLocation, useNavigate, type ShouldRevalidateFunctionArgs } from 'react-router'
 import type { Route } from './+types/AdminLayout'
 import QaffyLogo from '../../components/QaffyLogo'
 import { requireRole } from '../../lib/auth.server'
@@ -29,6 +29,16 @@ import { supabase } from '../../lib/supabase.client'
 export async function loader({ request }: Route.LoaderArgs) {
   const auth = await requireRole(request, 'admin')
   return data({ profile: auth?.profile ?? null }, { headers: auth?.headers, status: 200 })
+}
+
+export function shouldRevalidate({ currentUrl, nextUrl, formMethod, defaultShouldRevalidate }: ShouldRevalidateFunctionArgs) {
+  const ordersSearchChanged =
+    !formMethod &&
+    currentUrl.pathname === '/admin/orders' &&
+    nextUrl.pathname === '/admin/orders' &&
+    currentUrl.search !== nextUrl.search
+
+  return ordersSearchChanged ? false : defaultShouldRevalidate
 }
 
 const navItems = [
