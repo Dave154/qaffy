@@ -339,7 +339,7 @@ export default function CustomerLayout() {
   const location = useLocation()
   const navigate = useNavigate()
   const loaderData = useLoaderData<typeof loader>()
-  const revalidator = useRevalidator()
+  const { revalidate } = useRevalidator()
   const referralCode = loaderData?.profile?.referral_code ?? null
   const [showReferralModal, setShowReferralModal] = useState(false)
   const unreadNotificationCount = loaderData?.unreadNotificationCount ?? 0
@@ -380,43 +380,48 @@ export default function CustomerLayout() {
     const client = supabase
     if (!client || !loaderData?.profile?.id) return
 
+    let hasConnected = false
+    let connectionWasInterrupted = false
     const channel = client
       .channel(`customer-wallet-${loaderData.profile.id}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'wallets', filter: `customer_id=eq.${loaderData.profile.id}` }, () =>
-        revalidator.revalidate(),
-      )
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'wallets', filter: `customer_id=eq.${loaderData.profile.id}` }, revalidate)
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'wallet_transactions', filter: `customer_id=eq.${loaderData.profile.id}` },
-        () => revalidator.revalidate(),
+        revalidate,
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'subscriptions', filter: `customer_id=eq.${loaderData.profile.id}` },
-        () => revalidator.revalidate(),
+        revalidate,
       )
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders', filter: `customer_id=eq.${loaderData.profile.id}` }, () =>
-        revalidator.revalidate(),
-      )
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'payments', filter: `customer_id=eq.${loaderData.profile.id}` }, () =>
-        revalidator.revalidate(),
-      )
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders', filter: `customer_id=eq.${loaderData.profile.id}` }, revalidate)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'payments', filter: `customer_id=eq.${loaderData.profile.id}` }, revalidate)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'notification_events', filter: `customer_id=eq.${loaderData.profile.id}` },
-        () => revalidator.revalidate(),
+        revalidate,
       )
-      .subscribe()
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          if (hasConnected || connectionWasInterrupted) revalidate()
+          hasConnected = true
+          connectionWasInterrupted = false
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          connectionWasInterrupted = true
+        }
+      })
 
-    const refreshVisibleState = window.setInterval(() => {
-      if (document.visibilityState === 'visible') revalidator.revalidate()
-    }, 5000)
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') revalidate()
+    }
+    document.addEventListener('visibilitychange', refreshWhenVisible)
 
     return () => {
-      window.clearInterval(refreshVisibleState)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
       void client.removeChannel(channel)
     }
-  }, [loaderData?.profile?.id, revalidator])
+  }, [loaderData?.profile?.id, revalidate])
 
   useEffect(() => {
     if (!loaderData?.profile?.id || typeof window === 'undefined') return

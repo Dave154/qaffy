@@ -19,18 +19,11 @@ export async function requireRole(request: Request, role: UserRole | UserRole[])
     throw redirect(loginPath, { headers })
   }
 
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('id, role, name, qaffy_id, email, phone')
-    .eq('id', userData.user.id)
-    .maybeSingle()
-
   const allowedRoles = Array.isArray(role) ? role : [role]
-  const { data: roleAssignments } = await supabase
-    .from('profile_roles')
-    .select('role')
-    .eq('profile_id', userData.user.id)
-    .eq('status', 'approved')
+  const [{ data: profile }, { data: roleAssignments }] = await Promise.all([
+    supabase.from('profiles').select('id, role, name, qaffy_id, email, phone').eq('id', userData.user.id).maybeSingle(),
+    supabase.from('profile_roles').select('role').eq('profile_id', userData.user.id).eq('status', 'approved'),
+  ])
   const assignedRoles = new Set((roleAssignments ?? []).map((assignment) => assignment.role))
   const hasAllowedRole = allowedRoles.some(
     (allowedRole) =>
