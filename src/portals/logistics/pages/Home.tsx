@@ -622,7 +622,7 @@ export default function Home() {
 
       <section className="rounded-[28px] border border-[#e7e7e7] bg-white p-4 shadow-sm shadow-slate-100 md:p-5">
         <div className="flex items-center justify-between gap-3">
-          <h2 className="whitespace-nowrap text-base font-bold text-slate-900 sm:text-xl">Handoff history</h2>
+          <h2 className="whitespace-nowrap font-bold text-slate-900 text-sm sm:text-xl">Handoff history</h2>
           <div className="flex shrink-0 rounded-full text-sm border border-brand-border bg-brand-soft p-px" role="group" aria-label="Handoff history type">
             <button
               type="button"
