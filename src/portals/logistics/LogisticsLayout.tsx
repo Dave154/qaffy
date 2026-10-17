@@ -1,5 +1,5 @@
-import { Link, Outlet, data, useLoaderData, useNavigate, useRevalidator } from 'react-router'
-import { useEffect, useState } from 'react'
+import { Link, Outlet, data, useLoaderData, useNavigate, useRevalidator, type ShouldRevalidateFunctionArgs } from 'react-router'
+import { useEffect } from 'react'
 import { LogOut } from 'lucide-react'
 import type { Route } from './+types/LogisticsLayout'
 import QaffyLogo from '../../components/QaffyLogo'
@@ -84,6 +84,8 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   const expandedOrders = visibleOrders.map((order) => ({
     ...order,
+    pickup_otp: null,
+    delivery_otp: null,
     customer_name: profileMap.get(order.customer_id)?.name ?? 'Customer',
     customer_uid: profileMap.get(order.customer_id)?.uid ?? null,
     pickup_location_name: order.pickup_location_id ? (locationMap.get(order.pickup_location_id) ?? null) : null,
@@ -92,11 +94,15 @@ export async function loader({ request }: Route.LoaderArgs) {
   return data({ orders: expandedOrders, logisticsEvents, agent: agentProfile }, { headers, status: 200 })
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
+export function shouldRevalidate({ formData, defaultShouldRevalidate }: ShouldRevalidateFunctionArgs) {
+  return formData?.get('intent') === 'search' ? false : defaultShouldRevalidate
+}
+
 export default function LogisticsLayout() {
   const loaderData = useLoaderData<typeof loader>()
   const navigate = useNavigate()
   const revalidator = useRevalidator()
-  const [activeTab, setActiveTab] = useState<'pickup' | 'delivery'>('pickup')
   const currentAgent = loaderData?.agent ?? { id: null, name: 'Logistics agent', email: null, qaffyId: null }
 
   useEffect(() => {
@@ -109,12 +115,31 @@ export default function LogisticsLayout() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'order_logistics_events' }, () => revalidator.revalidate())
       .subscribe()
 
-    const refreshVisibleState = window.setInterval(() => {
-      if (document.visibilityState === 'visible') revalidator.revalidate()
-    }, 5000)
+    let refreshVisibleState: number | null = null
+    const startFallbackRefresh = () => {
+      if (refreshVisibleState !== null) return
+      refreshVisibleState = window.setInterval(() => revalidator.revalidate(), 30_000)
+    }
+    const stopFallbackRefresh = () => {
+      if (refreshVisibleState === null) return
+      window.clearInterval(refreshVisibleState)
+      refreshVisibleState = null
+    }
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        revalidator.revalidate()
+        startFallbackRefresh()
+      } else {
+        stopFallbackRefresh()
+      }
+    }
+
+    if (document.visibilityState === 'visible') startFallbackRefresh()
+    document.addEventListener('visibilitychange', handleVisibilityChange)
 
     return () => {
-      window.clearInterval(refreshVisibleState)
+      stopFallbackRefresh()
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
       void client.removeChannel(channel)
     }
   }, [revalidator])
@@ -157,7 +182,7 @@ export default function LogisticsLayout() {
       </header>
 
       <main className="mx-auto max-w-5xl p-4 md:p-6">
-        <Outlet context={{ ...loaderData, activeTab, setActiveTab }} />
+        <Outlet context={loaderData} />
       </main>
     </div>
   )

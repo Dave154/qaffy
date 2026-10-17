@@ -394,20 +394,22 @@ Before updating UI components, verify:
 
 #### Logistics workflow
 
-- Pickup and delivery are tabs on one logistics page, controlled by local state in `src/portals/logistics/LogisticsLayout.tsx`.
+- Pickup and delivery use one logistics OTP search; matching orders show the appropriate action without a Pickup/Delivery selector.
 - The separate `/logistics/delivery` route was removed from `src/routes.ts`.
 - Picked-up orders appear under search.
-- The confirm-pickup button was removed.
 - After a successful pickup, the OTP input is cleared.
 - Logistics pickup and delivery results now show the globally unique public order reference (`QO-######`) for handoff and event history; UUIDs remain internal action identifiers.
 - The logistics pickup/delivery action validates the intent, requires logistics access when Supabase is configured, and uses separate pickup/delivery OTP error messages.
 - Vendors may dispatch confirmed orders with paid or unpaid invoices. Logistics sees dispatched orders only after the invoice is paid, and the trusted final-delivery action independently verifies payment.
 - Final delivery atomically changes the status to `delivered` and clears `delivery_otp`, so a delivery OTP cannot be reused after handoff.
-- The duplicate pickup SQL statement was removed; do not reintroduce a second `update orders` in the pickup branch.
-- Pickup OTP search requires all four digits and performs an exact match; partial OTP input never reveals an order.
+- Pickup confirmation updates the order and inserts its logistics event in one SQL statement, so the order cannot be changed without its event being recorded.
+- Customer pickup and delivery notifications run through Vercel `waitUntil` after the handoff is committed; do not await push delivery before returning action success.
+- Logistics OTP search submits all four digits to the trusted server action; OTP values are not included in the logistics loader payload.
+- Confirmed pickup/delivery OTPs are searchable by all logistics agents for 24 hours through `logistics_used_otps`; only a keyed HMAC fingerprint is retained, expiry is enforced by search, and stale rows are cleaned daily by `/api/logistics/used-otp-cleanup`.
+- Active and recently used OTPs are excluded when allocating pickup and delivery codes. The database pickup trigger and trusted delivery allocator share an advisory lock to prevent concurrent duplicate assignment.
+- Apply `supabase/migrations/20261017110000_logistics_used_otp_lookup.sql` before using used-code search or new OTP allocation.
 - Pickup confirmation atomically sets `picked = true`, records `picked_up_date`, changes the status to `picked_up`, and nullifies `pickup_otp`.
 - Logistics displays the globally unique public order reference (`QO-######`) in pickup/delivery results and event history; UUIDs remain internal action identifiers.
-- The Pickup/Delivery switch is outside the header navigation, beside the date filter, and remains a horizontal compact control on small screens. The logistics header uses padded spacing, a smaller title, and a red logout icon action.
 
 #### Customer overview and orders
 
@@ -456,6 +458,7 @@ Before updating UI components, verify:
 - Customer layouts now subscribe to customer-owned order changes and remount their data provider on lifecycle changes, so pickup status, pickup OTP removal, delivery state, invoices, and mismatch indicators update without a reload.
 - Customer wallet and wallet-ledger realtime subscriptions now also include customer payment status; the top-up spinner clears when the signed webhook marks the payment successful.
 - Logistics already revalidates on order changes; migration `supabase/migrations/20260916130000_logistics_order_realtime.sql` now publishes orders and logistics events so newly created customer orders appear in OTP search without a reload.
+- Logistics Realtime is the primary refresh path. Its 30-second fallback refresh runs only while the page is visible, stops while hidden, and refreshes once when the page becomes visible again.
 - Vendor layout now also has a visible-page fallback revalidation, so pickup status changes remove orders from the available-claim count even if realtime publication setup is delayed.
 - Vendor lifecycle is logistics `pending_pickup` -> `picked_up`, vendor claim `picked_up` -> `at_vendor`; pending pickup orders are excluded from the vendor loader entirely.
 
@@ -711,7 +714,7 @@ The first enables Realtime for wallets, wallet transactions, and subscriptions. 
 
 - Customer Web Push is implemented with `public/push-sw.js`, `src/lib/push.client.ts`, `src/lib/push.server.ts`, and the `/api/push-subscriptions` route.
 - Customers can enable notifications from the Overview prompt or toggle them in Settings. Subscriptions are scoped to the signed-in customer and stored in `push_subscriptions`.
-- `notification_events` records an idempotent event before delivery on the wrapped notification path and tracks `pending`, `sent`, or `failed` status. Expired subscriptions are removed after Web Push returns HTTP 404 or 410. Logistics pickup and delivery currently use the direct push sender and are not recorded in this ledger.
+- `notification_events` records an idempotent event before delivery on the wrapped notification path and tracks `pending`, `sent`, or `failed` status. Expired subscriptions are removed after Web Push returns HTTP 404 or 410. Logistics pickup and delivery use the persisted notification sender and schedule delivery with Vercel `waitUntil`.
 - Notifications currently cover logistics pickup and delivery, vendor ready-for-delivery dispatch, vendor mismatch confirmation, payment required/confirmed, wallet top-up confirmation, subscription activation, and scheduled renewal/expiry reminders.
 - Required migrations are `supabase/migrations/20260918100000_push_subscriptions.sql` and `supabase/migrations/20260918110000_notification_events.sql`.
 - Required configuration is `VITE_VAPID_PUBLIC_KEY` in the browser build, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and `VAPID_SUBJECT` on the server, and `CRON_SECRET` for the protected subscription reminder route. Web Push is unavailable in the VS Code embedded browser; use Chrome or Edge.

@@ -1,4 +1,5 @@
 import { sql } from '@/lib/db.server'
+import { randomInt } from 'node:crypto'
 import type { WalletBalanceType } from '@/types/database.types'
 import type { TransactionSql } from 'postgres'
 import {
@@ -17,8 +18,33 @@ class InsufficientBalanceError extends Error {
   }
 }
 
-function generateFourDigitOtp() {
-  return String(1000 + Math.floor(Math.random() * 9000))
+async function generateFourDigitOtp(tx: TransactionSql) {
+  await tx`select pg_advisory_xact_lock(22017, 1)`
+  for (let attempt = 0; attempt < 10000; attempt += 1) {
+    const candidate = String(randomInt(0, 10000)).padStart(4, '0')
+    const [collision] = await tx`
+      select exists (
+        select 1
+        from orders
+        where status in ('pending_pickup', 'paid', 'out_for_delivery')
+          and (
+            right(regexp_replace(coalesce(pickup_otp, ''), '[^0-9]', '', 'g'), 4) = ${candidate}
+            or right(regexp_replace(coalesce(delivery_otp, ''), '[^0-9]', '', 'g'), 4) = ${candidate}
+          )
+      ) or exists (
+        select 1
+        from logistics_used_otps
+        where otp_hash = (
+          select encode(extensions.hmac(convert_to(${candidate}, 'UTF8'), secret, 'sha256'), 'hex')
+          from private.logistics_otp_lookup_key
+        )
+          and expires_at > now()
+      ) as collision
+    `
+    if (!collision?.collision) return candidate
+  }
+
+  throw new Error('Unable to generate an unused delivery OTP.')
 }
 
 async function getCashbackPercentForTransaction(tx: TransactionSql) {
@@ -314,7 +340,7 @@ export async function payFromWallet(customerId: string, invoiceId: string, balan
       throw new Error('Invoice is not payable in its current order state')
 
     const { newBalance } = await debitWalletForInvoice(tx, customerId, invoiceId, Number(invoice.amount), balanceType)
-    const deliveryOtp = generateFourDigitOtp()
+    const deliveryOtp = await generateFourDigitOtp(tx)
 
     await tx`update invoices set status = 'paid', paid_at = now() where id = ${invoiceId}`
     await tx`
@@ -630,7 +656,7 @@ export async function finalizeVendorOrder(
     const availableBalance = Number(wallet?.one_off_balance ?? 0) + Number(wallet?.promotional_balance ?? 0)
     if (invoiceAmount <= availableBalance) {
       await debitWalletForInvoice(tx, order.customer_id, invoice.id, invoiceAmount, 'one_off')
-      const deliveryOtp = generateFourDigitOtp()
+      const deliveryOtp = await generateFourDigitOtp(tx)
       await tx`update invoices set status = 'paid', paid_at = now() where id = ${invoice.id}`
       await tx`update orders set status = 'paid', delivery_otp = ${deliveryOtp} where id = ${orderId}`
       referralRewardRecipients.push(...(await issueReferralRewards(tx, order.customer_id, orderId, invoiceAmount)))
@@ -776,7 +802,7 @@ async function applyWalletCredit(
         if (invoiceAmount > settledBalance) break
 
         settledBalance -= invoiceAmount
-        const deliveryOtp = generateFourDigitOtp()
+        const deliveryOtp = await generateFourDigitOtp(tx)
         await tx`update wallets set one_off_balance = ${settledBalance}, updated_at = now() where customer_id = ${customerId}`
         await tx`update invoices set status = 'paid', paid_at = now() where id = ${invoice.id}`
         await tx`
@@ -951,7 +977,7 @@ export async function chargeSubscriptionInvoice(customerId: string, invoiceId: s
 
     const amount = Number(invoice.amount)
     const { newBalance } = await debitWalletForInvoice(tx, customerId, invoiceId, amount, 'one_off')
-    const deliveryOtp = generateFourDigitOtp()
+    const deliveryOtp = await generateFourDigitOtp(tx)
     await tx`update invoices set status = 'paid', paid_at = now() where id = ${invoiceId}`
     await tx`
       update orders
