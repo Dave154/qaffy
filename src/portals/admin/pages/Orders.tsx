@@ -7,11 +7,12 @@ import {
   useLocation,
   useNavigate,
   useNavigation,
+  useRevalidator,
   useSearchParams,
   type ShouldRevalidateFunctionArgs,
 } from 'react-router'
 import { useEffect, useRef, useState } from 'react'
-import { ChevronLeft, ChevronRight, LoaderCircle, SlidersHorizontal, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, ChevronDown, ChevronLeft, ChevronRight, GripVertical, List, LoaderCircle, RefreshCw, SlidersHorizontal, X } from 'lucide-react'
 import type { Route } from './+types/Orders'
 import { requireRole } from '../../../lib/auth.server'
 import { getInitialReceivedCounts } from '../../../lib/order-counts'
@@ -24,6 +25,9 @@ type AdminOrder = {
   public_order_number: string
   created_at: string
   picked_up_date: string | null
+  delivery_date: string | null
+  pickup_otp?: string | null
+  delivery_otp?: string | null
   order_type: 'wash' | 'wash_iron' | 'mixed'
   status: 'pending_pickup' | 'picked_up' | 'at_vendor' | 'invoiced' | 'paid' | 'out_for_delivery' | 'delivered' | 'cancelled'
   clothes_count_customer: number
@@ -50,6 +54,33 @@ type AdminOrder = {
   mismatches: Array<{ id: string; details: unknown }>
 }
 type BillingBreakdown = { coveredUnits: number; subscriberAmount: number; regularAmount: number }
+type SortColumn =
+  | 'created'
+  | 'order'
+  | 'pickup'
+  | 'delivery'
+  | 'customer'
+  | 'qaffy_id'
+  | 'order_type'
+  | 'location'
+  | 'items'
+  | 'payment'
+  | 'status'
+type SortRule = { column: SortColumn; direction: 'asc' | 'desc' }
+
+const sortableColumns: Array<{ value: SortColumn; label: string }> = [
+  { value: 'created', label: 'Created' },
+  { value: 'order', label: 'Order ID' },
+  { value: 'pickup', label: 'Pickup' },
+  { value: 'delivery', label: 'Delivery' },
+  { value: 'customer', label: 'Customer' },
+  { value: 'qaffy_id', label: 'Qaffy ID' },
+  { value: 'order_type', label: 'Order type' },
+  { value: 'location', label: 'Location' },
+  { value: 'items', label: 'Items' },
+  { value: 'payment', label: 'Payment' },
+  { value: 'status', label: 'Status' },
+]
 
 // eslint-disable-next-line react-refresh/only-export-components
 export async function action({ request }: Route.ActionArgs) {
@@ -237,6 +268,26 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
           <Detail label="Created" value={formatDate(order.created_at)} />
           <Detail label="Location" value={order.location?.name ?? 'Location pending'} />
         </section>
+        <section className="mt-4 grid gap-3 sm:grid-cols-2" aria-label="Order OTPs">
+          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Pickup OTP</p>
+            <p className={`mt-2 text-slate-900 ${order.pickup_otp ? 'font-mono text-2xl font-bold tracking-[0.2em]' : 'text-sm font-medium'}`}>
+              {order.pickup_otp ?? (order.status === 'pending_pickup' ? 'Not available' : 'Pickup confirmed')}
+            </p>
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Delivery OTP</p>
+            <p className={`mt-2 text-slate-900 ${order.delivery_otp ? 'font-mono text-2xl font-bold tracking-[0.2em]' : 'text-sm font-medium'}`}>
+              {order.delivery_otp ?? (
+                order.status === 'delivered'
+                  ? 'Delivery confirmed'
+                  : order.status === 'cancelled'
+                    ? 'Not available'
+                    : 'Not generated yet'
+              )}
+            </p>
+          </div>
+        </section>
         <section className="mt-5 rounded-2xl border border-slate-200 p-4">
           <div className="flex items-center justify-between">
             <h4 className="font-bold text-slate-900">Items</h4>
@@ -355,10 +406,14 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
 function OrderFilterDrawer({
   isOpen,
   onClose,
+  onApply,
+  onClear,
   statusFilter,
   setStatusFilter,
   paymentFilter,
   setPaymentFilter,
+  dateType,
+  setDateType,
   dateMode,
   setDateMode,
   startDate,
@@ -368,10 +423,14 @@ function OrderFilterDrawer({
 }: {
   isOpen: boolean
   onClose: () => void
+  onApply: () => void
+  onClear: () => void
   statusFilter: string
   setStatusFilter: (value: string) => void
   paymentFilter: 'all' | 'pending' | 'paid'
   setPaymentFilter: (value: 'all' | 'pending' | 'paid') => void
+  dateType: 'created' | 'pickup' | 'delivery'
+  setDateType: (value: 'created' | 'pickup' | 'delivery') => void
   dateMode: 'all' | 'this_month' | 'last_month' | 'custom'
   setDateMode: (value: 'all' | 'this_month' | 'last_month' | 'custom') => void
   startDate: string
@@ -404,9 +463,18 @@ function OrderFilterDrawer({
         className="fixed inset-y-0 right-0 z-50 flex w-[calc(100vw-48px)] max-w-[560px] flex-col overflow-y-auto border-l border-slate-200 bg-white shadow-2xl"
       >
         <header className="border-b border-slate-100 px-6 py-5 sm:px-7">
-          <h2 id="order-filter-title" className="text-xl font-bold text-slate-900">
-            Filter orders
-          </h2>
+          <div className="flex items-center justify-between gap-4">
+            <h2 id="order-filter-title" className="text-xl font-bold text-slate-900">
+              Filter orders
+            </h2>
+            <button
+              type="button"
+              onClick={onClear}
+              className="whitespace-nowrap text-sm font-semibold text-brand-primary hover:text-brand-primary-hover"
+            >
+              Clear filters
+            </button>
+          </div>
         </header>
         <div className="flex min-h-[calc(100vh-81px)] flex-1 flex-col px-6 py-6 sm:px-8">
           <div className="space-y-6">
@@ -435,6 +503,18 @@ function OrderFilterDrawer({
                 <option value="all">All payment statuses</option>
                 <option value="pending">Pending</option>
                 <option value="paid">Paid</option>
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-2.5 block text-xs font-semibold text-slate-500">Date applies to</span>
+              <select
+                value={dateType}
+                onChange={(event) => setDateType(event.target.value as typeof dateType)}
+                className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
+              >
+                <option value="created">Order created</option>
+                <option value="pickup">Pickup date</option>
+                <option value="delivery">Delivery date</option>
               </select>
             </label>
             <label className="block">
@@ -483,7 +563,7 @@ function OrderFilterDrawer({
             </button>
             <button
               type="button"
-              onClick={onClose}
+              onClick={onApply}
               className="h-11 flex-1 rounded-xl bg-brand-primary px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-primary-hover"
             >
               Apply filters
@@ -505,6 +585,8 @@ export default function Orders() {
     query,
     statusFilter,
     paymentFilter,
+    dateType,
+    sortRules,
     dateMode,
     startDate,
     endDate,
@@ -512,8 +594,38 @@ export default function Orders() {
   const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
   const navigation = useNavigation()
+  const revalidator = useRevalidator()
   const location = useLocation()
   const [isFilterOpen, setIsFilterOpen] = useState(false)
+  const [draftStatusFilter, setDraftStatusFilter] = useState(statusFilter)
+  const [draftPaymentFilter, setDraftPaymentFilter] = useState(paymentFilter)
+  const [draftDateType, setDraftDateType] = useState(dateType)
+  const [draftDateMode, setDraftDateMode] = useState(dateMode)
+  const [draftStartDate, setDraftStartDate] = useState(startDate)
+  const [draftEndDate, setDraftEndDate] = useState(endDate)
+  const [sortManagerOpen, setSortManagerOpen] = useState(false)
+  const sortManagerRef = useRef<HTMLDivElement>(null)
+  const [draftSortRules, setDraftSortRules] = useState<SortRule[]>(sortRules)
+  const [openSortMenu, setOpenSortMenu] = useState<SortColumn | null>(null)
+  useEffect(() => {
+    if (!sortManagerOpen) return
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && !sortManagerRef.current?.contains(event.target)) {
+        setSortManagerOpen(false)
+      }
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSortManagerOpen(false)
+    }
+
+    document.addEventListener('pointerdown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [sortManagerOpen])
   const requestedOrderId = searchParams.get('orderId')
   const userDetailsReturnPath = getUserDetailsReturnPath(location.state)
   const selectedOrder = requestedOrderId
@@ -534,6 +646,8 @@ export default function Orders() {
     query?: string
     statusFilter?: string
     paymentFilter?: typeof paymentFilter
+    dateType?: typeof dateType
+    sortRules?: SortRule[]
     dateMode?: typeof dateMode
     startDate?: string
     endDate?: string
@@ -543,6 +657,18 @@ export default function Orders() {
     if (values.query) params.set('q', values.query)
     if (values.statusFilter && values.statusFilter !== 'all') params.set('status', values.statusFilter)
     if (values.paymentFilter && values.paymentFilter !== 'all') params.set('payment', values.paymentFilter)
+    if (values.dateType && values.dateType !== 'created') params.set('dateType', values.dateType)
+    if (values.sortRules) {
+      if (values.sortRules.length === 0) {
+        params.set('sort', '')
+      } else if (
+        values.sortRules.length !== 1 ||
+        values.sortRules[0].column !== 'created' ||
+        values.sortRules[0].direction !== 'desc'
+      ) {
+        params.set('sort', values.sortRules.map((rule) => `${rule.column}:${rule.direction}`).join(','))
+      }
+    }
     if (values.dateMode && values.dateMode !== 'all') params.set('date', values.dateMode)
     if (values.startDate) params.set('from', values.startDate)
     if (values.endDate) params.set('to', values.endDate)
@@ -551,6 +677,7 @@ export default function Orders() {
   const updateFilters = (filters: {
     statusFilter?: string
     paymentFilter?: typeof paymentFilter
+    dateType?: typeof dateType
     dateMode?: typeof dateMode
     startDate?: string
     endDate?: string
@@ -561,14 +688,159 @@ export default function Orders() {
         query,
         statusFilter: filters.statusFilter ?? statusFilter,
         paymentFilter: filters.paymentFilter ?? paymentFilter,
+        dateType: filters.dateType ?? dateType,
+        sortRules,
         dateMode: filters.dateMode ?? dateMode,
-        startDate: filters.startDate ?? startDate,
-        endDate: filters.endDate ?? endDate,
+        startDate: filters.startDate !== undefined ? filters.startDate : startDate,
+        endDate: filters.endDate !== undefined ? filters.endDate : endDate,
       }),
     )
   }
+  const changeColumnSort = (column: SortColumn, direction: SortRule['direction']) => {
+    const updatedRules = [{ column, direction }, ...sortRules.filter((rule) => rule.column !== column)]
+    navigate(
+      buildSearch({
+        page: 1,
+        query,
+        statusFilter,
+        paymentFilter,
+        dateType,
+        sortRules: updatedRules,
+        dateMode,
+        startDate,
+        endDate,
+      }),
+    )
+    setSortManagerOpen(false)
+    setOpenSortMenu(null)
+  }
+  const renderSortHeader = (column: SortColumn, label: string) => {
+    const activeRule = sortRules.find((rule) => rule.column === column)
+    return (
+    <div className="relative inline-flex">
+      <button
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={openSortMenu === column}
+        onClick={() => setOpenSortMenu(openSortMenu === column ? null : column)}
+        className="inline-flex items-center gap-1.5 rounded px-1 py-1 text-left hover:bg-slate-100"
+      >
+        {label}
+        {activeRule ? activeRule.direction === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} /> : null}
+        <ChevronDown size={12} />
+      </button>
+      {openSortMenu === column && (
+        <div
+          role="menu"
+          aria-label={`${label} sort options`}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') setOpenSortMenu(null)
+          }}
+          className="absolute left-0 top-full z-20 mt-1 min-w-56 rounded-lg border border-slate-200 bg-white p-1 text-xs font-medium normal-case tracking-normal text-slate-700 shadow-lg"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => changeColumnSort(column, 'asc')}
+            className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left hover:bg-slate-100 ${activeRule?.direction === 'asc' ? 'bg-slate-100' : ''}`}
+          >
+            <ArrowUp size={14} />
+            Sort Ascending
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => changeColumnSort(column, 'desc')}
+            className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left hover:bg-slate-100 ${activeRule?.direction === 'desc' ? 'bg-slate-100' : ''}`}
+          >
+            <ArrowDown size={14} />
+            Sort Descending
+          </button>
+        </div>
+      )}
+    </div>
+    )
+  }
+  const updateDraftDateMode = (value: typeof dateMode) => {
+    const today = new Date()
+    setDraftDateMode(value)
+    if (value === 'this_month') {
+      setDraftStartDate(inputDate(new Date(today.getFullYear(), today.getMonth(), 1)))
+      setDraftEndDate(inputDate(new Date(today.getFullYear(), today.getMonth() + 1, 0)))
+    } else if (value === 'last_month') {
+      setDraftStartDate(inputDate(new Date(today.getFullYear(), today.getMonth() - 1, 1)))
+      setDraftEndDate(inputDate(new Date(today.getFullYear(), today.getMonth(), 0)))
+    } else if (value === 'all' || value === 'custom') {
+      setDraftStartDate('')
+      setDraftEndDate('')
+    }
+  }
+  const openFilterDrawer = () => {
+    setDraftStatusFilter(statusFilter)
+    setDraftPaymentFilter(paymentFilter)
+    setDraftDateType(dateType)
+    setDraftDateMode(dateMode)
+    setDraftStartDate(startDate)
+    setDraftEndDate(endDate)
+    setIsFilterOpen(true)
+  }
+  const applyDraftFilters = () => {
+    updateFilters({
+      statusFilter: draftStatusFilter,
+      paymentFilter: draftPaymentFilter,
+      dateType: draftDateType,
+      dateMode: draftDateMode,
+      startDate: draftStartDate,
+      endDate: draftEndDate,
+    })
+    setIsFilterOpen(false)
+  }
+  const clearDraftFilters = () => {
+    setDraftStatusFilter('all')
+    setDraftPaymentFilter('all')
+    setDraftDateType('created')
+    setDraftDateMode('all')
+    setDraftStartDate('')
+    setDraftEndDate('')
+  }
+  const openSortManager = () => {
+    setDraftSortRules(sortRules.map((rule) => ({ ...rule })))
+    setSortManagerOpen(true)
+  }
+  const applySortRules = () => {
+    navigate(
+      buildSearch({
+        page: 1,
+        query,
+        statusFilter,
+        paymentFilter,
+        dateType,
+        sortRules: draftSortRules,
+        dateMode,
+        startDate,
+        endDate,
+      }),
+    )
+    setSortManagerOpen(false)
+  }
+  const changeDraftRule = (index: number, updates: Partial<SortRule>) => {
+    setDraftSortRules((current) => current.map((rule, ruleIndex) => (ruleIndex === index ? { ...rule, ...updates } : rule)))
+  }
+  const addDraftRule = (column: SortColumn) => {
+    if (draftSortRules.some((rule) => rule.column === column)) return
+    setDraftSortRules((current) => [...current, { column, direction: 'asc' }])
+  }
+  const reorderDraftRule = (index: number, nextIndex: number) => {
+    setDraftSortRules((current) => {
+      if (nextIndex < 0 || nextIndex >= current.length || nextIndex === index) return current
+      const next = [...current]
+      const [rule] = next.splice(index, 1)
+      next.splice(nextIndex, 0, rule)
+      return next
+    })
+  }
   const exportParams = new URLSearchParams(
-    buildSearch({ page: 1, query, statusFilter, paymentFilter, dateMode, startDate, endDate }).slice(1),
+    buildSearch({ page: 1, query, statusFilter, paymentFilter, dateType, sortRules, dateMode, startDate, endDate }).slice(1),
   )
   const csvExportUrl = `/admin/orders/export?${exportParams.toString()}`
 
@@ -580,6 +852,8 @@ export default function Orders() {
             <Form method="get" className="w-full lg:max-w-lg">
               <input type="hidden" name="status" value={statusFilter} />
               <input type="hidden" name="payment" value={paymentFilter} />
+              <input type="hidden" name="dateType" value={dateType} />
+              <input type="hidden" name="sort" value={sortRules.map((rule) => `${rule.column}:${rule.direction}`).join(',')} />
               <input type="hidden" name="date" value={dateMode} />
               <input type="hidden" name="from" value={startDate} />
               <input type="hidden" name="to" value={endDate} />
@@ -593,17 +867,160 @@ export default function Orders() {
               />
             </Form>
             <div className="flex items-center gap-2 self-end lg:self-auto">
+              <div className="relative" ref={sortManagerRef}>
+                <button
+                  type="button"
+                  aria-expanded={sortManagerOpen}
+                  aria-haspopup="dialog"
+                  onClick={openSortManager}
+                  className="inline-flex h-6 items-center rounded-xs justify-center gap-2   px-2 text-slate-900 transition-colors hover:bg-brand-primary/5"
+                >
+                  <List size={13} strokeWidth={2} className="text-brand-primary" />
+                  <span className="text-sm">{sortRules.length === 0 ? 'No sorting' : `Sorted by ${sortRules.length} ${sortRules.length === 1 ? 'rule' : 'rules'}`}</span>
+                </button>
+                {sortManagerOpen && (
+                  <div
+                    role="dialog"
+                    aria-label="Manage sorting"
+                    className="absolute right-0 top-full z-30 mt-2 max-h-[70vh] w-[min(92vw,520px)] overflow-y-auto rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-700 shadow-xl"
+                  >
+                    <div className="space-y-2">
+                      {draftSortRules.length === 0 ? (
+                        <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                          No sorts applied to this view. Add a column below to sort the view.
+                        </p>
+                      ) : draftSortRules.map((rule, index) => {
+                        const sortLabel = index === 0 ? 'Sort by' : 'Then by'
+                        const columnLabel = sortableColumns.find((column) => column.value === rule.column)?.label ?? rule.column
+                        return (
+                          <div
+                            key={`${rule.column}-${index}`}
+                            onDragOver={(event) => event.preventDefault()}
+                            onDrop={(event) => {
+                              event.preventDefault()
+                              const from = Number(event.dataTransfer.getData('text/plain'))
+                              if (Number.isInteger(from)) reorderDraftRule(from, index)
+                            }}
+                            className="flex min-w-0 items-center gap-2 border-b border-slate-100 py-2 last:border-b-0"
+                          >
+                            <button
+                              type="button"
+                              draggable
+                              aria-label={`Reorder ${sortLabel.toLowerCase()} ${columnLabel}`}
+                              onDragStart={(event) => {
+                                event.dataTransfer.effectAllowed = 'move'
+                                event.dataTransfer.setData('text/plain', String(index))
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key === 'ArrowUp' && index > 0) {
+                                  event.preventDefault()
+                                  reorderDraftRule(index, index - 1)
+                                } else if (event.key === 'ArrowDown' && index < draftSortRules.length - 1) {
+                                  event.preventDefault()
+                                  reorderDraftRule(index, index + 1)
+                                }
+                              }}
+                              className="shrink-0 cursor-grab touch-none text-slate-400 active:cursor-grabbing"
+                            >
+                              <GripVertical size={16} />
+                            </button>
+                            <span className="shrink-0 text-[11px] text-slate-500">{sortLabel}</span>
+                            <select
+                              aria-label={`${sortLabel} column`}
+                              value={rule.column}
+                              onChange={(event) => changeDraftRule(index, { column: event.target.value as SortColumn })}
+                              className="h-9 min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2 text-xs font-medium text-slate-700"
+                            >
+                              {sortableColumns.map((column) => (
+                                <option
+                                  key={column.value}
+                                  value={column.value}
+                                  disabled={draftSortRules.some((existing, ruleIndex) => ruleIndex !== index && existing.column === column.value)}
+                                >
+                                  {column.label}
+                                </option>
+                              ))}
+                            </select>
+                            <label className="flex shrink-0 items-center gap-2 whitespace-nowrap text-[11px] text-slate-500">
+                              <span>Ascending</span>
+                              <input
+                                type="checkbox"
+                                role="switch"
+                                checked={rule.direction === 'asc'}
+                                onChange={(event) => changeDraftRule(index, { direction: event.target.checked ? 'asc' : 'desc' })}
+                                aria-label={`${sortLabel} ${columnLabel} ascending`}
+                                className="peer sr-only"
+                              />
+                              <span aria-hidden="true" className="relative h-5 w-9 rounded-full bg-slate-300 transition peer-checked:bg-brand-primary after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:transition-transform peer-checked:after:translate-x-4" />
+                            </label>
+                            <button
+                              type="button"
+                              aria-label={`Remove ${sortLabel.toLowerCase()} ${columnLabel}`}
+                              onClick={() => setDraftSortRules((current) => current.filter((_, ruleIndex) => ruleIndex !== index))}
+                              className="shrink-0 text-slate-400 hover:text-rose-600"
+                            >
+                              <X size={15} />
+                            </button>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
+                      <select
+                        aria-label="Add another sort column"
+                        value=""
+                        onChange={(event) => {
+                          if (event.target.value) addDraftRule(event.target.value as SortColumn)
+                        }}
+                        disabled={draftSortRules.length >= sortableColumns.length}
+                        className="h-9 max-w-full rounded-lg border border-slate-200 bg-white px-2 text-xs disabled:opacity-50"
+                      >
+                        <option value="">Pick another column to sort by</option>
+                        {sortableColumns
+                          .filter((column) => !draftSortRules.some((rule) => rule.column === column.value))
+                          .map((column) => <option key={column.value} value={column.value}>{column.label}</option>)}
+                      </select>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setSortManagerOpen(false)}
+                          className="h-9 rounded-lg border border-slate-200 px-3 text-xs font-semibold text-slate-600"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={applySortRules}
+                          className="h-9 rounded-lg bg-brand-primary px-3 text-xs font-semibold text-white hover:bg-brand-primary-hover"
+                        >
+                          Apply sorting
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
               <button
                 type="button"
-                onClick={() => setIsFilterOpen(true)}
+                onClick={openFilterDrawer}
                 aria-label="Open order filters"
                 title="Filter orders"
                 className="relative flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 text-slate-600 hover:border-brand-primary hover:text-brand-primary"
               >
                 <SlidersHorizontal className="h-4 w-4" />
-                {(statusFilter !== 'all' || paymentFilter !== 'all' || dateMode !== 'all') && (
+                {(statusFilter !== 'all' || paymentFilter !== 'all' || dateMode !== 'all' || dateType !== 'created') && (
                   <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-brand-primary" aria-label="Filters active" />
                 )}
+              </button>
+              <button
+                type="button"
+                onClick={() => revalidator.revalidate()}
+                disabled={revalidator.state !== 'idle'}
+                aria-label="Refresh orders"
+                title="Refresh orders"
+                className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 text-slate-600 transition hover:border-brand-primary hover:text-brand-primary disabled:cursor-wait disabled:opacity-50"
+              >
+                <RefreshCw className={`h-4 w-4 ${revalidator.state !== 'idle' ? 'animate-spin' : ''}`} />
               </button>
               <button
                 type="button"
@@ -622,26 +1039,33 @@ export default function Orders() {
           </div>
         </div>
         <div className="overflow-x-auto p-4 md:p-5">
-          <table className="w-full min-w-[1400px] table-fixed text-left">
+          <table className="w-full min-w-[1520px] table-fixed text-left">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50 text-[10px] capitalize tracking-[0.12em] text-slate-500">
-                <th className="w-40 px-4 py-3 font-semibold">Created</th>
-                <th className="w-36 px-4 py-3 font-semibold">Order ID</th>
-                <th className="w-40 px-4 py-3 font-semibold">Pickup</th>
-                <th className="w-48 px-4 py-3 font-semibold">Customer</th>
-                <th className="w-36 px-4 py-3 font-semibold">Qaffy ID</th>
-                <th className="w-36 px-4 py-3 font-semibold">Order type</th>
-                <th className="w-40 px-4 py-3 font-semibold">Location</th>
-                <th className="w-24 px-4 py-3 font-semibold">Items</th>
-                <th className="w-40 px-4 py-3 font-semibold">Payment</th>
-                <th className="w-36 px-4 py-3 font-semibold">Status</th>
+                <th className="w-40 px-4 py-3 font-semibold">
+                  {renderSortHeader('created', 'Created')}
+                </th>
+                <th className="w-36 px-4 py-3 font-semibold">{renderSortHeader('order', 'Order ID')}</th>
+                <th className="w-40 px-4 py-3 font-semibold">
+                  {renderSortHeader('pickup', 'Pickup')}
+                </th>
+                <th className="w-40 px-4 py-3 font-semibold">
+                  {renderSortHeader('delivery', 'Delivery')}
+                </th>
+                <th className="w-48 px-4 py-3 font-semibold">{renderSortHeader('customer', 'Customer')}</th>
+                <th className="w-36 px-4 py-3 font-semibold">{renderSortHeader('qaffy_id', 'Qaffy ID')}</th>
+                <th className="w-36 px-4 py-3 font-semibold">{renderSortHeader('order_type', 'Order type')}</th>
+                <th className="w-40 px-4 py-3 font-semibold">{renderSortHeader('location', 'Location')}</th>
+                <th className="w-24 px-4 py-3 font-semibold">{renderSortHeader('items', 'Items')}</th>
+                <th className="w-40 px-4 py-3 font-semibold">{renderSortHeader('payment', 'Payment')}</th>
+                <th className="w-36 px-4 py-3 font-semibold">{renderSortHeader('status', 'Status')}</th>
                 <th className="w-28 px-4 py-3 text-right font-semibold">Action</th>
               </tr>
             </thead>
             <tbody>
               {isLoadingPage ? (
                 <tr>
-                  <td colSpan={11} className="px-4 py-12">
+                  <td colSpan={12} className="px-4 py-12">
                     <div className="flex items-center justify-center gap-2 text-sm text-slate-500" role="status">
                       <LoaderCircle size={18} className="animate-spin text-brand-primary" />
                       Loading orders…
@@ -650,7 +1074,7 @@ export default function Orders() {
                 </tr>
               ) : orders.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="px-4 py-8 text-center text-sm text-slate-500">
+                  <td colSpan={12} className="px-4 py-8 text-center text-sm text-slate-500">
                     No orders found.
                   </td>
                 </tr>
@@ -660,6 +1084,7 @@ export default function Orders() {
                     <td className="px-4 py-4 text-sm text-slate-700">{formatDate(order.created_at)}</td>
                     <td className="px-4 py-4 text-sm font-semibold text-slate-700">{order.public_order_number}</td>
                     <td className="px-4 py-4 text-sm text-slate-700">{formatDate(order.picked_up_date)}</td>
+                    <td className="px-4 py-4 text-sm text-slate-700">{formatDate(order.delivery_date)}</td>
                     <td className="px-4 py-4">
                       <div className="min-w-0">
                         <p className="truncate text-sm font-semibold text-slate-900">{order.customer?.name ?? 'Customer'}</p>
@@ -705,31 +1130,26 @@ export default function Orders() {
       <OrderFilterDrawer
         isOpen={isFilterOpen}
         onClose={() => setIsFilterOpen(false)}
-        statusFilter={statusFilter}
-        setStatusFilter={(value) => updateFilters({ statusFilter: value })}
-        paymentFilter={paymentFilter}
-        setPaymentFilter={(value) => updateFilters({ paymentFilter: value })}
-        dateMode={dateMode}
-        setDateMode={(value) => {
-          const today = new Date()
-          if (value === 'this_month')
-            updateFilters({
-              dateMode: value,
-              startDate: inputDate(new Date(today.getFullYear(), today.getMonth(), 1)),
-              endDate: inputDate(new Date(today.getFullYear(), today.getMonth() + 1, 0)),
-            })
-          else if (value === 'last_month')
-            updateFilters({
-              dateMode: value,
-              startDate: inputDate(new Date(today.getFullYear(), today.getMonth() - 1, 1)),
-              endDate: inputDate(new Date(today.getFullYear(), today.getMonth(), 0)),
-            })
-          else updateFilters({ dateMode: value, startDate: '', endDate: '' })
+        onApply={applyDraftFilters}
+        onClear={clearDraftFilters}
+        statusFilter={draftStatusFilter}
+        setStatusFilter={setDraftStatusFilter}
+        paymentFilter={draftPaymentFilter}
+        setPaymentFilter={setDraftPaymentFilter}
+        dateType={draftDateType}
+        setDateType={setDraftDateType}
+        dateMode={draftDateMode}
+        setDateMode={updateDraftDateMode}
+        startDate={draftStartDate}
+        setStartDate={(value) => {
+          setDraftDateMode('custom')
+          setDraftStartDate(value)
         }}
-        startDate={startDate}
-        setStartDate={(value) => updateFilters({ dateMode: 'custom', startDate: value })}
-        endDate={endDate}
-        setEndDate={(value) => updateFilters({ dateMode: 'custom', endDate: value })}
+        endDate={draftEndDate}
+        setEndDate={(value) => {
+          setDraftDateMode('custom')
+          setDraftEndDate(value)
+        }}
       />
       {total > 0 && (
         <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
@@ -739,7 +1159,7 @@ export default function Orders() {
           <div className="flex items-center justify-between gap-3 sm:justify-end">
             <button
               type="button"
-              onClick={() => navigate(buildSearch({ page: page - 1, query, statusFilter, paymentFilter, dateMode, startDate, endDate }))}
+              onClick={() => navigate(buildSearch({ page: page - 1, query, statusFilter, paymentFilter, dateType, sortRules, dateMode, startDate, endDate }))}
               disabled={page === 1 || isLoadingPage}
               className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-200 px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
             >
@@ -749,7 +1169,7 @@ export default function Orders() {
             <span className="whitespace-nowrap text-sm text-slate-600">Page {page} of {pageCount}</span>
             <button
               type="button"
-              onClick={() => navigate(buildSearch({ page: page + 1, query, statusFilter, paymentFilter, dateMode, startDate, endDate }))}
+              onClick={() => navigate(buildSearch({ page: page + 1, query, statusFilter, paymentFilter, dateType, sortRules, dateMode, startDate, endDate }))}
               disabled={page === pageCount || isLoadingPage}
               className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-200 px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
             >

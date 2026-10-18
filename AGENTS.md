@@ -476,7 +476,7 @@ Before updating UI components, verify:
 
 #### Next Admin reporting slice
 
-- Admin Orders: created-date filtering and filtered CSV export were implemented 2026-09-16; server-side pagination and all-matching filtered CSV export were added 2026-10-07. See Part 15 for query and migration details.
+- Admin Orders: created, pickup, and delivery date filtering and multi-column sorting are supported server-side. The global sort manager and per-column ascending/descending menus cover all sortable columns; sort priority/directions and date type/range are preserved through pagination and all-matching CSV export. The table also has a manual refresh control that retains the current URL state. Filter drawer changes are drafts until Apply filters is clicked. Server-side pagination and all-matching filtered CSV export were added 2026-10-07. See Part 15 for query and migration details.
 - Admin Overview: date filtering for the order graph and related statistics, plus live Wash, Iron, and Wash + Iron clothes metrics.
 - Admin User Details: the Cancelled metric is hidden for now; standard subscription dates derive from the selected plan and semester settings, and Admins can edit an active subscription's end date.
 
@@ -825,9 +825,9 @@ Read this section first when continuing the latest Admin Users/Orders and accoun
 
 - Admin Users and Orders use server-side pagination with a page size of 10. Search and filters are applied in database queries before pagination; the browser does not fetch all matching records to paginate locally.
 - Users search/role/joined-date filtering and page aggregates are in `src/lib/admin-users.server.ts`. The users export resource route is `src/routes/admin-users-export.ts`.
-- Orders search/status/created-date filtering and detail queries are in `src/lib/admin-orders.server.ts`. The orders export resource route is `src/routes/admin-orders-export.ts`.
+- Orders search/status and created/pickup/delivery date filtering, multi-column sorting, and detail queries are in `src/lib/admin-orders.server.ts`. Delivery dates use recorded `delivered` events from `order_logistics_events`; missing dates sort last. The sort manager supports ordered rules for Created, Order ID, Pickup, Delivery, Customer, Qaffy ID, Order type, Location, Items, Payment, and Status, with drag/keyboard reordering, ascending toggles, and clearing to no selected sort rules. Sort priority/direction and date filter are preserved through pagination and filtered CSV export. Admins receive pickup/delivery OTPs with the current paginated orders payload for immediate use in the selected order details; OTPs are not displayed in the list or included in CSV exports. The orders export resource route is `src/routes/admin-orders-export.ts`.
 - Orders also filter by payment status (`all`, `pending`, or `paid`) server-side; pending means there is no paid invoice, matching the table's displayed status. The filter is preserved through search, pagination, and all-matching CSV export.
-- CSV exports ignore the current page and include every row matching the active filters. The server streams bounded keyset batches; users and orders are exported through separate resource routes registered in `src/routes.ts`.
+- CSV exports ignore the current page and include every row matching the active filters. The server streams bounded `OFFSET` batches in the selected sort order; users and orders are exported through separate resource routes registered in `src/routes.ts`.
 - Pagination and filtering preserve URL search parameters. Same-route updates render an in-table loading row rather than the global Qaffy loader; the suppression logic is in `src/root.tsx`.
 - Order details can be loaded by internal order ID even when the order is not present on the current page. Customer-facing order references remain public `QO-######` values; do not export OTPs or unrelated sensitive fields.
 - User list queries return a bounded page of customers and only the latest ten orders per customer for the details modal. Do not regress to loading the full user/order data set in the browser.
