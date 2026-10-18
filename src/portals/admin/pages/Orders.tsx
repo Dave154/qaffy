@@ -12,12 +12,16 @@ import {
   type ShouldRevalidateFunctionArgs,
 } from 'react-router'
 import { useEffect, useRef, useState } from 'react'
-import { ArrowDown, ArrowUp, ChevronDown, ChevronLeft, ChevronRight, GripVertical, List, LoaderCircle, RefreshCw, SlidersHorizontal, X } from 'lucide-react'
+import { waitUntil } from '@vercel/functions'
+import { ChevronLeft, ChevronRight, LoaderCircle, RefreshCw, SlidersHorizontal, X } from 'lucide-react'
 import type { Route } from './+types/Orders'
+import { MultiSortManager, SortColumnHeader } from '../../../components/admin/MultiSortControls'
 import { requireRole } from '../../../lib/auth.server'
 import { getInitialReceivedCounts } from '../../../lib/order-counts'
 import { sql } from '../../../lib/db.server'
 import { toast } from '../../../lib/toast'
+import { isReadyForDispatch, isReadyForFinalDelivery } from '../../../lib/orderLifecycle'
+import { sendCustomerNotification } from '../../../lib/notifications.server'
 import { loadAdminOrders } from '../../../lib/admin-orders.server'
 
 type AdminOrder = {
@@ -90,11 +94,189 @@ export async function action({ request }: Route.ActionArgs) {
   const formData = await request.formData()
   const intent = String(formData.get('intent') ?? '')
   const orderId = String(formData.get('orderId') ?? '')
-  if (intent !== 'cancel-order' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(orderId)) {
+  const orderActions = ['cancel-order', 'mark-picked-up', 'dispatch-order', 'mark-delivered'] as const
+  if (!orderActions.includes(intent as (typeof orderActions)[number]) || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(orderId)) {
     return data({ ok: false, intent, orderId, message: 'Invalid order action.' }, { status: 400, headers: auth.headers })
   }
 
   try {
+    if (intent === 'mark-picked-up') {
+      const [order] = await sql`
+        with updated_order as (
+          update orders
+          set status = 'picked_up',
+              picked = true,
+              picked_up_date = now(),
+              pickup_otp = null
+          where id = ${orderId}
+            and status = 'pending_pickup'
+            and picked = false
+          returning id, customer_id, public_order_number
+        ),
+        handoff_event as (
+          insert into order_logistics_events (order_id, agent_profile_id, event_type)
+          select id, null, 'picked_up'
+          from updated_order
+          returning order_id
+        ),
+        audit_event as (
+          insert into admin_audit_events (admin_profile_id, action, entity_type, entity_id, metadata)
+          select ${auth.profile.id}, 'admin_order_marked_picked_up', 'order', id,
+            jsonb_build_object('from_status', 'pending_pickup', 'to_status', 'picked_up')
+          from updated_order
+          returning entity_id
+        )
+        select updated_order.id, updated_order.customer_id, updated_order.public_order_number
+        from updated_order
+        join handoff_event on handoff_event.order_id = updated_order.id
+        join audit_event on audit_event.entity_id = updated_order.id
+      `
+      if (!order) {
+        return data(
+          { ok: false, intent, orderId, message: 'This order is no longer awaiting pickup.' },
+          { status: 409, headers: auth.headers },
+        )
+      }
+
+      scheduleAdminOrderNotification(
+        sendCustomerNotification({
+          eventKey: `pickup:${order.id}:confirmed`,
+          customerId: order.customer_id,
+          notificationType: 'order_picked_up',
+          orderId: order.id,
+          payload: {
+            title: 'Your order was picked up',
+            body: 'Qaffy has collected your laundry.',
+            details: [`Order: ${order.public_order_number}`, 'Your laundry is now with Qaffy.'],
+            url: `/orders?order=${encodeURIComponent(order.public_order_number)}`,
+            tag: `order:${order.id}:pickup`,
+          },
+        }),
+      )
+      return data({ ok: true, intent, orderId }, { headers: auth.headers })
+    }
+
+    if (intent === 'dispatch-order') {
+      const [order] = await sql`
+        with updated_order as (
+          update orders
+          set status = 'out_for_delivery'
+          where id = ${orderId}
+            and (
+              (status = 'paid' and exists (
+                select 1 from invoices
+                where invoices.order_id = orders.id and invoices.status = 'paid'
+              ))
+              or
+              (status = 'invoiced' and exists (
+                select 1 from invoices
+                where invoices.order_id = orders.id and invoices.status = 'unpaid'
+              ))
+            )
+          returning id, customer_id, public_order_number
+        ),
+        audit_event as (
+          insert into admin_audit_events (admin_profile_id, action, entity_type, entity_id, metadata)
+          select ${auth.profile.id}, 'admin_order_dispatched', 'order', updated_order.id,
+            jsonb_build_object('from_status', case when invoice.status = 'paid' then 'paid' else 'invoiced' end,
+              'to_status', 'out_for_delivery', 'invoice_status', invoice.status)
+          from updated_order
+          join invoices invoice on invoice.order_id = updated_order.id
+          returning entity_id
+        )
+        select updated_order.id, updated_order.customer_id, updated_order.public_order_number,
+          invoice.status::text as invoice_status
+        from updated_order
+        join audit_event on audit_event.entity_id = updated_order.id
+        join invoices invoice on invoice.order_id = updated_order.id
+      `
+      if (!order) {
+        return data(
+          { ok: false, intent, orderId, message: 'This order is not ready for dispatch.' },
+          { status: 409, headers: auth.headers },
+        )
+      }
+
+      const isPaid = order.invoice_status === 'paid'
+      scheduleAdminOrderNotification(
+        sendCustomerNotification({
+          eventKey: `order:${order.id}:ready-for-delivery`,
+          customerId: order.customer_id,
+          notificationType: 'order_ready_for_delivery',
+          orderId: order.id,
+          payload: {
+            title: isPaid ? 'Your order is ready for delivery' : 'Your order has been dispatched',
+            body: isPaid
+              ? `Your clean laundry is on the way for ${order.public_order_number}.`
+              : `Your order ${order.public_order_number} has been dispatched. Payment is required before handoff.`,
+            details: isPaid
+              ? [`Order: ${order.public_order_number}`, 'Payment has been confirmed.', 'Your laundry is on its way to you.']
+              : [`Order: ${order.public_order_number}`, 'Your laundry has been dispatched.', 'Please pay the invoice before handoff.'],
+            url: `/orders?order=${encodeURIComponent(order.public_order_number)}`,
+            tag: `order:${order.id}:delivery`,
+          },
+        }),
+      )
+      return data({ ok: true, intent, orderId }, { headers: auth.headers })
+    }
+
+    if (intent === 'mark-delivered') {
+      const [order] = await sql`
+        with updated_order as (
+          update orders
+          set status = 'delivered',
+              delivery_otp = null
+          where id = ${orderId}
+            and status = 'out_for_delivery'
+            and exists (
+              select 1 from invoices
+              where invoices.order_id = orders.id and invoices.status = 'paid'
+            )
+          returning id, customer_id, public_order_number
+        ),
+        handoff_event as (
+          insert into order_logistics_events (order_id, agent_profile_id, event_type)
+          select id, null, 'delivered'
+          from updated_order
+          returning order_id
+        ),
+        audit_event as (
+          insert into admin_audit_events (admin_profile_id, action, entity_type, entity_id, metadata)
+          select ${auth.profile.id}, 'admin_order_marked_delivered', 'order', id,
+            jsonb_build_object('from_status', 'out_for_delivery', 'to_status', 'delivered')
+          from updated_order
+          returning entity_id
+        )
+        select updated_order.id, updated_order.customer_id, updated_order.public_order_number
+        from updated_order
+        join handoff_event on handoff_event.order_id = updated_order.id
+        join audit_event on audit_event.entity_id = updated_order.id
+      `
+      if (!order) {
+        return data(
+          { ok: false, intent, orderId, message: 'This order must be dispatched and fully paid before it can be marked delivered.' },
+          { status: 409, headers: auth.headers },
+        )
+      }
+
+      scheduleAdminOrderNotification(
+        sendCustomerNotification({
+          eventKey: `delivery:${order.id}:confirmed`,
+          customerId: order.customer_id,
+          notificationType: 'order_delivered',
+          orderId: order.id,
+          payload: {
+            title: 'Your order was delivered',
+            body: 'Your Qaffy laundry order has been delivered.',
+            details: [`Order: ${order.public_order_number}`, 'Your laundry has been handed back to you.'],
+            url: `/orders?order=${encodeURIComponent(order.public_order_number)}`,
+            tag: `order:${order.id}:delivery`,
+          },
+        }),
+      )
+      return data({ ok: true, intent, orderId }, { headers: auth.headers })
+    }
+
     const [cancelledOrder] = await sql`
       update orders
       set status = 'cancelled'
@@ -111,11 +293,29 @@ export async function action({ request }: Route.ActionArgs) {
     }
     return data({ ok: true, intent, orderId }, { headers: auth.headers })
   } catch (error) {
-    console.error('[admin-orders] Cancellation failed', error)
+    console.error('[admin-orders] Order action failed', error)
     return data(
-      { ok: false, intent, orderId, message: 'The order could not be cancelled. Please try again.' },
+      {
+        ok: false,
+        intent,
+        orderId,
+        message: intent === 'cancel-order'
+          ? 'The order could not be cancelled. Please try again.'
+          : 'The order update could not be completed. Please try again.',
+      },
       { status: 500, headers: auth.headers },
     )
+  }
+}
+
+function scheduleAdminOrderNotification(notification: Promise<unknown>) {
+  try {
+    waitUntil(notification)
+  } catch (error) {
+    console.error('[admin-orders] Background notification scheduling failed', error)
+    void notification.catch((notificationError) => {
+      console.error('[admin-orders] Notification dispatch failed', notificationError)
+    })
   }
 }
 
@@ -200,6 +400,9 @@ function Detail({ label, value }: { label: string; value: string | number }) {
 function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => void }) {
   const cancelFetcher = useFetcher<typeof action>()
   const handledCancelResponse = useRef<typeof cancelFetcher.data>(null)
+  const workflowFetcher = useFetcher<typeof action>()
+  const handledWorkflowResponse = useRef<typeof workflowFetcher.data>(null)
+  const revalidator = useRevalidator()
   const receivedCounts = getInitialReceivedCounts(
     order.items.map((item) => ({
       id: item.id,
@@ -231,6 +434,43 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
     toast.error('message' in result && typeof result.message === 'string' ? result.message : 'The order could not be cancelled.')
   }, [cancelFetcher.data, cancelFetcher.state, onClose])
 
+  useEffect(() => {
+    const result = workflowFetcher.data
+    if (workflowFetcher.state !== 'idle' || !result || handledWorkflowResponse.current === result) return
+    handledWorkflowResponse.current = result
+
+    if (!result.ok) {
+      toast.error('message' in result && typeof result.message === 'string' ? result.message : 'The order update could not be completed.')
+      return
+    }
+
+    const successMessages: Record<string, string> = {
+      'mark-picked-up': 'Order marked as picked up.',
+      'dispatch-order': 'Order dispatched.',
+      'mark-delivered': 'Order marked as delivered.',
+    }
+    const completedIntent = 'intent' in result ? result.intent : ''
+    toast.success(successMessages[completedIntent] ?? 'Order updated.')
+    revalidator.revalidate()
+  }, [workflowFetcher.data, workflowFetcher.state, revalidator])
+
+  const submitWorkflowAction = (intent: 'mark-picked-up' | 'dispatch-order' | 'mark-delivered') => {
+    workflowFetcher.submit({ intent, orderId: order.id }, { method: 'post' })
+  }
+  const workflowActionPending = workflowFetcher.state !== 'idle'
+  const pendingWorkflowIntent = workflowActionPending ? String(workflowFetcher.formData?.get('intent') ?? '') : ''
+  const canDispatch = isReadyForDispatch(order.status, order.invoice?.status)
+  const canDeliver = isReadyForFinalDelivery(order.status, order.invoice?.status)
+  const workflowGuidance = order.status === 'pending_pickup'
+    ? 'Confirm the order has been collected, then mark it as picked up.'
+    : canDispatch
+      ? order.invoice?.status === 'paid'
+        ? 'This order is ready to go out for delivery.'
+        : 'This order can be dispatched now. Delivery can be completed after the invoice is paid.'
+      : canDeliver
+        ? 'Confirm the handoff to the customer to complete this order.'
+        : null
+
   return (
     <div className="fixed inset-0 z-40 flex items-end justify-center overflow-y-auto bg-slate-950/40 p-0 sm:items-center sm:p-4">
       <div className="max-h-[calc(100vh-1rem)] w-full max-w-3xl overflow-y-auto rounded-t-3xl bg-white p-5 shadow-2xl sm:max-h-[calc(100vh-2rem)] sm:rounded-3xl sm:p-8">
@@ -250,12 +490,61 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
             <X size={18} aria-hidden="true" />
           </button>
         </header>
+        {workflowGuidance && (
+          <section
+            className="mt-5 rounded-2xl border border-brand-primary/20 bg-brand-primary/5 p-4"
+            aria-label="Next order action"
+          >
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h4 className="font-bold text-slate-900">Next step</h4>
+                <p className="mt-1 text-sm text-slate-600">{workflowGuidance}</p>
+              </div>
+              <div className="flex shrink-0 flex-wrap gap-2">
+                {order.status === 'pending_pickup' && (
+                  <button
+                    type="button"
+                    onClick={() => submitWorkflowAction('mark-picked-up')}
+                    disabled={workflowActionPending || cancelFetcher.state !== 'idle'}
+                    className="inline-flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {pendingWorkflowIntent === 'mark-picked-up' && <LoaderCircle size={15} className="animate-spin" />}
+                    {pendingWorkflowIntent === 'mark-picked-up' ? 'Saving...' : 'Mark picked up'}
+                  </button>
+                )}
+                {canDispatch && (
+                  <button
+                    type="button"
+                    onClick={() => submitWorkflowAction('dispatch-order')}
+                    disabled={workflowActionPending || cancelFetcher.state !== 'idle'}
+                    className="inline-flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {pendingWorkflowIntent === 'dispatch-order' && <LoaderCircle size={15} className="animate-spin" />}
+                    {pendingWorkflowIntent === 'dispatch-order' ? 'Saving...' : 'Dispatch order'}
+                  </button>
+                )}
+                {canDeliver && (
+                  <button
+                    type="button"
+                    onClick={() => submitWorkflowAction('mark-delivered')}
+                    disabled={workflowActionPending || cancelFetcher.state !== 'idle'}
+                    className="inline-flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {pendingWorkflowIntent === 'mark-delivered' && <LoaderCircle size={15} className="animate-spin" />}
+                    {pendingWorkflowIntent === 'mark-delivered' ? 'Saving...' : 'Mark delivered'}
+                  </button>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
         <section className="mt-6 grid gap-4 rounded-2xl bg-slate-50 p-4 sm:grid-cols-4">
           <div>
             <p className="text-[10px] font-semibold capitalize tracking-[0.14em] text-slate-500">Customer ID</p>
             {order.customer?.id ? (
               <Link
                 to={`/admin/users/${encodeURIComponent(order.customer.id)}`}
+                state={{ returnTo: `${location.pathname}${location.search}` }}
                 className="mt-1 inline-block break-words text-sm font-semibold text-brand-primary hover:underline"
               >
                 {order.customer.qaffy_id ?? 'Unavailable'}
@@ -431,8 +720,8 @@ function OrderFilterDrawer({
   setPaymentFilter: (value: 'all' | 'pending' | 'paid') => void
   dateType: 'created' | 'pickup' | 'delivery'
   setDateType: (value: 'created' | 'pickup' | 'delivery') => void
-  dateMode: 'all' | 'this_month' | 'last_month' | 'custom'
-  setDateMode: (value: 'all' | 'this_month' | 'last_month' | 'custom') => void
+  dateMode: 'all' | 'today' | 'this_month' | 'last_month' | 'custom'
+  setDateMode: (value: 'all' | 'today' | 'this_month' | 'last_month' | 'custom') => void
   startDate: string
   setStartDate: (value: string) => void
   endDate: string
@@ -525,6 +814,7 @@ function OrderFilterDrawer({
                 className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
               >
                 <option value="all">All time</option>
+                <option value="today">Today</option>
                 <option value="this_month">This month</option>
                 <option value="last_month">Last month</option>
                 <option value="custom">Custom</option>
@@ -603,29 +893,6 @@ export default function Orders() {
   const [draftDateMode, setDraftDateMode] = useState(dateMode)
   const [draftStartDate, setDraftStartDate] = useState(startDate)
   const [draftEndDate, setDraftEndDate] = useState(endDate)
-  const [sortManagerOpen, setSortManagerOpen] = useState(false)
-  const sortManagerRef = useRef<HTMLDivElement>(null)
-  const [draftSortRules, setDraftSortRules] = useState<SortRule[]>(sortRules)
-  const [openSortMenu, setOpenSortMenu] = useState<SortColumn | null>(null)
-  useEffect(() => {
-    if (!sortManagerOpen) return
-
-    const handlePointerDown = (event: PointerEvent) => {
-      if (event.target instanceof Node && !sortManagerRef.current?.contains(event.target)) {
-        setSortManagerOpen(false)
-      }
-    }
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setSortManagerOpen(false)
-    }
-
-    document.addEventListener('pointerdown', handlePointerDown)
-    document.addEventListener('keydown', handleKeyDown)
-    return () => {
-      document.removeEventListener('pointerdown', handlePointerDown)
-      document.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [sortManagerOpen])
   const requestedOrderId = searchParams.get('orderId')
   const userDetailsReturnPath = getUserDetailsReturnPath(location.state)
   const selectedOrder = requestedOrderId
@@ -711,60 +978,25 @@ export default function Orders() {
         endDate,
       }),
     )
-    setSortManagerOpen(false)
-    setOpenSortMenu(null)
   }
   const renderSortHeader = (column: SortColumn, label: string) => {
     const activeRule = sortRules.find((rule) => rule.column === column)
     return (
-    <div className="relative inline-flex">
-      <button
-        type="button"
-        aria-haspopup="menu"
-        aria-expanded={openSortMenu === column}
-        onClick={() => setOpenSortMenu(openSortMenu === column ? null : column)}
-        className="inline-flex items-center gap-1.5 rounded px-1 py-1 text-left hover:bg-slate-100"
-      >
-        {label}
-        {activeRule ? activeRule.direction === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} /> : null}
-        <ChevronDown size={12} />
-      </button>
-      {openSortMenu === column && (
-        <div
-          role="menu"
-          aria-label={`${label} sort options`}
-          onKeyDown={(event) => {
-            if (event.key === 'Escape') setOpenSortMenu(null)
-          }}
-          className="absolute left-0 top-full z-20 mt-1 min-w-56 rounded-lg border border-slate-200 bg-white p-1 text-xs font-medium normal-case tracking-normal text-slate-700 shadow-lg"
-        >
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => changeColumnSort(column, 'asc')}
-            className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left hover:bg-slate-100 ${activeRule?.direction === 'asc' ? 'bg-slate-100' : ''}`}
-          >
-            <ArrowUp size={14} />
-            Sort Ascending
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => changeColumnSort(column, 'desc')}
-            className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left hover:bg-slate-100 ${activeRule?.direction === 'desc' ? 'bg-slate-100' : ''}`}
-          >
-            <ArrowDown size={14} />
-            Sort Descending
-          </button>
-        </div>
-      )}
-    </div>
+      <SortColumnHeader
+        label={label}
+        direction={activeRule?.direction ?? null}
+        onSort={(direction) => changeColumnSort(column, direction)}
+      />
     )
   }
   const updateDraftDateMode = (value: typeof dateMode) => {
     const today = new Date()
     setDraftDateMode(value)
-    if (value === 'this_month') {
+    if (value === 'today') {
+      const todayDate = inputDate(today)
+      setDraftStartDate(todayDate)
+      setDraftEndDate(todayDate)
+    } else if (value === 'this_month') {
       setDraftStartDate(inputDate(new Date(today.getFullYear(), today.getMonth(), 1)))
       setDraftEndDate(inputDate(new Date(today.getFullYear(), today.getMonth() + 1, 0)))
     } else if (value === 'last_month') {
@@ -803,11 +1035,7 @@ export default function Orders() {
     setDraftStartDate('')
     setDraftEndDate('')
   }
-  const openSortManager = () => {
-    setDraftSortRules(sortRules.map((rule) => ({ ...rule })))
-    setSortManagerOpen(true)
-  }
-  const applySortRules = () => {
+  const applySortRules = (nextSortRules: SortRule[]) => {
     navigate(
       buildSearch({
         page: 1,
@@ -815,29 +1043,12 @@ export default function Orders() {
         statusFilter,
         paymentFilter,
         dateType,
-        sortRules: draftSortRules,
+        sortRules: nextSortRules,
         dateMode,
         startDate,
         endDate,
       }),
     )
-    setSortManagerOpen(false)
-  }
-  const changeDraftRule = (index: number, updates: Partial<SortRule>) => {
-    setDraftSortRules((current) => current.map((rule, ruleIndex) => (ruleIndex === index ? { ...rule, ...updates } : rule)))
-  }
-  const addDraftRule = (column: SortColumn) => {
-    if (draftSortRules.some((rule) => rule.column === column)) return
-    setDraftSortRules((current) => [...current, { column, direction: 'asc' }])
-  }
-  const reorderDraftRule = (index: number, nextIndex: number) => {
-    setDraftSortRules((current) => {
-      if (nextIndex < 0 || nextIndex >= current.length || nextIndex === index) return current
-      const next = [...current]
-      const [rule] = next.splice(index, 1)
-      next.splice(nextIndex, 0, rule)
-      return next
-    })
   }
   const exportParams = new URLSearchParams(
     buildSearch({ page: 1, query, statusFilter, paymentFilter, dateType, sortRules, dateMode, startDate, endDate }).slice(1),
@@ -867,139 +1078,11 @@ export default function Orders() {
               />
             </Form>
             <div className="flex items-center gap-2 self-end lg:self-auto">
-              <div className="relative" ref={sortManagerRef}>
-                <button
-                  type="button"
-                  aria-expanded={sortManagerOpen}
-                  aria-haspopup="dialog"
-                  onClick={openSortManager}
-                  className="inline-flex h-6 items-center rounded-xs justify-center gap-2   px-2 text-slate-900 transition-colors hover:bg-brand-primary/5"
-                >
-                  <List size={13} strokeWidth={2} className="text-brand-primary" />
-                  <span className="text-sm">{sortRules.length === 0 ? 'No sorting' : `Sorted by ${sortRules.length} ${sortRules.length === 1 ? 'rule' : 'rules'}`}</span>
-                </button>
-                {sortManagerOpen && (
-                  <div
-                    role="dialog"
-                    aria-label="Manage sorting"
-                    className="absolute right-0 top-full z-30 mt-2 max-h-[70vh] w-[min(92vw,520px)] overflow-y-auto rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-700 shadow-xl"
-                  >
-                    <div className="space-y-2">
-                      {draftSortRules.length === 0 ? (
-                        <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
-                          No sorts applied to this view. Add a column below to sort the view.
-                        </p>
-                      ) : draftSortRules.map((rule, index) => {
-                        const sortLabel = index === 0 ? 'Sort by' : 'Then by'
-                        const columnLabel = sortableColumns.find((column) => column.value === rule.column)?.label ?? rule.column
-                        return (
-                          <div
-                            key={`${rule.column}-${index}`}
-                            onDragOver={(event) => event.preventDefault()}
-                            onDrop={(event) => {
-                              event.preventDefault()
-                              const from = Number(event.dataTransfer.getData('text/plain'))
-                              if (Number.isInteger(from)) reorderDraftRule(from, index)
-                            }}
-                            className="flex min-w-0 items-center gap-2 border-b border-slate-100 py-2 last:border-b-0"
-                          >
-                            <button
-                              type="button"
-                              draggable
-                              aria-label={`Reorder ${sortLabel.toLowerCase()} ${columnLabel}`}
-                              onDragStart={(event) => {
-                                event.dataTransfer.effectAllowed = 'move'
-                                event.dataTransfer.setData('text/plain', String(index))
-                              }}
-                              onKeyDown={(event) => {
-                                if (event.key === 'ArrowUp' && index > 0) {
-                                  event.preventDefault()
-                                  reorderDraftRule(index, index - 1)
-                                } else if (event.key === 'ArrowDown' && index < draftSortRules.length - 1) {
-                                  event.preventDefault()
-                                  reorderDraftRule(index, index + 1)
-                                }
-                              }}
-                              className="shrink-0 cursor-grab touch-none text-slate-400 active:cursor-grabbing"
-                            >
-                              <GripVertical size={16} />
-                            </button>
-                            <span className="shrink-0 text-[11px] text-slate-500">{sortLabel}</span>
-                            <select
-                              aria-label={`${sortLabel} column`}
-                              value={rule.column}
-                              onChange={(event) => changeDraftRule(index, { column: event.target.value as SortColumn })}
-                              className="h-9 min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2 text-xs font-medium text-slate-700"
-                            >
-                              {sortableColumns.map((column) => (
-                                <option
-                                  key={column.value}
-                                  value={column.value}
-                                  disabled={draftSortRules.some((existing, ruleIndex) => ruleIndex !== index && existing.column === column.value)}
-                                >
-                                  {column.label}
-                                </option>
-                              ))}
-                            </select>
-                            <label className="flex shrink-0 items-center gap-2 whitespace-nowrap text-[11px] text-slate-500">
-                              <span>Ascending</span>
-                              <input
-                                type="checkbox"
-                                role="switch"
-                                checked={rule.direction === 'asc'}
-                                onChange={(event) => changeDraftRule(index, { direction: event.target.checked ? 'asc' : 'desc' })}
-                                aria-label={`${sortLabel} ${columnLabel} ascending`}
-                                className="peer sr-only"
-                              />
-                              <span aria-hidden="true" className="relative h-5 w-9 rounded-full bg-slate-300 transition peer-checked:bg-brand-primary after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:transition-transform peer-checked:after:translate-x-4" />
-                            </label>
-                            <button
-                              type="button"
-                              aria-label={`Remove ${sortLabel.toLowerCase()} ${columnLabel}`}
-                              onClick={() => setDraftSortRules((current) => current.filter((_, ruleIndex) => ruleIndex !== index))}
-                              className="shrink-0 text-slate-400 hover:text-rose-600"
-                            >
-                              <X size={15} />
-                            </button>
-                          </div>
-                        )
-                      })}
-                    </div>
-                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
-                      <select
-                        aria-label="Add another sort column"
-                        value=""
-                        onChange={(event) => {
-                          if (event.target.value) addDraftRule(event.target.value as SortColumn)
-                        }}
-                        disabled={draftSortRules.length >= sortableColumns.length}
-                        className="h-9 max-w-full rounded-lg border border-slate-200 bg-white px-2 text-xs disabled:opacity-50"
-                      >
-                        <option value="">Pick another column to sort by</option>
-                        {sortableColumns
-                          .filter((column) => !draftSortRules.some((rule) => rule.column === column.value))
-                          .map((column) => <option key={column.value} value={column.value}>{column.label}</option>)}
-                      </select>
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setSortManagerOpen(false)}
-                          className="h-9 rounded-lg border border-slate-200 px-3 text-xs font-semibold text-slate-600"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          type="button"
-                          onClick={applySortRules}
-                          className="h-9 rounded-lg bg-brand-primary px-3 text-xs font-semibold text-white hover:bg-brand-primary-hover"
-                        >
-                          Apply sorting
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
+              <MultiSortManager
+                columns={sortableColumns}
+                rules={sortRules}
+                onApply={applySortRules}
+              />
               <button
                 type="button"
                 onClick={openFilterDrawer}
@@ -1088,7 +1171,7 @@ export default function Orders() {
                     <td className="px-4 py-4">
                       <div className="min-w-0">
                         <p className="truncate text-sm font-semibold text-slate-900">{order.customer?.name ?? 'Customer'}</p>
-                        <p className="truncate text-xs text-slate-500">{order.customer?.email ?? 'Email unavailable'}</p>
+                        <p className="truncate text-xs text-slate-500">{order.customer?.phone ?? 'Phone unavailable'}</p>
                       </div>
                     </td>
                     <td className="px-4 py-4 text-sm text-slate-700">{order.customer?.qaffy_id ?? 'Unavailable'}</td>

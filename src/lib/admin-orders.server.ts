@@ -59,7 +59,7 @@ type OrdersData = {
   sortBy: SortColumn
   sortDirection: 'asc' | 'desc'
   sortRules: SortRule[]
-  dateMode: 'all' | 'this_month' | 'last_month' | 'custom'
+  dateMode: 'all' | 'today' | 'this_month' | 'last_month' | 'custom'
   startDate: string
   endDate: string
 }
@@ -81,7 +81,7 @@ type SortRule = { column: SortColumn; direction: 'asc' | 'desc' }
 const PAGE_SIZE = 10
 const EXPORT_BATCH_SIZE = 500
 const ORDER_STATUSES = ['all', 'pending_pickup', 'picked_up', 'at_vendor', 'invoiced', 'paid', 'out_for_delivery', 'delivered', 'cancelled'] as const
-const DATE_MODES = ['all', 'this_month', 'last_month', 'custom'] as const
+const DATE_MODES = ['all', 'today', 'this_month', 'last_month', 'custom'] as const
 const DATE_TYPES = ['created', 'pickup', 'delivery'] as const
 const SORT_COLUMNS: SortColumn[] = [
   'created',
