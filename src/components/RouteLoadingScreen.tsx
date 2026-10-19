@@ -16,7 +16,7 @@ export default function RouteLoadingScreen({ isLoading = false, watchNavigation 
     if (isNavigating) {
       setIsVisible(true)
     } else if (isVisible) {
-      hideTimer = window.setTimeout(() => setIsVisible(false), 450)
+      hideTimer = window.setTimeout(() => setIsVisible(false), 250)
     }
     return () => {
       if (hideTimer) window.clearTimeout(hideTimer)

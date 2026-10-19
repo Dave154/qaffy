@@ -98,6 +98,10 @@ function dateInput(value: Date) {
 function dateOnly(value: Date | string | null | undefined) {
   return value instanceof Date ? value.toISOString().slice(0, 10) : value?.slice(0, 10) ?? null
 }
+function getOrdersReturnPath(state: unknown) {
+  if (!state || typeof state !== 'object' || !('returnTo' in state) || typeof state.returnTo !== 'string') return null
+  return /^\/admin\/orders(?:\?[^#]*)?$/.test(state.returnTo) ? state.returnTo : null
+}
 function addMonth(value: string) {
   const start = new Date(`${value}T12:00:00`)
   return dateInput(new Date(start.getFullYear(), start.getMonth() + 1, start.getDate()))
@@ -498,6 +502,7 @@ function ManualSubscription({
 export default function UserDetails() {
   const details = useLoaderData<typeof loader>()
   const location = useLocation()
+  const ordersReturnPath = getOrdersReturnPath(location.state)
   const actionData = useActionData<typeof action>()
   const navigation = useNavigation()
   const handledActionResponse = useRef<typeof actionData>(null)
@@ -531,9 +536,12 @@ export default function UserDetails() {
   const isSaving = navigation.state !== 'idle'
   return (
     <div className="space-y-6">
-      <Link to="/admin/users" className="inline-flex items-center gap-2 text-sm font-semibold text-slate-500 hover:text-brand-primary">
+      <Link
+        to={ordersReturnPath ?? '/admin/users'}
+        className="inline-flex items-center gap-2 text-sm font-semibold text-slate-500 hover:text-brand-primary"
+      >
         <ArrowLeft size={15} />
-        Back to users
+        {ordersReturnPath ? 'Back to orders' : 'Back to users'}
       </Link>
       <header>
         <h2 className="mt-2 text-3xl font-bold tracking-tight text-slate-900">{details.profile.name ?? 'Unnamed customer'}</h2>

@@ -658,6 +658,7 @@ export default function Home() {
                     <div>
                       <p className="font-semibold text-slate-800">{pickedOrder?.public_order_number ?? 'Order unavailable'}</p>
                       <p className="mt-1 text-xs text-slate-500">{pickedOrder?.customer_name ?? 'Customer'}</p>
+                      <p className="mt-1 text-[11px] text-slate-500">Customer UID: {pickedOrder?.customer_uid ?? 'Not available'}</p>
                       <p className="mt-1 text-[11px] text-slate-500">Pickup: {pickedOrder?.pickup_location_name ?? 'Location pending'}</p>
                     </div>
                     <span className="shrink-0 text-xs text-slate-500">{new Date(event.created_at).toLocaleString()}</span>
@@ -675,6 +676,7 @@ export default function Home() {
                   <div>
                     <p className="font-semibold text-slate-800">{deliveredOrder?.public_order_number ?? 'Order unavailable'}</p>
                     <p className="mt-1 text-xs text-slate-500">{deliveredOrder?.customer_name ?? 'Customer'}</p>
+                    <p className="mt-1 text-[11px] text-slate-500">Customer UID: {deliveredOrder?.customer_uid ?? 'Not available'}</p>
                   </div>
                   <span className="shrink-0 text-xs text-slate-500">{new Date(event.created_at).toLocaleString()}</span>
                 </div>

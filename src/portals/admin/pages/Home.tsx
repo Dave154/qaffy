@@ -10,8 +10,8 @@ import {
   UserRound,
   UsersRound,
 } from 'lucide-react'
-import { Link, data, useLoaderData } from 'react-router'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { Await, Link, data, useLoaderData } from 'react-router'
 import type { Route } from './+types/Home'
 import { requireRole } from '../../../lib/auth.server'
 import { getRateValueFromItem } from '../../../lib/rate-card'
@@ -141,8 +141,9 @@ function rangeForMode(mode: DateMode, start: string, end: string) {
 // eslint-disable-next-line react-refresh/only-export-components
 export async function loader({ request }: Route.LoaderArgs) {
   const auth = await requireRole(request, 'admin')
-  if (!auth) return data<DashboardData>(emptyData, { status: 200 })
+  if (!auth) return data({ dashboardData: Promise.resolve(emptyData) }, { status: 200 })
   const { supabase, headers } = auth
+  const dashboardData = (async (): Promise<DashboardData> => {
   const activeOnDate = new Date().toISOString().slice(0, 10)
   const [
     { data: orders },
@@ -422,8 +423,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       time: formatTime(order.created_at),
       tone: index % 3 === 0 ? 'cyan' : index % 3 === 1 ? 'pink' : 'green',
     }))
-  return data<DashboardData>(
-    {
+  return {
       metrics: {
         totalOrders: allOrders.length,
         ordersToday: allOrders.filter((order) => localDayKey(new Date(order.created_at)) === today).length,
@@ -463,9 +463,9 @@ export async function loader({ request }: Route.LoaderArgs) {
       trend,
       hourlyTrend,
       activity,
-    },
-    { headers, status: 200 },
-  )
+    }
+  })()
+  return data({ dashboardData }, { headers, status: 200 })
 }
 
 function TrendChart({ points, metric }: { points: DailyPoint[]; metric: ChartMetric }) {
@@ -595,8 +595,68 @@ function PipelineChart({ pipeline }: { pipeline: DashboardData['pipeline'] }) {
   )
 }
 
+function OverviewSkeleton() {
+  return (
+    <div className="animate-pulse space-y-6" aria-label="Loading Admin overview" role="status">
+      <section>
+        <div className="mb-3 flex items-center justify-between">
+          <div className="h-5 w-24 rounded bg-slate-200" />
+          <div className="h-9 w-32 rounded-lg bg-slate-200" />
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {Array.from({ length: 8 }, (_, index) => (
+            <div key={index} className="rounded-xl border border-slate-100 bg-white p-4 shadow-sm">
+              <div className="h-3 w-28 rounded bg-slate-200" />
+              <div className="mt-4 h-7 w-32 rounded bg-slate-200" />
+              <div className="mt-3 h-3 w-20 rounded bg-slate-100" />
+            </div>
+          ))}
+        </div>
+      </section>
+      <div className="grid gap-5 xl:grid-cols-2">
+        {Array.from({ length: 2 }, (_, index) => (
+          <section key={index} className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
+            <div className="h-5 w-36 rounded bg-slate-200" />
+            <div className="mt-5 h-56 rounded-xl bg-slate-100" />
+          </section>
+        ))}
+      </div>
+      <div className="grid gap-5 xl:grid-cols-2">
+        {Array.from({ length: 4 }, (_, index) => (
+          <section key={index} className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
+            <div className="h-5 w-40 rounded bg-slate-200" />
+            <div className="mt-5 space-y-4">
+              {Array.from({ length: 4 }, (_, row) => (
+                <div key={row} className="h-10 rounded-lg bg-slate-100" />
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export default function Home() {
-  const { metrics, pipeline, plans, recentVendors, recentCustomers, trend, hourlyTrend, activity } = useLoaderData<typeof loader>()
+  const { dashboardData } = useLoaderData<typeof loader>()
+  return (
+    <Suspense fallback={<OverviewSkeleton />}>
+      <Await
+        resolve={dashboardData}
+        errorElement={
+          <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-800">
+            Overview data could not be loaded. Refresh the page to try again.
+          </div>
+        }
+      >
+        {(dashboard) => <OverviewDashboard dashboard={dashboard} />}
+      </Await>
+    </Suspense>
+  )
+}
+
+function OverviewDashboard({ dashboard }: { dashboard: DashboardData }) {
+  const { metrics, pipeline, plans, recentVendors, recentCustomers, trend, hourlyTrend, activity } = dashboard
   const [overviewMode, setOverviewMode] = useState<DateMode>('all')
   const [overviewStart, setOverviewStart] = useState('')
   const [overviewEnd, setOverviewEnd] = useState('')

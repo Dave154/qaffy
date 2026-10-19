@@ -2,8 +2,9 @@ import { Bell, Copy, Share2 } from 'lucide-react'
 import { data, Link, useFetcher } from 'react-router'
 import type { Route } from './+types/Settings'
 import { useCustomerStore } from '../customer-store-hook'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ensurePushSubscription, getPushSubscription, removePushSubscription, savePushSubscription } from '../../../lib/push.client'
+import { toast } from '../../../lib/toast'
 
 // eslint-disable-next-line react-refresh/only-export-components
 export async function action({ request }: Route.ActionArgs) {
@@ -19,8 +20,8 @@ export async function action({ request }: Route.ActionArgs) {
     const name = String(formData.get('name') ?? '').trim()
     const phone = String(formData.get('phone') ?? '').trim()
     if (!name) return data({ ok: false, message: 'Enter your full name.' }, { status: 400, headers })
-    if (phone && (!/^[+\d][\d\s()-]{6,}$/.test(phone) || (phone.match(/\d/g) ?? []).length > 11))
-      return data({ ok: false, message: 'Enter a valid phone number.' }, { status: 400, headers })
+    if (!/^\d{11}$/.test(phone))
+      return data({ ok: false, message: 'Enter a phone number using exactly 11 digits.' }, { status: 400, headers })
     const { error } = await supabase
       .from('profiles')
       .update({ name, phone: phone || null })
@@ -54,6 +55,7 @@ export default function Settings() {
   } = useCustomerStore()
   const fetcher = useFetcher<typeof action>()
   const profileFetcher = useFetcher<typeof action>()
+  const handledProfileResponse = useRef<typeof profileFetcher.data>(null)
   const [referralMessage, setReferralMessage] = useState('')
   const [notificationsEnabled, setNotificationsEnabled] = useState(false)
   const [notificationBusy, setNotificationBusy] = useState(false)
@@ -76,6 +78,14 @@ export default function Settings() {
   useEffect(() => {
     void getPushSubscription().then((subscription) => setNotificationsEnabled(Boolean(subscription)))
   }, [])
+
+  useEffect(() => {
+    const result = profileFetcher.data
+    if (profileFetcher.state !== 'idle' || !result || handledProfileResponse.current === result) return
+    handledProfileResponse.current = result
+
+    if (result.ok) toast.success('Profile details saved.')
+  }, [profileFetcher.data, profileFetcher.state])
 
   const toggleNotifications = async () => {
     setNotificationBusy(true)
@@ -214,7 +224,11 @@ export default function Settings() {
                 type="tel"
                 inputMode="numeric"
                 autoComplete="tel-national"
+                required
+                minLength={11}
                 maxLength={11}
+                pattern="\d{11}"
+                title="Enter exactly 11 digits."
                 defaultValue={customerPhone}
                 onInput={(event) => {
                   event.currentTarget.value = event.currentTarget.value.replace(/\D/g, '').slice(0, 11)
@@ -242,11 +256,6 @@ export default function Settings() {
             {profileFetcher.data && !profileFetcher.data.ok && (
               <p role="alert" className="text-sm text-red-700">
                 {profileFetcher.data.message}
-              </p>
-            )}
-            {profileFetcher.data?.ok && (
-              <p role="status" className="text-sm text-emerald-700">
-                Profile details saved.
               </p>
             )}
           </profileFetcher.Form>
