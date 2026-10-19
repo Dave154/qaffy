@@ -258,6 +258,7 @@ export interface Invoice {
   order_id: string
   amount: number
   status: InvoiceStatus
+  payment_method: 'wallet' | 'offline' | null
   billing_breakdown: { coveredUnits: number; subscriberAmount: number; regularAmount: number } | null
   paid_at: string | null
   created_at: string

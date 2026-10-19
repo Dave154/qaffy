@@ -140,7 +140,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     .order('created_at', { ascending: false })
     .limit(20)
 
-  const { data: invoiceRows } =
+  const { data: invoiceRows, error: invoiceRowsError } =
     orderIds.length > 0
       ? await serverSupabase
           .from('invoices')
@@ -274,7 +274,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       wallet,
       walletTransactions: walletTransactions ?? [],
       payments: payments ?? [],
-      transactionError: paymentsError?.message ?? null,
+      transactionError: [paymentsError?.message, invoiceRowsError?.message].filter(Boolean).join(' ') || null,
       invoices: invoicesWithDetails,
       orderMismatches,
       unreadNotificationCount: unreadNotificationCount ?? 0,
@@ -448,7 +448,7 @@ export default function CustomerLayout() {
 
   return (
     <CustomerStoreProvider
-      key={`${loaderData?.profile?.id ?? 'customer'}:${loaderData?.profile?.name ?? ''}:${loaderData?.profile?.phone ?? ''}:${loaderData?.profile?.referral_code ?? ''}:${loaderData?.profile?.pickup_location_id ?? ''}:${loaderData?.wallet?.updated_at ?? 'no-wallet'}:${loaderData?.subscription?.id ?? 'no-subscription'}:${loaderData?.subscription?.end_date ?? ''}:${(loaderData?.orders ?? []).map((order) => `${order.id}-${order.status}-${order.pickup_otp ?? ''}-${order.delivery_otp ?? ''}-${order.clothes_count_vendor ?? ''}`).join('|')}:${(loaderData?.payments ?? []).map((payment) => `${payment.id}-${payment.status}`).join('|')}:${(loaderData?.persistedReferrals ?? []).map((referral) => `${referral.id}-${referral.status}-${referral.rewardStatus ?? ''}`).join('|')}`}
+      key={`${loaderData?.profile?.id ?? 'customer'}:${loaderData?.profile?.name ?? ''}:${loaderData?.profile?.phone ?? ''}:${loaderData?.profile?.referral_code ?? ''}:${loaderData?.profile?.pickup_location_id ?? ''}:${loaderData?.wallet?.updated_at ?? 'no-wallet'}:${loaderData?.subscription?.id ?? 'no-subscription'}:${loaderData?.subscription?.end_date ?? ''}:${(loaderData?.orders ?? []).map((order) => `${order.id}-${order.status}-${order.pickup_otp ?? ''}-${order.delivery_otp ?? ''}-${order.clothes_count_vendor ?? ''}`).join('|')}:${(loaderData?.payments ?? []).map((payment) => `${payment.id}-${payment.status}`).join('|')}:${(loaderData?.invoices ?? []).map((invoice) => `${invoice.id}-${invoice.payment_method ?? ''}-${invoice.paid_at ?? ''}`).join('|')}:${(loaderData?.persistedReferrals ?? []).map((referral) => `${referral.id}-${referral.status}-${referral.rewardStatus ?? ''}`).join('|')}`}
       profile={loaderData?.profile ?? undefined}
       persistedOrders={loaderData ? (loaderData.orders as Order[]) : undefined}
       persistedUnpaidInvoiceOrderIds={loaderData?.unpaidInvoiceOrderIds as string[] | undefined}

@@ -31,6 +31,7 @@ type AdminOrder = {
   invoice: {
     amount: number
     status: 'unpaid' | 'paid'
+    payment_method: 'wallet' | 'offline' | null
     paid_at: string | null
     billing_breakdown: BillingBreakdown | null
   } | null
@@ -359,7 +360,8 @@ export async function loadAdminOrders(request: Request) {
       ), '[]'::json) else '[]'::json end as items,
       (
         select json_build_object('amount', invoice.amount, 'status', invoice.status,
-          'paid_at', invoice.paid_at, 'billing_breakdown', invoice.billing_breakdown)
+          'payment_method', invoice.payment_method, 'paid_at', invoice.paid_at,
+          'billing_breakdown', invoice.billing_breakdown)
         from invoices invoice where invoice.order_id = o.id
       ) as invoice,
       case when ${includeDetails} then coalesce((
@@ -461,7 +463,8 @@ export async function loadAdminOrders(request: Request) {
           from order_items oi left join cloth_categories category on category.id = oi.category_id
           where oi.order_id = o.id), '[]'::json) as items,
         (select json_build_object('amount', invoice.amount, 'status', invoice.status,
-          'paid_at', invoice.paid_at, 'billing_breakdown', invoice.billing_breakdown)
+          'payment_method', invoice.payment_method, 'paid_at', invoice.paid_at,
+          'billing_breakdown', invoice.billing_breakdown)
           from invoices invoice where invoice.order_id = o.id) as invoice,
         coalesce((select json_agg(json_build_object('id', mismatch.id, 'details', mismatch.details))
           from mismatches mismatch where mismatch.order_id = o.id), '[]'::json) as mismatches

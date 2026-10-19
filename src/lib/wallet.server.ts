@@ -199,9 +199,9 @@ async function debitWalletForInvoice(
   return { newBalance, promotionalBalance }
 }
 
-type ReferralRewardRecipient = { profileId: string; rewardId: string; amount: number }
+export type ReferralRewardRecipient = { profileId: string; rewardId: string; amount: number }
 
-async function issueReferralRewards(
+export async function issueReferralRewards(
   tx: TransactionSql,
   customerId: string,
   orderId: string,
@@ -303,7 +303,7 @@ async function issueReferralRewards(
   return rewardedRecipients
 }
 
-async function sendReferralRewardNotifications(recipients: ReferralRewardRecipient[]) {
+export async function sendReferralRewardNotifications(recipients: ReferralRewardRecipient[]) {
   await Promise.all(
     recipients.map((recipient) =>
       sendCustomerNotification({

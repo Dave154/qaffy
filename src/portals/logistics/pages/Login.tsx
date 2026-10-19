@@ -3,13 +3,14 @@ import { useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router'
 import QaffyLogo from '../../../components/QaffyLogo'
 import RouteLoadingScreen from '../../../components/RouteLoadingScreen'
-import { isSupabaseConfigured, supabase } from '../../../lib/supabase.client'
+import { isSupabaseConfigured, setRememberSession, supabase } from '../../../lib/supabase.client'
 
 export default function Login() {
   const navigate = useNavigate()
   const location = useLocation()
   const [email, setEmail] = useState('')
   const [showEmailAuth, setShowEmailAuth] = useState(false)
+  const [rememberSession, setRememberSessionChoice] = useState(true)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState(() => new URLSearchParams(location.search).get('error') ?? '')
 
@@ -60,6 +61,7 @@ export default function Login() {
     }
 
     setIsSubmitting(true)
+    setRememberSession(rememberSession)
     const { error: authError } = await supabase.auth.signInWithOtp({
       email: trimmed,
       options: { shouldCreateUser: false },
@@ -87,6 +89,7 @@ export default function Login() {
     }
 
     setIsSubmitting(true)
+    setRememberSession(rememberSession)
     const { error: authError } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: { redirectTo: `${window.location.origin}/logistics/auth/callback` },
@@ -167,6 +170,16 @@ export default function Login() {
                 <span>or</span>
                 <span className="h-px flex-1 bg-slate-200" />
               </div>
+
+              <label className="mb-5 inline-flex items-center gap-2 text-sm text-slate-500">
+                <input
+                  type="checkbox"
+                  checked={rememberSession}
+                  onChange={(event) => setRememberSessionChoice(event.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300 text-brand-primary focus:ring-brand-primary"
+                />
+                Stay signed in
+              </label>
 
               {!showEmailAuth && (
                 <button

@@ -480,6 +480,23 @@ export function CustomerStoreProvider({
       ...(persistedWalletTransactions ?? [])
         .map((transaction) => mapDatabaseTransaction(transaction, orderReferenceByInvoiceId))
         .filter((transaction): transaction is CustomerTransaction => transaction !== null),
+      ...(persistedInvoices ?? [])
+        .filter((invoice) => invoice.status === 'paid' && invoice.payment_method === 'offline')
+        .map((invoice) => {
+          const date = invoice.paid_at ?? invoice.created_at
+          return {
+            id: `offline-invoice-${invoice.id}`,
+            title: 'Offline order payment',
+            reference: `Offline payment • ${invoice.id.slice(0, 8).toUpperCase()}`,
+            orderReference: invoice.order_reference ?? invoice.order_id,
+            date: new Date(date).toLocaleString(),
+            sortDate: date,
+            amount: `-₦${Number(invoice.amount).toLocaleString()}`,
+            direction: 'debit' as const,
+            category: 'payment' as const,
+            status: 'Successful',
+          }
+        }),
     ].sort((left, right) => new Date(right.sortDate).getTime() - new Date(left.sortDate).getTime()),
   )
   const [invoices] = useState(() => (persistedInvoices ?? []).map(mapDatabaseInvoice))
