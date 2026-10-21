@@ -2,6 +2,11 @@ import { useMemo, useState } from 'react'
 import { supabase } from '../../lib/supabase.client'
 import { toast } from '../../lib/toast'
 import { getRateValue, type RateCardService } from '../../lib/rate-card'
+import {
+  getMixedServiceGroups,
+  hasMinimumMixedServiceInstructions,
+  MIN_MIXED_SERVICE_INSTRUCTION_LENGTH,
+} from '../../lib/mixed-service-orders'
 import { CustomerStoreContext } from './customer-store-context'
 import type {
   Invoice,
@@ -550,6 +555,11 @@ export function CustomerStoreProvider({
         toast.success(`₦${amount.toLocaleString()} added to your wallet.`)
       },
       addOrder: async ({ items, notes, pickupLocation }) => {
+        if (getMixedServiceGroups(items).length > 0 && !hasMinimumMixedServiceInstructions(notes)) {
+          throw new Error(
+            `Mixed-service instructions must contain at least ${MIN_MIXED_SERVICE_INSTRUCTION_LENGTH} characters.`,
+          )
+        }
         const lineKeys = items.map((item) => JSON.stringify([item.category.trim().toLowerCase(), item.service]))
         if (new Set(lineKeys).size !== lineKeys.length) throw new Error('Each category and service combination can only be added once.')
         const idNumber = 1042 + orders.length + 1

@@ -547,11 +547,12 @@ export default function Users() {
                 ).map(([column, label]) => {
                   const activeRule = sortRules.find((rule) => rule.column === column)
                   return (
-                    <th key={column} className="px-5 py-3 font-semibold">
+                    <th key={column} className={`${column === 'total_paid' ? 'min-w-[160px]' : ''} px-5 py-3 font-semibold`}>
                       <SortColumnHeader
                         label={label}
                         direction={activeRule?.direction ?? null}
                         onSort={(direction) => changeColumnSort(column, direction)}
+                        fillWidth={column === 'total_paid'}
                       />
                     </th>
                   )

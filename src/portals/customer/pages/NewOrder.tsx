@@ -11,6 +11,11 @@ import DeliveryOtpStatus from '../../../components/DeliveryOtpStatus'
 import { toast } from '../../../lib/toast'
 import { calculateSubscriptionBilling } from '../../../lib/subscription-billing'
 import { addOrIncrementOrderLine } from '../../../lib/order-lines'
+import {
+  getMixedServiceGroups,
+  hasMinimumMixedServiceInstructions,
+  MIN_MIXED_SERVICE_INSTRUCTION_LENGTH,
+} from '../../../lib/mixed-service-orders'
 
 type Category = {
   id: string
@@ -66,6 +71,7 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
   const [itemQuantityInputs, setItemQuantityInputs] = useState<Record<string, string>>({})
   const [pickupLocation, setPickupLocation] = useState(preferredPickupLocationName ?? '')
   const [notes, setNotes] = useState('')
+  const [notesError, setNotesError] = useState('')
   const [pickupLocationError, setPickupLocationError] = useState('')
   const [isSaving, setIsSaving] = useState(false)
   const invoicePaymentFetcher = useFetcher<{ ok: boolean; message?: string }>()
@@ -181,6 +187,7 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
           },
         ]
       : items)
+  const mixedServiceGroups = getMixedServiceGroups(displayItems)
   const total = order?.total ?? items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0)
   const itemCount = isReadOnly
     ? displayItems.reduce((sum, item) => sum + item.quantity, 0)
@@ -214,16 +221,45 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
     <>
       <label>
         <span className="mb-1.5 block text-sm font-medium text-slate-600">
-          Pickup instructions <span className="font-normal text-slate-400">(optional)</span>
+          {mixedServiceGroups.length > 0 ? 'Mixed order instructions' : 'Pickup instructions'}
+          {!isReadOnly &&
+            (mixedServiceGroups.length > 0 ? (
+              <span className="text-rose-600"> *</span>
+            ) : (
+              <span className="font-normal text-slate-400"> (optional)</span>
+            ))}
         </span>
         <textarea
           rows={3}
-          placeholder="Separate whites, handle silk carefully..."
+          placeholder={
+            mixedServiceGroups.length > 0
+              ? 'Kindly specify which are for washing and which are for washing and ironing'
+              : 'Separate whites, handle silk carefully...'
+          }
           value={order?.notes ?? notes}
-          onChange={(event) => setNotes(event.target.value)}
+          onChange={(event) => {
+            setNotes(event.target.value)
+            setNotesError('')
+          }}
           readOnly={isReadOnly}
-          className="w-full resize-none rounded-2xl border border-slate-200 bg-white px-3 py-3 text-base text-slate-900 placeholder:text-slate-400 focus:border-brand-primary focus:ring-2 focus:ring-brand-focus read-only:cursor-default read-only:bg-slate-50"
+          minLength={mixedServiceGroups.length > 0 ? MIN_MIXED_SERVICE_INSTRUCTION_LENGTH : undefined}
+          required={!isReadOnly && mixedServiceGroups.length > 0}
+          aria-invalid={Boolean(notesError)}
+          aria-describedby={notesError ? 'pickup-instructions-error' : undefined}
+          className={`w-full resize-none rounded-2xl border bg-white px-3 py-3 text-base text-slate-900 placeholder:text-slate-400 focus:ring-2 focus:ring-brand-focus read-only:cursor-default read-only:bg-slate-50 ${
+            notesError ? 'border-rose-500 focus:border-rose-500' : 'border-slate-200 focus:border-brand-primary'
+          }`}
         />
+        {mixedServiceGroups.length > 0 && !isReadOnly && notes.trim().length < MIN_MIXED_SERVICE_INSTRUCTION_LENGTH && (
+          <span className="mt-1 block text-right text-xs text-slate-500" aria-live="polite">
+            {notes.trim().length}/{MIN_MIXED_SERVICE_INSTRUCTION_LENGTH} characters required
+          </span>
+        )}
+        {notesError && (
+          <span id="pickup-instructions-error" className="mt-1.5 block text-sm text-rose-600" role="alert">
+            {notesError}
+          </span>
+        )}
       </label>
       {(!preferredPickupLocationId || isReadOnly) && (
         <label className="mt-4 block">
@@ -275,6 +311,13 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
   }
 
   const handleCreateOrder = async () => {
+    if (mixedServiceGroups.length > 0 && !hasMinimumMixedServiceInstructions(notes)) {
+      setNotesError(
+        `Please provide at least ${MIN_MIXED_SERVICE_INSTRUCTION_LENGTH} characters explaining which items are for each service.`,
+      )
+      return
+    }
+    setNotesError('')
     if (!pickupLocation) {
       setPickupLocationError('Please select a pickup location before continuing.')
       return
@@ -433,6 +476,16 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
               </label>
             </div>
           )}
+          {!isReadOnly &&
+            activePlan &&
+            !activePlan.covers_iron &&
+            (service.name === 'Iron' || service.name === 'Wash + Iron') &&
+            category && (
+              <p className="mt-3 rounded-2xl border border-brand-border bg-brand-soft p-3 text-sm leading-5 text-brand-strong">
+                Ironing is not included in your plan. You&apos;ll be charged{' '}
+                <span className="font-semibold">₦{category.rates.Iron.toLocaleString()} per piece</span> for ironing.
+              </p>
+            )}
           {!isReadOnly && availableCategories.length === 0 && (
             <p className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm text-slate-500">All available categories have been added.</p>
           )}
@@ -464,7 +517,9 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
                           <span className="font-semibold text-emerald-600"> (+{item.quantity}, vendor-added)</span>
                         ) : isReadOnly && item.vendorCountDifference !== undefined ? (
                           <span className={`font-semibold ${item.vendorCountDifference > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                            {' '}({item.vendorCountDifference > 0 ? '+' : ''}{item.vendorCountDifference})
+                            {' '}
+                            ({item.vendorCountDifference > 0 ? '+' : ''}
+                            {item.vendorCountDifference})
                           </span>
                         ) : null}
                       </p>
@@ -484,9 +539,7 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
                             if (parsedQuantity !== null) {
                               setItems((currentItems) =>
                                 currentItems.map((currentItem) =>
-                                  getOrderLineKey(currentItem) === lineKey
-                                    ? { ...currentItem, quantity: parsedQuantity }
-                                    : currentItem,
+                                  getOrderLineKey(currentItem) === lineKey ? { ...currentItem, quantity: parsedQuantity } : currentItem,
                                 ),
                               )
                             }
@@ -549,8 +602,9 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
                 </div>
               </div>
             )}
-            {order?.paymentStatus === 'Paid' && order.status !== 'Delivered' && (
-              order.dispatched && order.deliveryOtp ? (
+            {order?.paymentStatus === 'Paid' &&
+              order.status !== 'Delivered' &&
+              (order.dispatched && order.deliveryOtp ? (
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm sm:p-5">
                   <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-slate-500">Delivery OTP</p>
                   <div className="mt-2.5">
@@ -561,8 +615,7 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm sm:p-5">
                   <DeliveryOtpStatus />
                 </div>
-              )
-            )}
+              ))}
           </section>
         )}
 
@@ -639,9 +692,7 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
                 {subscriptionBillingPreview.totalAmount === 0 && <p className="font-semibold text-brand-strong">No extra charge</p>}
               </div>
             )}
-            {!subscription && !isReadOnly && (
-                <p className="text-2xl font-bold text-brand-strong">₦{total.toLocaleString()}</p>
-            )}
+            {!subscription && !isReadOnly && <p className="text-2xl font-bold text-brand-strong">₦{total.toLocaleString()}</p>}
           </div>
           {isReadOnly && order?.paymentStatus === 'Pending' && order.status !== 'Delivered' && order.total > 0 ? (
             <div className="mt-5 border-t border-brand-border/70 pt-4">

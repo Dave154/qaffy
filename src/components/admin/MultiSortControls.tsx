@@ -209,10 +209,12 @@ export function SortColumnHeader({
   label,
   direction,
   onSort,
+  fillWidth = false,
 }: {
   label: string
   direction: 'asc' | 'desc' | null
   onSort: (direction: 'asc' | 'desc') => void
+  fillWidth?: boolean
 }) {
   const [isOpen, setIsOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -236,13 +238,13 @@ export function SortColumnHeader({
     setIsOpen(false)
   }
   return (
-    <div className="relative inline-flex" ref={menuRef}>
+    <div className={`relative ${fillWidth ? 'flex w-full' : 'inline-flex'}`} ref={menuRef}>
       <button
         type="button"
         aria-haspopup="menu"
         aria-expanded={isOpen}
         onClick={() => setIsOpen((open) => !open)}
-        className="inline-flex items-center gap-1.5 rounded px-1 py-1 text-left hover:bg-slate-100"
+        className={`inline-flex items-center gap-1.5 rounded px-1 py-1 text-left hover:bg-slate-100 ${fillWidth ? 'w-full justify-between' : ''}`}
       >
         {label}
         {direction ? direction === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} /> : null}

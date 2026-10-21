@@ -1,19 +1,22 @@
-import { ArrowLeft, Banknote, CheckCircle2, CircleDollarSign, Package, Truck } from 'lucide-react'
-import { data, Link, useLoaderData } from 'react-router'
-import { useState } from 'react'
+import { ArrowLeft } from 'lucide-react'
+import { data, Link, useLoaderData, useLocation, useSearchParams } from 'react-router'
 import type { Route } from './+types/PartnerDetails'
 import { requireRole } from '../../../lib/auth.server'
+import type { OrderInvoiceStatus, OrderLifecycleStatus } from '../../../lib/orderLifecycle'
+import { sql } from '../../../lib/db.server'
 
 type PartnerType = 'vendor' | 'logistics'
+const VENDOR_ORDERS_PAGE_SIZE = 10
+const statsPeriods = ['all', 'today', 'this_month', 'last_month', 'this_year'] as const
 type PartnerOrder = {
   id: string
   publicOrderNumber: string
-  status: string
+  status: OrderLifecycleStatus
   createdAt: string
   customerItems: number
   confirmedItems: number | null
   invoiceAmount: number | null
-  invoiceStatus: string | null
+  invoiceStatus: OrderInvoiceStatus
   settlementStatus: string | null
   payoutAmount: number
 }
@@ -48,11 +51,17 @@ type PartnerDetailsData = {
     payoutEarned: number
     paidOut: number
     unreleasedPayout: number
+    processing: number
+    readyToDispatch: number
+    dispatched: number
+    delivered: number
     totalEvents: number
     pickups: number
     deliveries: number
   }
   orders: PartnerOrder[]
+  orderPagination: { page: number; pageSize: number; totalOrders: number }
+  statsPeriod: StatsPeriod
   events: PartnerEvent[]
 }
 
@@ -84,7 +93,12 @@ function maskAccount(value: string | null) {
   return `••••••${value.slice(-4)}`
 }
 
-type StatsPeriod = 'all' | 'today' | 'this_month' | 'last_month' | 'this_year'
+function toOrderInvoiceStatus(value: string | null | undefined): OrderInvoiceStatus {
+  if (value === 'paid' || value === 'unpaid') return value
+  return null
+}
+
+type StatsPeriod = (typeof statsPeriods)[number]
 
 function inStatsPeriod(value: string, period: StatsPeriod) {
   if (period === 'all') return true
@@ -97,6 +111,30 @@ function inStatsPeriod(value: string, period: StatsPeriod) {
   return dateValue.getFullYear() === previousMonth.getFullYear() && dateValue.getMonth() === previousMonth.getMonth()
 }
 
+function getStatsPeriodBounds(period: StatsPeriod, now = new Date()) {
+  if (period === 'all') return { start: null, end: null }
+  const lagosNow = new Date(now.getTime() + 60 * 60 * 1000)
+  const year = lagosNow.getUTCFullYear()
+  const month = lagosNow.getUTCMonth()
+  const lagosDate = lagosNow.getUTCDate()
+  let start: Date
+  let end: Date
+  if (period === 'today') {
+    start = new Date(Date.UTC(year, month, lagosDate) - 60 * 60 * 1000)
+    end = new Date(Date.UTC(year, month, lagosDate + 1) - 60 * 60 * 1000)
+  } else if (period === 'this_year') {
+    start = new Date(Date.UTC(year, 0, 1) - 60 * 60 * 1000)
+    end = new Date(Date.UTC(year + 1, 0, 1) - 60 * 60 * 1000)
+  } else if (period === 'this_month') {
+    start = new Date(Date.UTC(year, month, 1) - 60 * 60 * 1000)
+    end = new Date(Date.UTC(year, month + 1, 1) - 60 * 60 * 1000)
+  } else {
+    start = new Date(Date.UTC(year, month - 1, 1) - 60 * 60 * 1000)
+    end = new Date(Date.UTC(year, month, 1) - 60 * 60 * 1000)
+  }
+  return { start: start.toISOString(), end: end.toISOString() }
+}
+
 // eslint-disable-next-line react-refresh/only-export-components
 export async function loader({ request, params }: Route.LoaderArgs) {
   const auth = await requireRole(request, 'admin')
@@ -105,82 +143,141 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   if (!auth || !type || !partnerId) return data<PartnerDetailsData | null>(null, { status: 404 })
 
   const { supabase, headers } = auth
+  const url = new URL(request.url)
+  const requestedPeriod = url.searchParams.get('period')
+  const statsPeriod = statsPeriods.find((period) => period === requestedPeriod) ?? 'all'
+  const requestedPage = Number(url.searchParams.get('page') ?? 1)
+  const page = Number.isSafeInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1
   if (type === 'vendor') {
-    const [{ data: vendor }, { data: orders }, { data: settlements }, { data: settlementItems }] = await Promise.all([
-      supabase
-        .from('vendors')
-        .select(
-          'id, profile_id, business_name, status, created_at, payout_bank_name, payout_account_name, payout_account_number, payout_account_status, payout_recipient_code',
-        )
-        .eq('id', partnerId)
-        .maybeSingle(),
-      supabase
-        .from('orders')
-        .select('id, public_order_number, status, created_at, clothes_count_customer, clothes_count_vendor')
-        .eq('vendor_id', partnerId)
-        .order('created_at', { ascending: false }),
-      supabase
-        .from('vendor_settlements')
-        .select('id, amount_due, status, created_at')
-        .eq('vendor_id', partnerId)
-        .order('created_at', { ascending: false }),
-      supabase.from('vendor_settlement_items').select('settlement_id, order_item_id, confirmed_quantity, amount'),
-    ])
+    const { data: vendor } = await supabase
+      .from('vendors')
+      .select(
+        'id, profile_id, business_name, status, created_at, payout_bank_name, payout_account_name, payout_account_number, payout_account_status, payout_recipient_code',
+      )
+      .eq('id', partnerId)
+      .maybeSingle()
     if (!vendor) return data<PartnerDetailsData | null>(null, { headers, status: 404 })
 
-    const profile = (await supabase.from('profiles').select('id, name, email, phone, created_at').eq('id', vendor.profile_id).maybeSingle())
-      .data
-    const orderIds = (orders ?? []).map((order) => order.id)
-    const [{ data: invoices }, { data: settlementOrders }] = await Promise.all([
-      orderIds.length
-        ? supabase.from('invoices').select('order_id, amount, status').in('order_id', orderIds)
-        : Promise.resolve({ data: [] as Array<{ order_id: string; amount: number; status: string }> }),
-      settlements?.length
-        ? supabase
-            .from('vendor_settlement_orders')
-            .select('settlement_id, order_id')
-            .in(
-              'settlement_id',
-              settlements.map((settlement) => settlement.id),
-            )
-        : Promise.resolve({ data: [] as Array<{ settlement_id: string; order_id: string }> }),
+    const bounds = getStatsPeriodBounds(statsPeriod)
+    const [profileResult, [vendorOrderResult]] = await Promise.all([
+      supabase.from('profiles').select('id, name, email, phone, created_at').eq('id', vendor.profile_id).maybeSingle(),
+      sql<
+        {
+          total_orders: number
+          active_orders: number
+          completed_orders: number
+          confirmed_items: number
+          payout_earned: number | string
+          paid_out: number | string
+          unreleased_payout: number | string
+          processing: number
+          ready_to_dispatch: number
+          dispatched: number
+          delivered: number
+          all_order_count: number
+          orders: PartnerOrder[] | null
+        }[]
+      >`
+        with vendor_orders as (
+          select
+            o.id,
+            o.public_order_number,
+            o.status::text as status,
+            o.created_at,
+            coalesce(o.clothes_count_customer, 0)::int as customer_items,
+            o.clothes_count_vendor::int as confirmed_items,
+            invoice.amount as invoice_amount,
+            invoice.status as invoice_status,
+            settlement.status as settlement_status,
+            coalesce(settlement.payout_amount, 0)::numeric as payout_amount
+          from orders o
+          left join lateral (
+            select i.amount, i.status::text as status
+            from invoices i
+            where i.order_id = o.id
+            order by i.created_at desc
+            limit 1
+          ) invoice on true
+          left join lateral (
+            select vs.status::text as status, coalesce(sum(vsi.amount), 0) as payout_amount
+            from vendor_settlement_orders vso
+            join vendor_settlements vs on vs.id = vso.settlement_id
+            left join order_items oi on oi.order_id = vso.order_id
+            left join vendor_settlement_items vsi on vsi.order_item_id = oi.id and vsi.settlement_id = vs.id
+            where vso.order_id = o.id and vs.vendor_id = o.vendor_id
+            group by vs.id, vs.status, vs.created_at
+            order by vs.created_at desc
+            limit 1
+          ) settlement on true
+          where o.vendor_id = ${partnerId}
+        ),
+        summary as (
+          select
+            count(*) filter (where (${bounds.start}::timestamptz is null or created_at >= ${bounds.start}::timestamptz)
+              and (${bounds.end}::timestamptz is null or created_at < ${bounds.end}::timestamptz))::int as total_orders,
+            count(*) filter (where status not in ('delivered', 'cancelled')
+              and (${bounds.start}::timestamptz is null or created_at >= ${bounds.start}::timestamptz)
+              and (${bounds.end}::timestamptz is null or created_at < ${bounds.end}::timestamptz))::int as active_orders,
+            count(*) filter (where status = 'delivered'
+              and (${bounds.start}::timestamptz is null or created_at >= ${bounds.start}::timestamptz)
+              and (${bounds.end}::timestamptz is null or created_at < ${bounds.end}::timestamptz))::int as completed_orders,
+            coalesce(sum(confirmed_items) filter (where (${bounds.start}::timestamptz is null or created_at >= ${bounds.start}::timestamptz)
+              and (${bounds.end}::timestamptz is null or created_at < ${bounds.end}::timestamptz)), 0)::int as confirmed_items,
+            coalesce(sum(payout_amount) filter (where (${bounds.start}::timestamptz is null or created_at >= ${bounds.start}::timestamptz)
+              and (${bounds.end}::timestamptz is null or created_at < ${bounds.end}::timestamptz)), 0) as payout_earned,
+            coalesce(sum(payout_amount) filter (where settlement_status = 'paid'
+              and (${bounds.start}::timestamptz is null or created_at >= ${bounds.start}::timestamptz)
+              and (${bounds.end}::timestamptz is null or created_at < ${bounds.end}::timestamptz)), 0) as paid_out,
+            coalesce(sum(payout_amount) filter (where settlement_status is distinct from 'paid'
+              and (${bounds.start}::timestamptz is null or created_at >= ${bounds.start}::timestamptz)
+              and (${bounds.end}::timestamptz is null or created_at < ${bounds.end}::timestamptz)), 0) as unreleased_payout,
+            count(*) filter (where status = 'at_vendor'
+              and (${bounds.start}::timestamptz is null or created_at >= ${bounds.start}::timestamptz)
+              and (${bounds.end}::timestamptz is null or created_at < ${bounds.end}::timestamptz))::int as processing,
+            count(*) filter (where ((status = 'paid' and invoice_status = 'paid') or (status = 'invoiced' and invoice_status = 'unpaid'))
+              and (${bounds.start}::timestamptz is null or created_at >= ${bounds.start}::timestamptz)
+              and (${bounds.end}::timestamptz is null or created_at < ${bounds.end}::timestamptz))::int as ready_to_dispatch,
+            count(*) filter (where status = 'out_for_delivery'
+              and (${bounds.start}::timestamptz is null or created_at >= ${bounds.start}::timestamptz)
+              and (${bounds.end}::timestamptz is null or created_at < ${bounds.end}::timestamptz))::int as dispatched,
+            count(*) filter (where status = 'delivered'
+              and (${bounds.start}::timestamptz is null or created_at >= ${bounds.start}::timestamptz)
+              and (${bounds.end}::timestamptz is null or created_at < ${bounds.end}::timestamptz))::int as delivered
+          from vendor_orders
+        ),
+        paged_orders as (
+          select * from vendor_orders order by created_at desc, id desc
+          limit ${VENDOR_ORDERS_PAGE_SIZE} offset ${(page - 1) * VENDOR_ORDERS_PAGE_SIZE}
+        )
+        select
+          summary.*,
+          (select count(*)::int from vendor_orders) as all_order_count,
+          coalesce((select jsonb_agg(jsonb_build_object(
+            'id', id,
+            'publicOrderNumber', coalesce(public_order_number, 'QO-UNKNOWN'),
+            'status', status,
+            'createdAt', created_at,
+            'customerItems', customer_items,
+            'confirmedItems', confirmed_items,
+            'invoiceAmount', invoice_amount,
+            'invoiceStatus', invoice_status,
+            'settlementStatus', settlement_status,
+            'payoutAmount', payout_amount
+          ) order by created_at desc, id desc) from paged_orders), '[]'::jsonb) as orders
+        from summary
+      `,
     ])
-    const settlementItemIds = (settlementItems ?? []).map((item) => item.order_item_id)
-    const { data: settlementOrderItems } = settlementItemIds.length
-      ? await supabase.from('order_items').select('id, order_id').in('id', settlementItemIds)
-      : { data: [] as Array<{ id: string; order_id: string }> }
-    const orderIdByItemId = new Map((settlementOrderItems ?? []).map((item) => [item.id, item.order_id]))
-    const payoutByOrder = new Map<string, number>()
-    for (const item of settlementItems ?? []) {
-      const orderId = orderIdByItemId.get(item.order_item_id)
-      if (orderId) payoutByOrder.set(orderId, (payoutByOrder.get(orderId) ?? 0) + Number(item.amount ?? 0))
-    }
-    const invoiceByOrder = new Map((invoices ?? []).map((invoice) => [invoice.order_id, invoice]))
-    const settlementByOrder = new Map(
-      (settlementOrders ?? []).map((entry) => [entry.order_id, settlements?.find((settlement) => settlement.id === entry.settlement_id)]),
-    )
-    const payoutEarned = (settlementItems ?? [])
-      .filter((item) => settlements?.some((settlement) => settlement.id === item.settlement_id))
-      .reduce((sum, item) => sum + Number(item.amount ?? 0), 0)
-    const paidOut = (settlements ?? [])
-      .filter((settlement) => settlement.status === 'paid')
-      .reduce((sum, settlement) => sum + Number(settlement.amount_due ?? 0), 0)
-    const unreleasedPayout = (settlements ?? [])
-      .filter((settlement) => settlement.status === 'pending')
-      .reduce((sum, settlement) => sum + Number(settlement.amount_due ?? 0), 0)
-    const partnerOrders: PartnerOrder[] = (orders ?? []).map((order) => ({
-      id: order.id,
-      publicOrderNumber: order.public_order_number ?? 'QO-UNKNOWN',
+    const profile = profileResult.data
+    const statsRow = vendorOrderResult
+    const partnerOrders: PartnerOrder[] = (statsRow.orders ?? []).map((order) => ({
+      ...order,
       status: order.status,
-      createdAt: order.created_at,
-      customerItems: Number(order.clothes_count_customer ?? 0),
-      confirmedItems: order.clothes_count_vendor === null ? null : Number(order.clothes_count_vendor),
-      invoiceAmount: invoiceByOrder.get(order.id) ? Number(invoiceByOrder.get(order.id)?.amount) : null,
-      invoiceStatus: invoiceByOrder.get(order.id)?.status ?? null,
-      settlementStatus: settlementByOrder.get(order.id)?.status ?? null,
-      payoutAmount: payoutByOrder.get(order.id) ?? 0,
+      invoiceStatus: toOrderInvoiceStatus(order.invoiceStatus),
+      customerItems: Number(order.customerItems),
+      confirmedItems: order.confirmedItems === null ? null : Number(order.confirmedItems),
+      invoiceAmount: order.invoiceAmount === null ? null : Number(order.invoiceAmount),
+      payoutAmount: Number(order.payoutAmount),
     }))
-    const confirmedItems = partnerOrders.reduce((sum, order) => sum + (order.confirmedItems ?? 0), 0)
     return data<PartnerDetailsData>(
       {
         type,
@@ -199,18 +296,24 @@ export async function loader({ request, params }: Route.LoaderArgs) {
           recipientReady: Boolean(vendor.payout_recipient_code),
         },
         stats: {
-          totalOrders: partnerOrders.length,
-          activeOrders: partnerOrders.filter((order) => !['delivered', 'cancelled'].includes(order.status)).length,
-          completedOrders: partnerOrders.filter((order) => order.status === 'delivered').length,
-          confirmedItems,
-          payoutEarned,
-          paidOut,
-          unreleasedPayout,
+          totalOrders: Number(statsRow.total_orders),
+          activeOrders: Number(statsRow.active_orders),
+          completedOrders: Number(statsRow.completed_orders),
+          confirmedItems: Number(statsRow.confirmed_items),
+          payoutEarned: Number(statsRow.payout_earned),
+          paidOut: Number(statsRow.paid_out),
+          unreleasedPayout: Number(statsRow.unreleased_payout),
+          processing: Number(statsRow.processing),
+          readyToDispatch: Number(statsRow.ready_to_dispatch),
+          dispatched: Number(statsRow.dispatched),
+          delivered: Number(statsRow.delivered),
           totalEvents: 0,
           pickups: 0,
           deliveries: 0,
         },
         orders: partnerOrders,
+        orderPagination: { page, pageSize: VENDOR_ORDERS_PAGE_SIZE, totalOrders: Number(statsRow.all_order_count) },
+        statsPeriod,
         events: [],
       },
       { headers, status: 200 },
@@ -269,53 +372,53 @@ export async function loader({ request, params }: Route.LoaderArgs) {
         payoutEarned: 0,
         paidOut: 0,
         unreleasedPayout: 0,
+        processing: 0,
+        readyToDispatch: 0,
+        dispatched: 0,
+        delivered: 0,
         totalEvents: partnerEvents.length,
         pickups,
         deliveries,
       },
       orders: [],
+      orderPagination: { page: 1, pageSize: VENDOR_ORDERS_PAGE_SIZE, totalOrders: 0 },
+      statsPeriod,
       events: partnerEvents,
     },
     { headers, status: 200 },
   )
 }
 
-function StatCard({ label: title, value, icon: Icon, tone }: { label: string; value: string; icon: typeof Package; tone: string }) {
+function StatCard({ label: title, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className={`flex h-9 w-9 items-center justify-center rounded-xl ${tone}`}>
-        <Icon size={17} />
-      </div>
-      <p className="mt-4 text-[10px] font-semibold capitalize tracking-[0.14em] text-slate-500">{title}</p>
-      <p className="mt-1 text-2xl font-bold text-slate-900">{value}</p>
+    <div className="min-w-0 px-4 py-1 first:pl-0 last:pr-0">
+      <p className="text-sm font-medium text-slate-600">{title}</p>
+      <p className="mt-1 text-xl font-semibold tabular-nums text-slate-900">{value}</p>
     </div>
   )
 }
 
 export default function PartnerDetails() {
   const details = useLoaderData<typeof loader>()
+  const location = useLocation()
+  const [searchParams, setSearchParams] = useSearchParams()
   if (!details)
     return <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">Partner not found.</div>
-  const [statsPeriod, setStatsPeriod] = useState<StatsPeriod>('all')
   const { partner, type } = details
   const isVendor = type === 'vendor'
-  const visibleOrders = details.orders.filter((order) => inStatsPeriod(order.createdAt, statsPeriod))
+  const statsPeriod = details.statsPeriod
+  const currentPage = details.orderPagination.page
+  const totalOrderPages = Math.max(1, Math.ceil(details.orderPagination.totalOrders / details.orderPagination.pageSize))
+  const firstOrderNumber = details.orderPagination.totalOrders === 0 ? 0 : (currentPage - 1) * details.orderPagination.pageSize + 1
+  const lastOrderNumber = Math.min(currentPage * details.orderPagination.pageSize, details.orderPagination.totalOrders)
+  const pageHref = (page: number) => {
+    const params = new URLSearchParams(searchParams)
+    params.set('page', String(page))
+    return `?${params.toString()}`
+  }
   const visibleEvents = details.events.filter((event) => inStatsPeriod(event.createdAt, statsPeriod))
   const stats = isVendor
-    ? {
-        totalOrders: visibleOrders.length,
-        activeOrders: visibleOrders.filter((order) => !['delivered', 'cancelled'].includes(order.status)).length,
-        completedOrders: visibleOrders.filter((order) => order.status === 'delivered').length,
-        confirmedItems: visibleOrders.reduce((sum, order) => sum + (order.confirmedItems ?? 0), 0),
-        payoutEarned: visibleOrders.reduce((sum, order) => sum + order.payoutAmount, 0),
-        paidOut: visibleOrders.filter((order) => order.settlementStatus === 'paid').reduce((sum, order) => sum + order.payoutAmount, 0),
-        unreleasedPayout: visibleOrders
-          .filter((order) => order.settlementStatus !== 'paid')
-          .reduce((sum, order) => sum + order.payoutAmount, 0),
-        totalEvents: 0,
-        pickups: 0,
-        deliveries: 0,
-      }
+    ? details.stats
     : {
         totalOrders: new Set(visibleEvents.map((event) => event.orderId)).size,
         activeOrders: 0,
@@ -329,7 +432,7 @@ export default function PartnerDetails() {
         deliveries: visibleEvents.filter((event) => event.eventType === 'delivered').length,
       }
   return (
-    <div className="flex flex-col space-y-6 pb-10 [&>section:nth-of-type(1)]:order-3 [&>section:nth-of-type(2)]:order-2 [&>section:nth-of-type(3)]:order-4">
+    <div className="flex flex-col space-y-6 pb-10 [&>section:nth-of-type(1)]:order-3 [&>section:nth-of-type(2)]:order-2 [&>section:nth-of-type(3)]:order-4 [&>section:nth-of-type(4)]:order-5">
       <Link
         to={isVendor ? '/admin/partners/vendors' : '/admin/partners/logistics'}
         className="inline-flex items-center gap-2 text-sm font-semibold text-slate-600 hover:text-brand-primary"
@@ -341,7 +444,14 @@ export default function PartnerDetails() {
         <select
           aria-label="Stats period"
           value={statsPeriod}
-          onChange={(event) => setStatsPeriod(event.target.value as StatsPeriod)}
+          onChange={(event) =>
+            setSearchParams((current) => {
+              const next = new URLSearchParams(current)
+              next.set('period', event.target.value)
+              next.delete('page')
+              return next
+            })
+          }
           className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
         >
           <option value="all">All time</option>
@@ -402,28 +512,39 @@ export default function PartnerDetails() {
           </div>
         )}
       </section>
-      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <section className="grid grid-cols-2 gap-y-5 border-y border-slate-200 bg-white py-4 sm:grid-cols-4 sm:divide-x sm:divide-slate-200">
         {isVendor ? (
           <>
-            <StatCard label="Total orders" value={String(stats.totalOrders)} icon={Package} tone="bg-blue-50 text-blue-700" />
-            <StatCard label="Active orders" value={String(stats.activeOrders)} icon={Truck} tone="bg-amber-50 text-amber-700" />
-            <StatCard
-              label="Payout earned"
-              value={money(stats.payoutEarned)}
-              icon={CircleDollarSign}
-              tone="bg-emerald-50 text-emerald-700"
-            />
-            <StatCard label="Unreleased payout" value={money(stats.unreleasedPayout)} icon={Banknote} tone="bg-orange-50 text-orange-700" />
+            <StatCard label="Total orders" value={String(stats.totalOrders)} />
+            <StatCard label="Active orders" value={String(stats.activeOrders)} />
+            <StatCard label="Payout earned" value={money(stats.payoutEarned)} />
+            <StatCard label="Unreleased payout" value={money(stats.unreleasedPayout)} />
           </>
         ) : (
           <>
-            <StatCard label="Orders handled" value={String(stats.totalOrders)} icon={Package} tone="bg-blue-50 text-blue-700" />
-            <StatCard label="Total events" value={String(stats.totalEvents)} icon={Truck} tone="bg-violet-50 text-violet-700" />
-            <StatCard label="Pickups" value={String(stats.pickups)} icon={CheckCircle2} tone="bg-emerald-50 text-emerald-700" />
-            <StatCard label="Deliveries" value={String(stats.deliveries)} icon={CheckCircle2} tone="bg-amber-50 text-amber-700" />
+            <StatCard label="Orders handled" value={String(stats.totalOrders)} />
+            <StatCard label="Total events" value={String(stats.totalEvents)} />
+            <StatCard label="Pickups" value={String(stats.pickups)} />
+            <StatCard label="Deliveries" value={String(stats.deliveries)} />
           </>
         )}
       </section>
+      {isVendor && (
+        <section aria-labelledby="vendor-workload-heading" className="border-b border-slate-200 pb-5">
+          <div className="mb-4">
+            <h2 id="vendor-workload-heading" className="text-base font-semibold text-slate-900">
+              Vendor order workload
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">Orders assigned to this vendor in the selected period.</p>
+          </div>
+          <div className="grid grid-cols-2 gap-y-5 sm:grid-cols-4 sm:divide-x sm:divide-slate-200">
+            <StatCard label="Processing" value={String(details.stats.processing)} />
+            <StatCard label="Ready to dispatch" value={String(details.stats.readyToDispatch)} />
+            <StatCard label="Dispatched" value={String(details.stats.dispatched)} />
+            <StatCard label="Delivered" value={String(details.stats.delivered)} />
+          </div>
+        </section>
+      )}
       {isVendor ? (
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex items-center justify-between">
@@ -431,7 +552,7 @@ export default function PartnerDetails() {
               <h2 className="text-lg font-bold text-slate-900">Vendor orders</h2>
               <p className="mt-1 text-sm text-slate-500">Orders assigned to this vendor and their settlement state.</p>
             </div>
-            <span className="text-sm text-slate-500">{details.orders.length} records</span>
+            <span className="text-sm text-slate-500">{details.orderPagination.totalOrders} records</span>
           </div>
           <div className="mt-4 overflow-x-auto">
             <table className="w-full min-w-[760px] text-left">
@@ -445,17 +566,23 @@ export default function PartnerDetails() {
                 </tr>
               </thead>
               <tbody>
-                {details.orders.length === 0 ? (
+                {details.orderPagination.totalOrders === 0 ? (
                   <tr>
                     <td colSpan={5} className="px-4 py-8 text-center text-sm text-slate-500">
                       No orders assigned yet.
                     </td>
                   </tr>
-                ) : (
+                ) : details.orders.length > 0 ? (
                   details.orders.map((order) => (
                     <tr key={order.id} className="border-b border-slate-100 last:border-0">
                       <td className="px-4 py-4">
-                        <p className="font-semibold text-slate-900">{order.publicOrderNumber}</p>
+                        <Link
+                          to={`/admin/orders?orderId=${encodeURIComponent(order.id)}`}
+                          state={{ returnTo: `${location.pathname}${location.search}` }}
+                          className="font-semibold text-brand-primary hover:underline"
+                        >
+                          {order.publicOrderNumber}
+                        </Link>
                         <p className="mt-1 text-xs capitalize text-slate-500">{label(order.status)}</p>
                       </td>
                       <td className="px-4 py-4 text-sm text-slate-600">{date(order.createdAt)}</td>
@@ -474,10 +601,50 @@ export default function PartnerDetails() {
                       </td>
                     </tr>
                   ))
+                ) : (
+                  <tr>
+                    <td colSpan={5} className="px-4 py-8 text-center text-sm text-slate-500">
+                      No orders on this page.
+                    </td>
+                  </tr>
                 )}
               </tbody>
             </table>
           </div>
+          {details.orderPagination.totalOrders > details.orderPagination.pageSize && (
+            <div className="mt-4 flex flex-col gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm text-slate-500">
+                Showing {firstOrderNumber}–{lastOrderNumber} of {details.orderPagination.totalOrders} orders
+              </p>
+              <nav aria-label="Vendor order pagination" className="flex items-center gap-2">
+                <Link
+                  to={pageHref(Math.max(1, currentPage - 1))}
+                  aria-disabled={currentPage <= 1}
+                  className={`rounded-lg border px-3 py-2 text-sm font-medium ${
+                    currentPage <= 1
+                      ? 'pointer-events-none border-slate-200 text-slate-400'
+                      : 'border-slate-300 text-slate-700 hover:border-brand-primary hover:text-brand-primary'
+                  }`}
+                >
+                  Previous
+                </Link>
+                <span className="px-2 text-sm text-slate-600">
+                  Page {currentPage} of {totalOrderPages}
+                </span>
+                <Link
+                  to={pageHref(Math.min(totalOrderPages, currentPage + 1))}
+                  aria-disabled={currentPage >= totalOrderPages}
+                  className={`rounded-lg border px-3 py-2 text-sm font-medium ${
+                    currentPage >= totalOrderPages
+                      ? 'pointer-events-none border-slate-200 text-slate-400'
+                      : 'border-slate-300 text-slate-700 hover:border-brand-primary hover:text-brand-primary'
+                  }`}
+                >
+                  Next
+                </Link>
+              </nav>
+            </div>
+          )}
         </section>
       ) : (
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">

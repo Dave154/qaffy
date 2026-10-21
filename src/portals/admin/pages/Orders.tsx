@@ -445,9 +445,11 @@ function searchWithoutOrderId(url: URL) {
   return params.toString()
 }
 
-function getUserDetailsReturnPath(state: unknown) {
+function getOrderDetailsReturnPath(state: unknown) {
   if (!state || typeof state !== 'object' || !('returnTo' in state) || typeof state.returnTo !== 'string') return null
-  return /^\/admin\/users\/[^/?#]+(?:\?[^#]*)?$/.test(state.returnTo) ? state.returnTo : null
+  return /^\/admin\/(?:users\/[^/?#]+|partners\/vendor\/[^/?#]+)(?:\?[^#]*)?$/.test(state.returnTo)
+    ? state.returnTo
+    : null
 }
 
 export function shouldRevalidate({ currentUrl, nextUrl, formMethod, defaultShouldRevalidate }: ShouldRevalidateFunctionArgs) {
@@ -1099,7 +1101,7 @@ export default function Orders() {
   const [draftStartDate, setDraftStartDate] = useState(startDate)
   const [draftEndDate, setDraftEndDate] = useState(endDate)
   const requestedOrderId = searchParams.get('orderId')
-  const userDetailsReturnPath = getUserDetailsReturnPath(location.state)
+  const orderDetailsReturnPath = getOrderDetailsReturnPath(location.state)
   const selectedOrder = requestedOrderId
     ? (orders.find((order) => order.id === requestedOrderId) ?? (loadedSelectedOrder?.id === requestedOrderId ? loadedSelectedOrder : null))
     : null
@@ -1466,8 +1468,8 @@ export default function Orders() {
         <OrderDetails
           order={selectedOrder}
           onClose={() => {
-            if (userDetailsReturnPath) {
-              navigate(userDetailsReturnPath)
+            if (orderDetailsReturnPath) {
+              navigate(orderDetailsReturnPath)
               return
             }
             setSearchParams((current) => {
