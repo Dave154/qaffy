@@ -1,5 +1,5 @@
 import { ChevronLeft, ChevronRight, LoaderCircle, Search, SlidersHorizontal, UserRound, X } from 'lucide-react'
-import { Form, useLoaderData, useNavigate, useNavigation } from 'react-router'
+import { Form, Link, useLoaderData, useNavigate, useNavigation } from 'react-router'
 import { useState } from 'react'
 import type { Route } from './+types/Users'
 import { MultiSortManager, SortColumnHeader, type MultiSortRule } from '../../../components/admin/MultiSortControls'
@@ -38,6 +38,7 @@ type UsersData = {
   roleFilter: string
   subscriptionFilter: string
   subscriptionPlans: Array<{ id: string; name: string; type: string }>
+  activeSubscribers: number
   dateMode: 'all' | 'today' | 'this_month' | 'last_month' | 'custom'
   sortRules: UserSortRule[]
   startDate: string
@@ -346,6 +347,7 @@ export default function Users() {
     roleFilter,
     subscriptionFilter,
     subscriptionPlans,
+    activeSubscribers,
     dateMode,
     sortRules,
     startDate,
@@ -478,7 +480,15 @@ export default function Users() {
       <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="flex flex-col gap-3 border-b border-slate-200 p-4">
           <div>
-            <p className="text-sm text-slate-500">{total.toLocaleString()} matching registered customers</p>
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
+              <p className="text-slate-500">{total.toLocaleString()} matching registered customers</p>
+              <Link
+                to="/admin/users?subscription=active"
+                className="font-semibold text-brand-primary hover:text-brand-primary-hover"
+              >
+                {activeSubscribers.toLocaleString()} active subscribers
+              </Link>
+            </div>
           </div>
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <Form method="get" className="relative w-full lg:max-w-md">
