@@ -13,7 +13,7 @@ import {
 } from 'react-router'
 import { useEffect, useRef, useState } from 'react'
 import { waitUntil } from '@vercel/functions'
-import { ChevronLeft, ChevronRight, LoaderCircle, RefreshCw, SlidersHorizontal, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, CircleAlert, LoaderCircle, RefreshCw, SlidersHorizontal, X } from 'lucide-react'
 import type { Route } from './+types/Orders'
 import { MultiSortManager, SortColumnHeader } from '../../../components/admin/MultiSortControls'
 import { requireRole } from '../../../lib/auth.server'
@@ -22,6 +22,7 @@ import { sql } from '../../../lib/db.server'
 import { toast } from '../../../lib/toast'
 import { isReadyForDispatch, isReadyForFinalDelivery } from '../../../lib/orderLifecycle'
 import { sendCustomerNotification } from '../../../lib/notifications.server'
+import { issueReferralRewards, sendReferralRewardNotifications } from '../../../lib/wallet.server'
 import { loadAdminOrders } from '../../../lib/admin-orders.server'
 
 type AdminOrder = {
@@ -52,6 +53,7 @@ type AdminOrder = {
   invoice: {
     amount: number
     status: 'unpaid' | 'paid'
+    payment_method: 'wallet' | 'offline' | null
     paid_at: string | null
     billing_breakdown: BillingBreakdown | null
   } | null
@@ -59,17 +61,7 @@ type AdminOrder = {
 }
 type BillingBreakdown = { coveredUnits: number; subscriberAmount: number; regularAmount: number }
 type SortColumn =
-  | 'created'
-  | 'order'
-  | 'pickup'
-  | 'delivery'
-  | 'customer'
-  | 'qaffy_id'
-  | 'order_type'
-  | 'location'
-  | 'items'
-  | 'payment'
-  | 'status'
+  'created' | 'order' | 'pickup' | 'delivery' | 'customer' | 'qaffy_id' | 'order_type' | 'location' | 'items' | 'payment' | 'status'
 type SortRule = { column: SortColumn; direction: 'asc' | 'desc' }
 
 const sortableColumns: Array<{ value: SortColumn; label: string }> = [
@@ -94,8 +86,17 @@ export async function action({ request }: Route.ActionArgs) {
   const formData = await request.formData()
   const intent = String(formData.get('intent') ?? '')
   const orderId = String(formData.get('orderId') ?? '')
-  const orderActions = ['cancel-order', 'mark-picked-up', 'dispatch-order', 'mark-delivered'] as const
-  if (!orderActions.includes(intent as (typeof orderActions)[number]) || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(orderId)) {
+  const orderActions = [
+    'cancel-order',
+    'mark-picked-up',
+    'dispatch-order',
+    'mark-delivered',
+    'record-offline-payment-and-complete',
+  ] as const
+  if (
+    !orderActions.includes(intent as (typeof orderActions)[number]) ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(orderId)
+  ) {
     return data({ ok: false, intent, orderId, message: 'Invalid order action.' }, { status: 400, headers: auth.headers })
   }
 
@@ -277,6 +278,119 @@ export async function action({ request }: Route.ActionArgs) {
       return data({ ok: true, intent, orderId }, { headers: auth.headers })
     }
 
+    if (intent === 'record-offline-payment-and-complete') {
+      const result = await sql.begin(async (tx) => {
+        const [invoice] = await tx`
+          select i.id as invoice_id, i.amount, o.id as order_id, o.customer_id,
+            o.public_order_number, o.status::text as order_status
+          from orders o
+          join invoices i on i.order_id = o.id
+          where o.id = ${orderId}
+            and o.status in ('invoiced', 'out_for_delivery')
+            and o.clothes_count_vendor is not null
+            and i.status = 'unpaid'
+          for update of o, i
+        `
+        if (!invoice) return null
+
+        const [paidInvoice] = await tx`
+          update invoices
+          set status = 'paid', payment_method = 'offline', paid_at = now()
+          where id = ${invoice.invoice_id} and status = 'unpaid'
+          returning id
+        `
+        if (!paidInvoice) return null
+
+        const [deliveredOrder] = await tx`
+          update orders
+          set status = 'delivered', delivery_otp = null
+          where id = ${invoice.order_id} and status = ${invoice.order_status}
+          returning id
+        `
+        if (!deliveredOrder) throw new Error('Order status changed while completing offline payment.')
+
+        await tx`
+          insert into order_logistics_events (order_id, agent_profile_id, event_type)
+          values (${invoice.order_id}, null, 'delivered')
+        `
+        await tx`
+          insert into admin_audit_events (admin_profile_id, action, entity_type, entity_id, metadata)
+          values (
+            ${auth.profile.id},
+            'admin_offline_order_payment_recorded',
+            'order',
+            ${invoice.order_id},
+            ${tx.json({
+              fromStatus: invoice.order_status,
+              toStatus: 'delivered',
+              paymentMethod: 'offline',
+              invoiceId: invoice.invoice_id,
+              amount: Number(invoice.amount),
+            })}
+          )
+        `
+        const referralRewardRecipients = await issueReferralRewards(tx, invoice.customer_id, invoice.order_id, Number(invoice.amount))
+
+        return {
+          id: invoice.order_id,
+          invoiceId: invoice.invoice_id,
+          customerId: invoice.customer_id,
+          publicOrderNumber: invoice.public_order_number,
+          amount: Number(invoice.amount),
+          referralRewardRecipients,
+        }
+      })
+
+      if (!result) {
+        return data(
+          {
+            ok: false,
+            intent,
+            orderId,
+            message: 'This order needs an unpaid invoice and confirmed vendor counts before offline payment can be recorded.',
+          },
+          { status: 409, headers: auth.headers },
+        )
+      }
+
+      scheduleAdminOrderNotification(
+        Promise.all([
+          sendCustomerNotification({
+            eventKey: `invoice:${result.invoiceId}:offline-payment-recorded`,
+            customerId: result.customerId,
+            notificationType: 'payment_confirmed',
+            orderId: result.id,
+            payload: {
+              title: 'Offline payment recorded',
+              body: `An offline payment of ${money(result.amount)} was recorded for order ${result.publicOrderNumber}.`,
+              details: [
+                `Amount recorded: ${money(result.amount)}`,
+                `Order: ${result.publicOrderNumber}`,
+                'This payment was handled outside Qaffy; no wallet balance was used.',
+              ],
+              url: `/orders?order=${encodeURIComponent(result.publicOrderNumber)}`,
+              tag: `order:${result.id}:offline-payment`,
+            },
+          }),
+          sendCustomerNotification({
+            eventKey: `delivery:${result.id}:confirmed`,
+            customerId: result.customerId,
+            notificationType: 'order_delivered',
+            orderId: result.id,
+            payload: {
+              title: 'Your order was delivered',
+              body: 'Your Qaffy laundry order has been delivered.',
+              details: [`Order: ${result.publicOrderNumber}`, 'Your laundry has been handed back to you.'],
+              url: `/orders?order=${encodeURIComponent(result.publicOrderNumber)}`,
+              tag: `order:${result.id}:delivery`,
+            },
+          }),
+          sendReferralRewardNotifications(result.referralRewardRecipients),
+        ]),
+      )
+      return data({ ok: true, intent, orderId }, { headers: auth.headers })
+    }
+
     const [cancelledOrder] = await sql`
       update orders
       set status = 'cancelled'
@@ -299,9 +413,10 @@ export async function action({ request }: Route.ActionArgs) {
         ok: false,
         intent,
         orderId,
-        message: intent === 'cancel-order'
-          ? 'The order could not be cancelled. Please try again.'
-          : 'The order update could not be completed. Please try again.',
+        message:
+          intent === 'cancel-order'
+            ? 'The order could not be cancelled. Please try again.'
+            : 'The order update could not be completed. Please try again.',
       },
       { status: 500, headers: auth.headers },
     )
@@ -330,17 +445,14 @@ function searchWithoutOrderId(url: URL) {
   return params.toString()
 }
 
-function getUserDetailsReturnPath(state: unknown) {
+function getOrderDetailsReturnPath(state: unknown) {
   if (!state || typeof state !== 'object' || !('returnTo' in state) || typeof state.returnTo !== 'string') return null
-  return /^\/admin\/users\/[^/?#]+(?:\?[^#]*)?$/.test(state.returnTo) ? state.returnTo : null
+  return /^\/admin\/(?:users\/[^/?#]+|partners\/vendor\/[^/?#]+)(?:\?[^#]*)?$/.test(state.returnTo)
+    ? state.returnTo
+    : null
 }
 
-export function shouldRevalidate({
-  currentUrl,
-  nextUrl,
-  formMethod,
-  defaultShouldRevalidate,
-}: ShouldRevalidateFunctionArgs) {
+export function shouldRevalidate({ currentUrl, nextUrl, formMethod, defaultShouldRevalidate }: ShouldRevalidateFunctionArgs) {
   const onlyOrderSelectionChanged =
     !formMethod &&
     currentUrl.pathname === '/admin/orders' &&
@@ -402,7 +514,9 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
   const handledCancelResponse = useRef<typeof cancelFetcher.data>(null)
   const workflowFetcher = useFetcher<typeof action>()
   const handledWorkflowResponse = useRef<typeof workflowFetcher.data>(null)
+  const location = useLocation()
   const revalidator = useRevalidator()
+  const [confirmOfflinePayment, setConfirmOfflinePayment] = useState(false)
   const receivedCounts = getInitialReceivedCounts(
     order.items.map((item) => ({
       id: item.id,
@@ -448,28 +562,39 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
       'mark-picked-up': 'Order marked as picked up.',
       'dispatch-order': 'Order dispatched.',
       'mark-delivered': 'Order marked as delivered.',
+      'record-offline-payment-and-complete': 'Offline payment recorded and order completed.',
     }
     const completedIntent = 'intent' in result ? result.intent : ''
     toast.success(successMessages[completedIntent] ?? 'Order updated.')
     revalidator.revalidate()
   }, [workflowFetcher.data, workflowFetcher.state, revalidator])
 
-  const submitWorkflowAction = (intent: 'mark-picked-up' | 'dispatch-order' | 'mark-delivered') => {
+  const submitWorkflowAction = (intent: 'mark-picked-up' | 'dispatch-order' | 'mark-delivered' | 'record-offline-payment-and-complete') => {
     workflowFetcher.submit({ intent, orderId: order.id }, { method: 'post' })
+  }
+  const submitOfflinePaymentAction = () => {
+    setConfirmOfflinePayment(true)
   }
   const workflowActionPending = workflowFetcher.state !== 'idle'
   const pendingWorkflowIntent = workflowActionPending ? String(workflowFetcher.formData?.get('intent') ?? '') : ''
   const canDispatch = isReadyForDispatch(order.status, order.invoice?.status)
   const canDeliver = isReadyForFinalDelivery(order.status, order.invoice?.status)
-  const workflowGuidance = order.status === 'pending_pickup'
-    ? 'Confirm the order has been collected, then mark it as picked up.'
-    : canDispatch
-      ? order.invoice?.status === 'paid'
-        ? 'This order is ready to go out for delivery.'
-        : 'This order can be dispatched now. Delivery can be completed after the invoice is paid.'
-      : canDeliver
-        ? 'Confirm the handoff to the customer to complete this order.'
-        : null
+  const canRecordOfflinePayment =
+    order.invoice?.status === 'unpaid' && order.clothes_count_vendor !== null && ['invoiced', 'out_for_delivery'].includes(order.status)
+  const workflowGuidance =
+    order.status === 'pending_pickup'
+      ? 'Confirm the order has been collected, then mark it as picked up.'
+      : canRecordOfflinePayment
+        ? canDispatch
+          ? 'Choose the normal dispatch flow or record payment if the order was already paid and delivered outside Qaffy.'
+          : 'If the customer has already paid and received the order outside Qaffy, record it as complete.'
+        : canDispatch
+          ? order.invoice?.status === 'paid'
+            ? 'This order is ready to go out for delivery.'
+            : 'This order can be dispatched now. Delivery can be completed after the invoice is paid.'
+          : canDeliver
+            ? 'Confirm the handoff to the customer to complete this order.'
+            : null
 
   return (
     <div className="fixed inset-0 z-40 flex items-end justify-center overflow-y-auto bg-slate-950/40 p-0 sm:items-center sm:p-4">
@@ -491,51 +616,86 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
           </button>
         </header>
         {workflowGuidance && (
-          <section
-            className="mt-5 rounded-2xl border border-brand-primary/20 bg-brand-primary/5 p-4"
-            aria-label="Next order action"
-          >
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h4 className="font-bold text-slate-900">Next step</h4>
-                <p className="mt-1 text-sm text-slate-600">{workflowGuidance}</p>
+          <section className="mt-5 rounded-2xl border border-brand-primary/20 bg-brand-primary/5 p-4" aria-label="Next order action">
+            {canRecordOfflinePayment ? (
+              <>
+                <h4 className="font-bold text-slate-900">Choose next step</h4>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  {canDispatch && (
+                    <div className="flex flex-col items-start rounded-xl border border-slate-200 bg-white p-4">
+                      <p className="font-semibold text-slate-900">Dispatch order</p>
+                      <p className="mt-1 flex-1 text-sm text-slate-600">Payment remains due at handoff.</p>
+                      <button
+                        type="button"
+                        onClick={() => submitWorkflowAction('dispatch-order')}
+                        disabled={workflowActionPending || cancelFetcher.state !== 'idle'}
+                        className="mt-4 inline-flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {pendingWorkflowIntent === 'dispatch-order' && <LoaderCircle size={15} className="animate-spin" />}
+                        {pendingWorkflowIntent === 'dispatch-order' ? 'Saving...' : 'Dispatch order'}
+                      </button>
+                    </div>
+                  )}
+                  <div className="flex flex-col items-start rounded-xl border border-brand-border bg-brand-soft/60 p-4">
+                    <p className="font-semibold text-slate-900">Already paid and delivered?</p>
+                    <p className="mt-1 flex-1 text-sm text-slate-600">Record the offline payment to complete the order.</p>
+                    <button
+                      type="button"
+                      onClick={submitOfflinePaymentAction}
+                      disabled={workflowActionPending || cancelFetcher.state !== 'idle'}
+                      className="mt-4 inline-flex items-center gap-2 rounded-lg border border-brand-primary/40 bg-white px-4 py-2 text-sm font-semibold text-brand-primary hover:bg-brand-soft disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {pendingWorkflowIntent === 'record-offline-payment-and-complete' && (
+                        <LoaderCircle size={15} className="animate-spin" />
+                      )}
+                      {pendingWorkflowIntent === 'record-offline-payment-and-complete' ? 'Recording...' : 'Record & complete'}
+                    </button>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h4 className="font-bold text-slate-900">Next step</h4>
+                  <p className="mt-1 text-sm text-slate-600">{workflowGuidance}</p>
+                </div>
+                <div className="flex shrink-0 flex-wrap gap-2">
+                  {order.status === 'pending_pickup' && (
+                    <button
+                      type="button"
+                      onClick={() => submitWorkflowAction('mark-picked-up')}
+                      disabled={workflowActionPending || cancelFetcher.state !== 'idle'}
+                      className="inline-flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {pendingWorkflowIntent === 'mark-picked-up' && <LoaderCircle size={15} className="animate-spin" />}
+                      {pendingWorkflowIntent === 'mark-picked-up' ? 'Saving...' : 'Mark picked up'}
+                    </button>
+                  )}
+                  {canDispatch && (
+                    <button
+                      type="button"
+                      onClick={() => submitWorkflowAction('dispatch-order')}
+                      disabled={workflowActionPending || cancelFetcher.state !== 'idle'}
+                      className="inline-flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {pendingWorkflowIntent === 'dispatch-order' && <LoaderCircle size={15} className="animate-spin" />}
+                      {pendingWorkflowIntent === 'dispatch-order' ? 'Saving...' : 'Dispatch order'}
+                    </button>
+                  )}
+                  {canDeliver && (
+                    <button
+                      type="button"
+                      onClick={() => submitWorkflowAction('mark-delivered')}
+                      disabled={workflowActionPending || cancelFetcher.state !== 'idle'}
+                      className="inline-flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {pendingWorkflowIntent === 'mark-delivered' && <LoaderCircle size={15} className="animate-spin" />}
+                      {pendingWorkflowIntent === 'mark-delivered' ? 'Saving...' : 'Mark delivered'}
+                    </button>
+                  )}
+                </div>
               </div>
-              <div className="flex shrink-0 flex-wrap gap-2">
-                {order.status === 'pending_pickup' && (
-                  <button
-                    type="button"
-                    onClick={() => submitWorkflowAction('mark-picked-up')}
-                    disabled={workflowActionPending || cancelFetcher.state !== 'idle'}
-                    className="inline-flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {pendingWorkflowIntent === 'mark-picked-up' && <LoaderCircle size={15} className="animate-spin" />}
-                    {pendingWorkflowIntent === 'mark-picked-up' ? 'Saving...' : 'Mark picked up'}
-                  </button>
-                )}
-                {canDispatch && (
-                  <button
-                    type="button"
-                    onClick={() => submitWorkflowAction('dispatch-order')}
-                    disabled={workflowActionPending || cancelFetcher.state !== 'idle'}
-                    className="inline-flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {pendingWorkflowIntent === 'dispatch-order' && <LoaderCircle size={15} className="animate-spin" />}
-                    {pendingWorkflowIntent === 'dispatch-order' ? 'Saving...' : 'Dispatch order'}
-                  </button>
-                )}
-                {canDeliver && (
-                  <button
-                    type="button"
-                    onClick={() => submitWorkflowAction('mark-delivered')}
-                    disabled={workflowActionPending || cancelFetcher.state !== 'idle'}
-                    className="inline-flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {pendingWorkflowIntent === 'mark-delivered' && <LoaderCircle size={15} className="animate-spin" />}
-                    {pendingWorkflowIntent === 'mark-delivered' ? 'Saving...' : 'Mark delivered'}
-                  </button>
-                )}
-              </div>
-            </div>
+            )}
           </section>
         )}
         <section className="mt-6 grid gap-4 rounded-2xl bg-slate-50 p-4 sm:grid-cols-4">
@@ -560,20 +720,23 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
         <section className="mt-4 grid gap-3 sm:grid-cols-2" aria-label="Order OTPs">
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Pickup OTP</p>
-            <p className={`mt-2 text-slate-900 ${order.pickup_otp ? 'font-mono text-2xl font-bold tracking-[0.2em]' : 'text-sm font-medium'}`}>
+            <p
+              className={`mt-2 text-slate-900 ${order.pickup_otp ? 'font-mono text-2xl font-bold tracking-[0.2em]' : 'text-sm font-medium'}`}
+            >
               {order.pickup_otp ?? (order.status === 'pending_pickup' ? 'Not available' : 'Pickup confirmed')}
             </p>
           </div>
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Delivery OTP</p>
-            <p className={`mt-2 text-slate-900 ${order.delivery_otp ? 'font-mono text-2xl font-bold tracking-[0.2em]' : 'text-sm font-medium'}`}>
-              {order.delivery_otp ?? (
-                order.status === 'delivered'
+            <p
+              className={`mt-2 text-slate-900 ${order.delivery_otp ? 'font-mono text-2xl font-bold tracking-[0.2em]' : 'text-sm font-medium'}`}
+            >
+              {order.delivery_otp ??
+                (order.status === 'delivered'
                   ? 'Delivery confirmed'
                   : order.status === 'cancelled'
                     ? 'Not available'
-                    : 'Not generated yet'
-              )}
+                    : 'Not generated yet')}
             </p>
           </div>
         </section>
@@ -603,18 +766,14 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
                   {order.items.map((item) => {
                     const confirmedQuantity = receivedCounts[item.id]
                     const lineAmount =
-                      order.is_subscription_order || confirmedQuantity === undefined
-                        ? null
-                        : confirmedQuantity * item.unit_price
+                      order.is_subscription_order || confirmedQuantity === undefined ? null : confirmedQuantity * item.unit_price
                     return (
                       <tr key={item.id} className="border-b border-slate-100 last:border-0">
                         <td className="px-2 py-3 font-semibold text-slate-800">
                           {item.category?.name ?? 'Laundry item'} {'\u00B7'} {serviceLabels[item.service]}
                         </td>
                         <td className="px-2 py-3 text-right text-slate-600">{item.quantity}</td>
-                        <td className="px-2 py-3 text-right font-semibold text-slate-800">
-                          {confirmedQuantity ?? 'Not recorded'}
-                        </td>
+                        <td className="px-2 py-3 text-right font-semibold text-slate-800">{confirmedQuantity ?? 'Not recorded'}</td>
                         <td className="px-2 py-3 text-right text-slate-600">{money(item.unit_price)}</td>
                         <td className="px-2 py-3 text-right font-semibold text-slate-800">
                           {lineAmount === null ? (order.is_subscription_order ? 'Plan breakdown' : 'Not available') : money(lineAmount)}
@@ -640,7 +799,10 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
         <section className="mt-5 grid gap-4 rounded-2xl border border-violet-100 bg-violet-50 p-4 sm:grid-cols-4">
           <Detail label="Vendor count" value={order.clothes_count_vendor ?? 'Not confirmed'} />
           <Detail label="Invoice" value={order.invoice ? money(Number(order.invoice.amount)) : 'Not created'} />
-          <Detail label="Payment" value={order.invoice?.status === 'paid' ? 'Paid' : 'Pending'} />
+          <Detail
+            label="Payment"
+            value={order.invoice?.status !== 'paid' ? 'Pending' : order.invoice.payment_method === 'offline' ? 'Paid offline' : 'Paid'}
+          />
           <Detail label="Service mode" value={order.is_subscription_order ? 'Subscription' : 'One-time'} />
         </section>
         {order.is_subscription_order && order.invoice?.billing_breakdown && (
@@ -688,6 +850,51 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
           </button>
         </div>
       </div>
+      {confirmOfflinePayment && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
+          <section
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="offline-payment-confirm-title"
+            aria-describedby="offline-payment-confirm-description"
+            className="w-full max-w-md rounded-2xl bg-white p-6 text-center shadow-2xl"
+          >
+            <div className="flex flex-col items-center">
+              <span className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-soft text-brand-primary">
+                <CircleAlert size={20} aria-hidden="true" />
+              </span>
+              <div className="mt-3">
+                <h3 id="offline-payment-confirm-title" className="text-lg font-bold text-slate-900">
+                  Confirm offline payment
+                </h3>
+                <p id="offline-payment-confirm-description" className="mt-2 text-sm leading-6 text-slate-600">
+                  Confirm <span className="font-semibold text-slate-900">{money(Number(order.invoice?.amount ?? 0))}</span> was paid offline
+                  and <span className="font-semibold text-slate-900">{order.public_order_number}</span> delivered.
+                </p>
+              </div>
+            </div>
+            <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-center">
+              <button
+                type="button"
+                onClick={() => setConfirmOfflinePayment(false)}
+                className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmOfflinePayment(false)
+                  submitWorkflowAction('record-offline-payment-and-complete')
+                }}
+                className="inline-flex items-center justify-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-brand-primary-hover"
+              >
+                Confirm &amp; complete
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   )
 }
@@ -894,10 +1101,9 @@ export default function Orders() {
   const [draftStartDate, setDraftStartDate] = useState(startDate)
   const [draftEndDate, setDraftEndDate] = useState(endDate)
   const requestedOrderId = searchParams.get('orderId')
-  const userDetailsReturnPath = getUserDetailsReturnPath(location.state)
+  const orderDetailsReturnPath = getOrderDetailsReturnPath(location.state)
   const selectedOrder = requestedOrderId
-    ? orders.find((order) => order.id === requestedOrderId) ??
-      (loadedSelectedOrder?.id === requestedOrderId ? loadedSelectedOrder : null)
+    ? (orders.find((order) => order.id === requestedOrderId) ?? (loadedSelectedOrder?.id === requestedOrderId ? loadedSelectedOrder : null))
     : null
   const isOnlyOrderSelectionNavigation =
     navigation.location?.pathname === '/admin/orders' &&
@@ -928,11 +1134,7 @@ export default function Orders() {
     if (values.sortRules) {
       if (values.sortRules.length === 0) {
         params.set('sort', '')
-      } else if (
-        values.sortRules.length !== 1 ||
-        values.sortRules[0].column !== 'created' ||
-        values.sortRules[0].direction !== 'desc'
-      ) {
+      } else if (values.sortRules.length !== 1 || values.sortRules[0].column !== 'created' || values.sortRules[0].direction !== 'desc') {
         params.set('sort', values.sortRules.map((rule) => `${rule.column}:${rule.direction}`).join(','))
       }
     }
@@ -1078,11 +1280,7 @@ export default function Orders() {
               />
             </Form>
             <div className="flex items-center gap-2 self-end lg:self-auto">
-              <MultiSortManager
-                columns={sortableColumns}
-                rules={sortRules}
-                onApply={applySortRules}
-              />
+              <MultiSortManager columns={sortableColumns} rules={sortRules} onApply={applySortRules} />
               <button
                 type="button"
                 onClick={openFilterDrawer}
@@ -1125,16 +1323,10 @@ export default function Orders() {
           <table className="w-full min-w-[1520px] table-fixed text-left">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50 text-[10px] capitalize tracking-[0.12em] text-slate-500">
-                <th className="w-40 px-4 py-3 font-semibold">
-                  {renderSortHeader('created', 'Created')}
-                </th>
+                <th className="w-40 px-4 py-3 font-semibold">{renderSortHeader('created', 'Created')}</th>
                 <th className="w-36 px-4 py-3 font-semibold">{renderSortHeader('order', 'Order ID')}</th>
-                <th className="w-40 px-4 py-3 font-semibold">
-                  {renderSortHeader('pickup', 'Pickup')}
-                </th>
-                <th className="w-40 px-4 py-3 font-semibold">
-                  {renderSortHeader('delivery', 'Delivery')}
-                </th>
+                <th className="w-40 px-4 py-3 font-semibold">{renderSortHeader('pickup', 'Pickup')}</th>
+                <th className="w-40 px-4 py-3 font-semibold">{renderSortHeader('delivery', 'Delivery')}</th>
                 <th className="w-48 px-4 py-3 font-semibold">{renderSortHeader('customer', 'Customer')}</th>
                 <th className="w-36 px-4 py-3 font-semibold">{renderSortHeader('qaffy_id', 'Qaffy ID')}</th>
                 <th className="w-36 px-4 py-3 font-semibold">{renderSortHeader('order_type', 'Order type')}</th>
@@ -1242,17 +1434,27 @@ export default function Orders() {
           <div className="flex items-center justify-between gap-3 sm:justify-end">
             <button
               type="button"
-              onClick={() => navigate(buildSearch({ page: page - 1, query, statusFilter, paymentFilter, dateType, sortRules, dateMode, startDate, endDate }))}
+              onClick={() =>
+                navigate(
+                  buildSearch({ page: page - 1, query, statusFilter, paymentFilter, dateType, sortRules, dateMode, startDate, endDate }),
+                )
+              }
               disabled={page === 1 || isLoadingPage}
               className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-200 px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
             >
               <ChevronLeft size={16} />
               Previous
             </button>
-            <span className="whitespace-nowrap text-sm text-slate-600">Page {page} of {pageCount}</span>
+            <span className="whitespace-nowrap text-sm text-slate-600">
+              Page {page} of {pageCount}
+            </span>
             <button
               type="button"
-              onClick={() => navigate(buildSearch({ page: page + 1, query, statusFilter, paymentFilter, dateType, sortRules, dateMode, startDate, endDate }))}
+              onClick={() =>
+                navigate(
+                  buildSearch({ page: page + 1, query, statusFilter, paymentFilter, dateType, sortRules, dateMode, startDate, endDate }),
+                )
+              }
               disabled={page === pageCount || isLoadingPage}
               className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-200 px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
             >
@@ -1266,8 +1468,8 @@ export default function Orders() {
         <OrderDetails
           order={selectedOrder}
           onClose={() => {
-            if (userDetailsReturnPath) {
-              navigate(userDetailsReturnPath)
+            if (orderDetailsReturnPath) {
+              navigate(orderDetailsReturnPath)
               return
             }
             setSearchParams((current) => {

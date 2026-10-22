@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { AlertTriangle, PackageCheck } from 'lucide-react'
+import { AlertTriangle, MessageSquareText, PackageCheck } from 'lucide-react'
+import { getMixedServiceGroups } from '../../lib/mixed-service-orders'
 
 export { getInitialReceivedCounts } from '../../lib/order-counts'
 
@@ -111,6 +112,9 @@ export default function VendorOrderReviewDialog({
     Object.values(received).reduce<number>((total, quantity) => total + (quantity ?? 0), 0) +
     addedItems.reduce((total, item) => total + item.quantity, 0)
   const receivedTotal = canEdit ? enteredReceivedTotal : (order.confirmedCount ?? enteredReceivedTotal)
+  const mixedServiceGroups = getMixedServiceGroups(
+    order.items.map((item) => ({ category: item.name, service: item.service, quantity: item.quantity })),
+  )
   const formattedDate = (value: string) => new Date(value).toLocaleString()
   const parsePositiveQuantity = (value: string) => {
     if (!/^\d+$/.test(value)) return null
@@ -214,9 +218,7 @@ export default function VendorOrderReviewDialog({
                         const quantity = parsePositiveQuantity(value)
                         if (quantity !== null) {
                           onAddedItemsChange(
-                            addedItems.map((current, itemIndex) =>
-                              itemIndex === index ? { ...current, quantity } : current,
-                            ),
+                            addedItems.map((current, itemIndex) => (itemIndex === index ? { ...current, quantity } : current)),
                           )
                         }
                       }}
@@ -260,12 +262,27 @@ export default function VendorOrderReviewDialog({
               </p>
             </div>
             <span className="shrink-0 whitespace-nowrap rounded-full bg-brand-soft px-2.5 py-1 text-xs font-semibold text-brand-primary">
-              <span className="sm:hidden">{order.items.length} {order.items.length === 1 ? 'type' : 'types'}</span>
+              <span className="sm:hidden">
+                {order.items.length} {order.items.length === 1 ? 'type' : 'types'}
+              </span>
               <span className="hidden sm:inline">
                 {order.items.length} item {order.items.length === 1 ? 'type' : 'types'}
               </span>
             </span>
           </div>
+          {mixedServiceGroups.length > 0 && (
+            <div className="mt-4 rounded-xl border border-brand-border bg-brand-soft p-3.5 text-sm text-brand-strong" role="note">
+              <p className="font-semibold">Mixed-service items</p>
+              <ul className="mt-1.5 space-y-1">
+                {mixedServiceGroups.map((group) => (
+                  <li key={group.category}>
+                    {group.category}: {group.services.map(({ service, quantity }) => `${quantity} ${service}`).join(', ')}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2">Refer to the customer notes for which garments are for each service.</p>
+            </div>
+          )}
           <div className="mt-4 space-y-2 md:hidden">
             {order.items.map((item) => (
               <div key={item.id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
@@ -343,8 +360,16 @@ export default function VendorOrderReviewDialog({
         </section>
 
         <section className="mt-6 rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
-          <h4 className="font-bold text-slate-900">Notes and verification</h4>
-          <Detail label="Customer notes" value={order.notes || 'No notes added'} />
+          <div className="flex items-center gap-2">
+            <MessageSquareText className="h-4 w-4 text-brand-primary" aria-hidden="true" />
+            <h4 className="text-sm font-bold text-slate-900">Notes and verification</h4>
+          </div>
+          <div className="mt-4 rounded-xl border border-brand-border bg-brand-soft/60 p-4">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-brand-strong">Customer notes</p>
+            <p className={`mt-2 break-words text-base leading-6 ${order.notes ? 'font-medium text-slate-800' : 'text-slate-500 italic'}`}>
+              {order.notes || 'No notes added'}
+            </p>
+          </div>
           {!isPreClaim && canEdit && hasMismatch && (
             <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
               <p className="font-semibold text-amber-800">Mismatch detected</p>
@@ -414,7 +439,8 @@ export default function VendorOrderReviewDialog({
                   </div>
                 </div>
                 <p id="confirm-vendor-count-description" className="mt-4 text-sm leading-5 text-slate-600">
-                  This will finalize the received quantities and update the customer&apos;s invoice. You can&apos;t edit this review afterward.
+                  This will finalize the received quantities and update the customer&apos;s invoice. You can&apos;t edit this review
+                  afterward.
                 </p>
               </div>
               <div className="space-y-3 p-5 sm:p-6">

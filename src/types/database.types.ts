@@ -190,6 +190,7 @@ export interface WalletTransaction {
   related_invoice_id: string | null
   related_payment_id: string | null
   related_referral_reward_id: string | null
+  related_subscription_id: string | null
   created_at: string
 }
 
@@ -258,6 +259,7 @@ export interface Invoice {
   order_id: string
   amount: number
   status: InvoiceStatus
+  payment_method: 'wallet' | 'offline' | null
   billing_breakdown: { coveredUnits: number; subscriberAmount: number; regularAmount: number } | null
   paid_at: string | null
   created_at: string

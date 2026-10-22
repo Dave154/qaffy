@@ -183,6 +183,7 @@ export default function Orders() {
   const { revalidate } = useRevalidator()
   const handledFetcherData = useRef<typeof fetcher.data>(null)
   const handledReviewData = useRef<typeof reviewFetcher.data>(null)
+  const isDispatching = fetcher.state !== 'idle' && fetcher.formData?.get('intent') === 'dispatch'
   const isClaimingOrder = (orderId: string) =>
     fetcher.state !== 'idle' && fetcher.formData?.get('intent') === 'claim' && fetcher.formData?.get('orderId') === orderId
   const [query, setQuery] = useState('')
@@ -453,7 +454,7 @@ export default function Orders() {
                 disabled={selectedOrderIds.length === 0 || fetcher.state !== 'idle'}
                 className="w-full rounded-lg bg-brand-primary px-3 py-2.5 text-sm font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {fetcher.state !== 'idle'
+                {isDispatching
                   ? 'Dispatching...'
                   : selectedOrderIds.length > 0
                     ? `Dispatch ${selectedOrderIds.length} selected`
@@ -526,7 +527,7 @@ export default function Orders() {
                           disabled={fetcher.state !== 'idle'}
                           className="flex-1 rounded-[7px] bg-brand-primary px-3 py-2.5 text-xs font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-wait disabled:opacity-60"
                         >
-                          {fetcher.state !== 'idle' ? 'Dispatching...' : 'Dispatch'}
+                          {isDispatching ? 'Dispatching...' : 'Dispatch'}
                         </button>
                       ) : null}
                       {order.status !== 'picked_up' && (
@@ -577,7 +578,7 @@ export default function Orders() {
                 disabled={selectedOrderIds.length === 0 || fetcher.state !== 'idle'}
                 className="rounded-[7px] bg-brand-primary px-3 py-2 text-xs font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {fetcher.state !== 'idle'
+                {isDispatching
                   ? 'Dispatching...'
                   : selectedOrderIds.length > 0
                     ? `Dispatch ${selectedOrderIds.length} selected`

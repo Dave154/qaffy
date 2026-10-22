@@ -150,7 +150,6 @@ export async function loader({ request }: Route.LoaderArgs) {
     { count: customers },
     { count: vendors },
     { count: logistics },
-    { count: activeSubscriptions },
     { data: invoices },
     { data: plans },
     { data: subscriptions },
@@ -172,14 +171,13 @@ export async function loader({ request }: Route.LoaderArgs) {
     supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('role', 'customer'),
     supabase.from('vendors').select('id', { count: 'exact', head: true }).eq('status', 'approved'),
     supabase.from('logistics_agents').select('id', { count: 'exact', head: true }).eq('status', 'approved'),
-    supabase
-      .from('subscriptions')
-      .select('id', { count: 'exact', head: true })
-      .eq('status', 'active')
-      .or(`end_date.is.null,end_date.gte.${activeOnDate}`),
     supabase.from('invoices').select('order_id, amount, status, created_at, paid_at').order('created_at', { ascending: false }),
     supabase.from('plans').select('id, name, type, price, weekly_limit, active').order('created_at', { ascending: true }),
-    supabase.from('subscriptions').select('plan_id').eq('status', 'active').or(`end_date.is.null,end_date.gte.${activeOnDate}`),
+    supabase
+      .from('subscriptions')
+      .select('customer_id, plan_id')
+      .eq('status', 'active')
+      .or(`end_date.is.null,end_date.gte.${activeOnDate}`),
     supabase.from('vendors').select('id, business_name, status').order('created_at', { ascending: false }).limit(5),
     supabase.from('profiles').select('id, name, email').eq('role', 'customer').order('created_at', { ascending: false }).limit(5),
     supabase.from('order_items').select('id, order_id, category_id, service, quantity, confirmed_quantity, unit_price'),
@@ -411,9 +409,13 @@ export async function loader({ request }: Route.LoaderArgs) {
       return { label, status, count: count ?? 0 }
     }),
   )
-  const subscriberCounts = new Map<string, number>()
-  for (const subscription of subscriptions ?? [])
-    subscriberCounts.set(subscription.plan_id, (subscriberCounts.get(subscription.plan_id) ?? 0) + 1)
+  const subscriberIdsByPlan = new Map<string, Set<string>>()
+  for (const subscription of subscriptions ?? []) {
+    const subscriberIds = subscriberIdsByPlan.get(subscription.plan_id) ?? new Set<string>()
+    subscriberIds.add(subscription.customer_id)
+    subscriberIdsByPlan.set(subscription.plan_id, subscriberIds)
+  }
+  const activeSubscriberIds = new Set((subscriptions ?? []).map((subscription) => subscription.customer_id))
   const activity: Activity[] = allOrders
     .slice(0, 5)
     .map((order, index) => ({
@@ -430,7 +432,7 @@ export async function loader({ request }: Route.LoaderArgs) {
         customers: customers ?? 0,
         vendors: vendors ?? 0,
         logistics: logistics ?? 0,
-        activeSubscriptions: activeSubscriptions ?? 0,
+        activeSubscriptions: activeSubscriberIds.size,
         unpaidInvoices: allInvoices.filter((invoice) => invoice.status === 'unpaid').length,
         unpaidAmount: allInvoices
           .filter((invoice) => invoice.status === 'unpaid')
@@ -451,7 +453,7 @@ export async function loader({ request }: Route.LoaderArgs) {
         type: plan.type,
         price: Number(plan.price),
         weeklyLimit: plan.weekly_limit,
-        subscribers: subscriberCounts.get(plan.id) ?? 0,
+        subscribers: subscriberIdsByPlan.get(plan.id)?.size ?? 0,
         active: plan.active,
       })),
       recentVendors: (vendorRows ?? []).map((vendor) => ({ id: vendor.id, name: vendor.business_name, status: vendor.status })),
@@ -1104,7 +1106,6 @@ function OverviewDashboard({ dashboard }: { dashboard: DashboardData }) {
             ) : (
               [...plans]
                 .sort((left, right) => right.subscribers - left.subscribers)
-                .slice(0, 4)
                 .map((plan) => (
                 <div key={plan.id} className="flex items-center justify-between">
                   <div className="min-w-0">
@@ -1122,6 +1123,10 @@ function OverviewDashboard({ dashboard }: { dashboard: DashboardData }) {
                 </div>
                 ))
             )}
+          </div>
+          <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3 text-sm">
+            <span className="font-medium text-slate-600">Total</span>
+            <strong className="text-slate-900">{metrics.activeSubscriptions.toLocaleString()}</strong>
           </div>
         </section>
         <section className="rounded-xl border border-[#e8eeee] bg-white p-5 shadow-[0_5px_18px_rgba(21,61,73,0.04)]">

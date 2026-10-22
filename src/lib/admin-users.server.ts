@@ -49,6 +49,7 @@ type UsersData = {
   roleFilter: string
   subscriptionFilter: string
   subscriptionPlans: Array<{ id: string; name: string; type: string }>
+  activeSubscribers: number
   dateMode: 'all' | 'today' | 'this_month' | 'last_month' | 'custom'
   sortRules: SortRule[]
   startDate: string
@@ -119,6 +120,7 @@ export async function loadUsers(request: Request) {
         roleFilter: 'all',
         subscriptionFilter: 'all',
         subscriptionPlans: [],
+        activeSubscribers: 0,
         dateMode: 'all',
         sortRules: [{ column: 'joined', direction: 'desc' }],
         startDate: '',
@@ -134,6 +136,21 @@ export async function loadUsers(request: Request) {
     from plans
     order by name asc, id asc
   `
+  const activeSubscribers =
+    new URL(request.url).pathname === '/admin/users/export'
+      ? 0
+      : Number(
+          (
+            await sql<{ count: number }[]>`
+              select count(distinct current_subscription.customer_id)::int as count
+              from subscriptions current_subscription
+              join profiles customer on customer.id = current_subscription.customer_id
+              where customer.role = 'customer'
+                and current_subscription.status = 'active'
+                and (current_subscription.end_date is null or current_subscription.end_date >= current_date)
+            `
+          )[0]?.count ?? 0,
+        )
   const query = (params.get('q') ?? '').trim().slice(0, 120)
   const requestedRole = params.get('role') ?? 'all'
   const roleFilter = USER_ROLES.includes(requestedRole as (typeof USER_ROLES)[number]) ? requestedRole : 'all'
@@ -375,6 +392,7 @@ export async function loadUsers(request: Request) {
       roleFilter,
       subscriptionFilter,
       subscriptionPlans,
+      activeSubscribers,
       dateMode,
       sortRules,
       startDate,

@@ -3,13 +3,14 @@ import type { FormEvent } from 'react'
 import { useLocation, useNavigate } from 'react-router'
 import QaffyLogo from '../../../components/QaffyLogo'
 import RouteLoadingScreen from '../../../components/RouteLoadingScreen'
-import { isSupabaseConfigured, supabase } from '../../../lib/supabase.client'
+import { isSupabaseConfigured, setRememberSession, supabase } from '../../../lib/supabase.client'
 
 export default function Login() {
   const navigate = useNavigate()
   const location = useLocation()
   const [email, setEmail] = useState('')
   const [showEmailAuth, setShowEmailAuth] = useState(false)
+  const [rememberSession, setRememberSessionChoice] = useState(true)
   const [error, setError] = useState(() => new URLSearchParams(location.search).get('error') ?? '')
   const [isSubmitting, setIsSubmitting] = useState(false)
 
@@ -43,6 +44,7 @@ export default function Login() {
     if (!isSupabaseConfigured || !supabase) return setError('Supabase is not configured.')
     setError('')
     setIsSubmitting(true)
+    setRememberSession(rememberSession)
     const { error: authError } = await supabase.auth.signInWithOtp({ email: trimmedEmail, options: { shouldCreateUser: false } })
     setIsSubmitting(false)
     if (authError) return setError(authError.message)
@@ -54,6 +56,7 @@ export default function Login() {
     if (!isSupabaseConfigured || !supabase)
       return setError('Supabase is not configured. Add the required environment variables to continue.')
     setIsSubmitting(true)
+    setRememberSession(rememberSession)
     const { error: authError } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: { redirectTo: `${window.location.origin}/admin/auth/callback` },
@@ -128,6 +131,15 @@ export default function Login() {
               <span>or</span>
               <span className="h-px flex-1 bg-slate-200" />
             </div>
+            <label className="mb-5 inline-flex items-center gap-2 text-sm text-slate-500">
+              <input
+                type="checkbox"
+                checked={rememberSession}
+                onChange={(event) => setRememberSessionChoice(event.target.checked)}
+                className="h-4 w-4 rounded border-slate-300 text-brand-primary focus:ring-brand-primary"
+              />
+              Stay signed in
+            </label>
             {error && (
               <p role="alert" className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
                 {error}
