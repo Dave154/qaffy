@@ -615,7 +615,7 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
             <X size={18} aria-hidden="true" />
           </button>
         </header>
-        {/* {workflowGuidance && (
+        {workflowGuidance && (
           <section className="mt-5 rounded-2xl border border-brand-primary/20 bg-brand-primary/5 p-4" aria-label="Next order action">
             {canRecordOfflinePayment ? (
               <>
@@ -697,7 +697,7 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
               </div>
             )}
           </section>
-        )} */}
+        )}
         <section className="mt-6 grid gap-4 rounded-2xl bg-slate-50 p-4 sm:grid-cols-4">
           <div>
             <p className="text-[10px] font-semibold capitalize tracking-[0.14em] text-slate-500">Customer ID</p>

@@ -8,24 +8,10 @@ import {
   MIN_MIXED_SERVICE_INSTRUCTION_LENGTH,
 } from '../../lib/mixed-service-orders'
 import { CustomerStoreContext } from './customer-store-context'
-import type {
-  Invoice,
-  Order,
-  Payment,
-  Plan,
-  Subscription,
-  Wallet,
-  WalletTransaction,
-} from '../../types/database.types'
+import type { Invoice, Order, Payment, Plan, Subscription, Wallet, WalletTransaction } from '../../types/database.types'
 
 export type OrderStatus =
-  | 'Awaiting pickup'
-  | 'Picked up'
-  | 'In progress'
-  | 'Pending payment'
-  | 'Ready for delivery'
-  | 'Delivered'
-  | 'Cancelled'
+  'Awaiting pickup' | 'Picked up' | 'In progress' | 'Pending payment' | 'Ready for delivery' | 'Delivered' | 'Cancelled'
 export type OrderLine = {
   category: string
   service: string
@@ -206,13 +192,37 @@ function mapDatabaseTransaction(
     }
   }
 
+  if (transaction.related_subscription_id) {
+    return {
+      id: transaction.id,
+      title: 'Plan purchase',
+      reference: `Wallet plan • ${transaction.related_subscription_id.slice(0, 8)}`,
+      date: new Date(transaction.created_at).toLocaleString(),
+      sortDate: transaction.created_at,
+      amount: `-₦${Number(transaction.amount).toLocaleString()}`,
+      direction: 'debit',
+      category: 'payment',
+      status: 'Successful',
+    }
+  }
+
   const isCredit = ['cashback', 'referral_reward'].includes(transaction.txn_type)
-  const isReward = transaction.txn_type === 'cashback' || transaction.txn_type === 'referral_reward'
-  const amount = `${isCredit ? '+' : '-'}₦${Number(transaction.amount).toLocaleString()}`
+  const isReward = ['cashback', 'referral_reward', 'referral_reward_expiry'].includes(transaction.txn_type)
+  const isRewardExpiry = transaction.txn_type === 'referral_reward_expiry'
+  const amount = isRewardExpiry
+    ? `-₦${Math.abs(Number(transaction.amount)).toLocaleString()}`
+    : `${isCredit ? '+' : '-'}₦${Number(transaction.amount).toLocaleString()}`
 
   return {
     id: transaction.id,
-    title: transaction.txn_type === 'cashback' ? 'Cashback earned' : isReward ? 'Referral reward' : 'Order payment',
+    title:
+      transaction.txn_type === 'cashback'
+        ? 'Cashback earned'
+        : isRewardExpiry
+          ? 'Promotional credit expired'
+          : isReward
+            ? 'Referral reward'
+            : 'Order payment',
     reference: transaction.related_referral_reward_id
       ? `Referral • ${transaction.related_referral_reward_id.slice(0, 8)}`
       : transaction.related_invoice_id
@@ -220,9 +230,7 @@ function mapDatabaseTransaction(
         : transaction.txn_type === 'cashback'
           ? `Cashback • ${transaction.id.slice(0, 8)}`
           : `Wallet • ${transaction.id.slice(0, 8)}`,
-    orderReference: transaction.related_invoice_id
-      ? orderReferenceByInvoiceId.get(transaction.related_invoice_id)
-      : undefined,
+    orderReference: transaction.related_invoice_id ? orderReferenceByInvoiceId.get(transaction.related_invoice_id) : undefined,
     date: new Date(transaction.created_at).toLocaleString(),
     sortDate: transaction.created_at,
     amount,
@@ -230,6 +238,27 @@ function mapDatabaseTransaction(
     category: isReward ? 'reward' : 'payment',
     status: 'Successful',
   }
+}
+
+function mapDatabaseTransactions(walletTransactions: WalletTransaction[], orderReferenceByInvoiceId: Map<string, string>) {
+  const planPurchases = new Map<string, WalletTransaction>()
+  const otherTransactions: WalletTransaction[] = []
+
+  for (const transaction of walletTransactions) {
+    const subscriptionId = transaction.related_subscription_id
+    if (!subscriptionId) {
+      otherTransactions.push(transaction)
+      continue
+    }
+
+    const existing = planPurchases.get(subscriptionId)
+    if (existing) existing.amount += Number(transaction.amount)
+    else planPurchases.set(subscriptionId, { ...transaction, amount: Number(transaction.amount) })
+  }
+
+  return [...otherTransactions, ...planPurchases.values()]
+    .map((transaction) => mapDatabaseTransaction(transaction, orderReferenceByInvoiceId))
+    .filter((transaction): transaction is CustomerTransaction => transaction !== null)
 }
 
 function mapPayment(payment: Payment): CustomerTransaction {
@@ -361,7 +390,7 @@ function mapDatabaseOrder(
     items: order.clothes_count_customer,
     action: 'View details',
     pickupOtp: order.pickup_otp ?? '',
-    deliveryOtp: paymentStatus === 'Paid' && order.status === 'out_for_delivery' ? order.delivery_otp ?? undefined : undefined,
+    deliveryOtp: paymentStatus === 'Paid' && order.status !== 'delivered' ? (order.delivery_otp ?? undefined) : undefined,
     dispatched: order.status === 'out_for_delivery',
     pickedUp: order.status !== 'pending_pickup',
     notes: order.notes ?? '',
@@ -380,8 +409,7 @@ function mapDatabaseOrder(
           service: item.service === 'wash_iron' ? 'Wash + Iron' : item.service === 'iron' ? 'Iron' : 'Wash',
           quantity: item.confirmed_quantity ?? item.quantity,
           unitPrice: Number(item.unit_price),
-          vendorCountDifference:
-            item.confirmed_quantity == null ? undefined : item.confirmed_quantity - item.quantity,
+          vendorCountDifference: item.confirmed_quantity == null ? undefined : item.confirmed_quantity - item.quantity,
           vendorAdded: mismatchLine?.originalQuantity === 0 && mismatchLine.confirmedQuantity > 0,
         }
       }),
@@ -460,7 +488,9 @@ export function CustomerStoreProvider({
   persistedSubscriptionUsedUnits = 0,
 }: CustomerStoreProviderProps) {
   const unpaidInvoiceOrderIds = new Set(persistedUnpaidInvoiceOrderIds)
-  const orderReferenceByInvoiceId = new Map((persistedInvoices ?? []).map((invoice) => [invoice.id, invoice.order_reference ?? invoice.order_id]))
+  const orderReferenceByInvoiceId = new Map(
+    (persistedInvoices ?? []).map((invoice) => [invoice.id, invoice.order_reference ?? invoice.order_id]),
+  )
   const [orders, setOrders] = useState(() =>
     persistedOrders
       ? persistedOrders.map((order) =>
@@ -482,9 +512,7 @@ export function CustomerStoreProvider({
   const [transactions] = useState(() =>
     [
       ...(persistedPayments ?? []).map(mapPayment),
-      ...(persistedWalletTransactions ?? [])
-        .map((transaction) => mapDatabaseTransaction(transaction, orderReferenceByInvoiceId))
-        .filter((transaction): transaction is CustomerTransaction => transaction !== null),
+      ...mapDatabaseTransactions(persistedWalletTransactions ?? [], orderReferenceByInvoiceId),
       ...(persistedInvoices ?? [])
         .filter((invoice) => invoice.status === 'paid' && invoice.payment_method === 'offline')
         .map((invoice) => {
@@ -556,9 +584,7 @@ export function CustomerStoreProvider({
       },
       addOrder: async ({ items, notes, pickupLocation }) => {
         if (getMixedServiceGroups(items).length > 0 && !hasMinimumMixedServiceInstructions(notes)) {
-          throw new Error(
-            `Mixed-service instructions must contain at least ${MIN_MIXED_SERVICE_INSTRUCTION_LENGTH} characters.`,
-          )
+          throw new Error(`Mixed-service instructions must contain at least ${MIN_MIXED_SERVICE_INSTRUCTION_LENGTH} characters.`)
         }
         const lineKeys = items.map((item) => JSON.stringify([item.category.trim().toLowerCase(), item.service]))
         if (new Set(lineKeys).size !== lineKeys.length) throw new Error('Each category and service combination can only be added once.')

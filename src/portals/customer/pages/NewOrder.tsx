@@ -604,7 +604,7 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
             )}
             {order?.paymentStatus === 'Paid' &&
               order.status !== 'Delivered' &&
-              (order.dispatched && order.deliveryOtp ? (
+              (order.deliveryOtp ? (
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm sm:p-5">
                   <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-slate-500">Delivery OTP</p>
                   <div className="mt-2.5">

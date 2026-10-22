@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { data, Form, NavLink, Outlet, redirect, useLoaderData, useLocation, useNavigate, useRevalidator } from 'react-router'
 import type { Route } from './+types/CustomerLayout'
 import {
@@ -16,6 +16,7 @@ import {
   ClipboardList,
   LogOut,
   Gift,
+  WifiOff,
 } from 'lucide-react'
 import QaffyLogo from '../../components/QaffyLogo'
 import PwaInstallLink from '../../components/PwaInstallLink'
@@ -24,15 +25,7 @@ import { supabase } from '../../lib/supabase.client'
 import { CustomerStoreProvider } from './customer-store'
 import type { CustomerReferral, MismatchLine, PersistedOrderItem, PickupLocationOption } from './customer-store'
 import { useCustomerStore } from './customer-store-hook'
-import type {
-  Invoice,
-  Order,
-  Payment,
-  Plan,
-  Subscription,
-  Wallet,
-  WalletTransaction,
-} from '../../types/database.types'
+import type { Invoice, Order, Payment, Plan, Subscription, Wallet, WalletTransaction } from '../../types/database.types'
 import { ensurePushSubscription, savePushSubscription } from '../../lib/push.client'
 import { calculateSubscriptionUnitsUsed } from '../../lib/subscription-week'
 
@@ -44,6 +37,23 @@ const navItems = [
   { to: '/plans', label: 'Plans', icon: Sparkles },
   { to: '/settings', label: 'Settings', icon: Settings },
 ]
+
+function subscribeToNetworkStatus(callback: () => void) {
+  window.addEventListener('online', callback)
+  window.addEventListener('offline', callback)
+  return () => {
+    window.removeEventListener('online', callback)
+    window.removeEventListener('offline', callback)
+  }
+}
+
+function getNetworkStatus() {
+  return navigator.onLine
+}
+
+function getServerNetworkStatus() {
+  return true
+}
 
 // eslint-disable-next-line react-refresh/only-export-components
 export async function loader({ request }: Route.LoaderArgs) {
@@ -207,10 +217,7 @@ export async function loader({ request }: Route.LoaderArgs) {
         }
       : null
 
-  const [
-    { data: referredRows, error: referredRowsError },
-    { data: referrerRows, error: referrerRowsError },
-  ] = await Promise.all([
+  const [{ data: referredRows, error: referredRowsError }, { data: referrerRows, error: referrerRowsError }] = await Promise.all([
     serverSupabase
       .from('referrals')
       .select('id, referrer_id, referred_id, status, qualified_at, created_at')
@@ -334,6 +341,7 @@ function PlanSummary({ onNavigate }: { onNavigate?: () => void }) {
 
 export default function CustomerLayout() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const isOffline = !useSyncExternalStore(subscribeToNetworkStatus, getNetworkStatus, getServerNetworkStatus)
   const [logoutConfirmationOpen, setLogoutConfirmationOpen] = useState(false)
   const [isLoggingOut, setIsLoggingOut] = useState(false)
   const location = useLocation()
@@ -384,7 +392,11 @@ export default function CustomerLayout() {
     let connectionWasInterrupted = false
     const channel = client
       .channel(`customer-wallet-${loaderData.profile.id}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'wallets', filter: `customer_id=eq.${loaderData.profile.id}` }, revalidate)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'wallets', filter: `customer_id=eq.${loaderData.profile.id}` },
+        revalidate,
+      )
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'wallet_transactions', filter: `customer_id=eq.${loaderData.profile.id}` },
@@ -395,8 +407,16 @@ export default function CustomerLayout() {
         { event: '*', schema: 'public', table: 'subscriptions', filter: `customer_id=eq.${loaderData.profile.id}` },
         revalidate,
       )
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders', filter: `customer_id=eq.${loaderData.profile.id}` }, revalidate)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'payments', filter: `customer_id=eq.${loaderData.profile.id}` }, revalidate)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'orders', filter: `customer_id=eq.${loaderData.profile.id}` },
+        revalidate,
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'payments', filter: `customer_id=eq.${loaderData.profile.id}` },
+        revalidate,
+      )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'notification_events', filter: `customer_id=eq.${loaderData.profile.id}` },
@@ -532,10 +552,23 @@ export default function CustomerLayout() {
       )}
 
       <div className="relative min-h-screen bg-[#fafafa] text-[#121212]">
+        {isOffline && (
+          <div
+            role="status"
+            className="sticky top-0 z-[60] flex items-center justify-center gap-2 whitespace-nowrap bg-rose-100 px-2 py-2 text-center text-xs font-medium text-rose-800 sm:px-4 sm:text-sm"
+          >
+            <WifiOff className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" aria-hidden="true" />
+            <span>You’re offline. Reconnect to the internet to continue using Qaffy.</span>
+          </div>
+        )}
         <div className="relative z-10 min-h-screen lg:flex">
           <aside className="sticky top-0 hidden h-screen max-h-screen w-[221px] shrink-0 overflow-y-auto border-r border-[#f2f3f3] bg-white px-[13px] py-8 shadow-[1px_0_8px_rgba(18,18,18,0.04)] lg:flex lg:flex-col print:hidden">
             <div className="px-3">
-              <NavLink to="/" aria-label="Go to customer home" className="inline-flex rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary">
+              <NavLink
+                to="/"
+                aria-label="Go to customer home"
+                className="inline-flex rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary"
+              >
                 <QaffyLogo />
               </NavLink>
             </div>
@@ -599,7 +632,11 @@ export default function CustomerLayout() {
                   {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
                 </button>
 
-                <NavLink to="/" aria-label="Go to customer home" className="inline-flex rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary">
+                <NavLink
+                  to="/"
+                  aria-label="Go to customer home"
+                  className="inline-flex rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary"
+                >
                   <QaffyLogo className="scale-[0.82]" />
                 </NavLink>
 

@@ -50,10 +50,7 @@ export async function action({ request }: Route.ActionArgs) {
       return data({ ok: true, intent, orderId }, { headers })
     } catch (error) {
       console.error('[orders] Customer cancellation failed', error)
-      return data(
-        { ok: false, intent, orderId, message: 'The order could not be cancelled. Please try again.' },
-        { status: 500, headers },
-      )
+      return data({ ok: false, intent, orderId, message: 'The order could not be cancelled. Please try again.' }, { status: 500, headers })
     }
   }
 
@@ -165,7 +162,7 @@ export default function Orders() {
   }
   const getVisibleOtp = (order: (typeof orders)[number]) => {
     if (order.status === 'Awaiting pickup') return order.pickupOtp
-    if (order.paymentStatus === 'Paid' && order.dispatched && order.status !== 'Delivered') return order.deliveryOtp ?? ''
+    if (order.paymentStatus === 'Paid' && order.status !== 'Delivered') return order.deliveryOtp ?? ''
     return ''
   }
 
@@ -267,7 +264,7 @@ export default function Orders() {
                       invoiceId={invoices.find((invoice) => invoice.orderId === order.id && invoice.status === 'Awaiting payment')?.id}
                       onClick={() => navigate('/?topup=1')}
                     />
-                  ) : order.paymentStatus === 'Paid' && !order.dispatched && order.status !== 'Delivered' ? (
+                  ) : order.paymentStatus === 'Paid' && order.status !== 'Delivered' && !order.deliveryOtp ? (
                     <DeliveryOtpStatus />
                   ) : getVisibleOtp(order) ? (
                     <div className="flex items-start gap-3 sm:flex-col sm:items-end">
@@ -291,37 +288,37 @@ export default function Orders() {
 
               <div className="mt-4 flex flex-row flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-3">
                 <p className="text-sm text-slate-600">{order.pickup}</p>
-                        <div className="flex flex-wrap items-center gap-2">
-                          {order.status === 'Awaiting pickup' && (
-                            <cancelFetcher.Form
-                              method="post"
-                              onSubmit={(event) => {
-                                if (!window.confirm('Are you sure you want to cancel this order?')) event.preventDefault()
-                              }}
-                            >
-                              <input type="hidden" name="intent" value="cancel-order" />
-                              <input type="hidden" name="orderId" value={order.id} />
-                              <button
-                                type="submit"
-                                disabled={cancelFetcher.state !== 'idle'}
-                                className="rounded-lg border border-rose-200 bg-white px-3.5 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
-                              >
-                                {cancelFetcher.state !== 'idle' && cancelFetcher.formData?.get('orderId') === order.id
-                                  ? 'Cancelling…'
-                                  : 'Cancel order'}
-                              </button>
-                            </cancelFetcher.Form>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => setSelectedOrder(order)}
-                            disabled={cancelFetcher.state !== 'idle' && cancelFetcher.formData?.get('orderId') === order.id}
-                            className="rounded-lg border border-brand-border bg-white px-3.5 py-2 text-sm font-semibold text-brand-primary hover:bg-brand-soft disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            {order.action}
-                          </button>
-                        </div>
-                      </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {order.status === 'Awaiting pickup' && (
+                    <cancelFetcher.Form
+                      method="post"
+                      onSubmit={(event) => {
+                        if (!window.confirm('Are you sure you want to cancel this order?')) event.preventDefault()
+                      }}
+                    >
+                      <input type="hidden" name="intent" value="cancel-order" />
+                      <input type="hidden" name="orderId" value={order.id} />
+                      <button
+                        type="submit"
+                        disabled={cancelFetcher.state !== 'idle'}
+                        className="rounded-lg border border-rose-200 bg-white px-3.5 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                      >
+                        {cancelFetcher.state !== 'idle' && cancelFetcher.formData?.get('orderId') === order.id
+                          ? 'Cancelling…'
+                          : 'Cancel order'}
+                      </button>
+                    </cancelFetcher.Form>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setSelectedOrder(order)}
+                    disabled={cancelFetcher.state !== 'idle' && cancelFetcher.formData?.get('orderId') === order.id}
+                    className="rounded-lg border border-brand-border bg-white px-3.5 py-2 text-sm font-semibold text-brand-primary hover:bg-brand-soft disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {order.action}
+                  </button>
+                </div>
+              </div>
             </article>
           ))}
           {filteredOrders.length === 0 && (

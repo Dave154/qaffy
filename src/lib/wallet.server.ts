@@ -99,12 +99,13 @@ function allocateSubscriptionCoverage(items: SubscriptionAllocationItem[], allow
   return new Map(items.map((item, index) => [item.id, selected?.quantities[index] ?? 0]))
 }
 
-async function debitWalletForInvoice(
+async function debitWallet(
   tx: TransactionSql,
   customerId: string,
-  invoiceId: string,
+  invoiceId: string | null,
   amount: number,
   balanceType: WalletBalanceType,
+  subscriptionId: string | null = null,
 ) {
   const [wallet] = await tx`
     select one_off_balance, subscription_balance, promotional_balance
@@ -178,8 +179,11 @@ async function debitWalletForInvoice(
       ledgerBalance -= applied
       await tx`update referral_rewards set remaining_value = remaining_value - ${applied}, updated_at = now() where id = ${reward.id}`
       await tx`
-        insert into wallet_transactions (customer_id, balance_type, txn_type, amount, balance_after, related_invoice_id, related_referral_reward_id)
-        values (${customerId}, 'promotional', 'debit', ${applied}, ${ledgerBalance}, ${invoiceId}, ${reward.id})
+        insert into wallet_transactions (
+          customer_id, balance_type, txn_type, amount, balance_after,
+          related_invoice_id, related_referral_reward_id, related_subscription_id
+        )
+        values (${customerId}, 'promotional', 'debit', ${applied}, ${ledgerBalance}, ${invoiceId}, ${reward.id}, ${subscriptionId})
       `
     }
     if (remainingDebit > 0) throw new Error('Promotional reward ledger is inconsistent')
@@ -192,8 +196,10 @@ async function debitWalletForInvoice(
   `
   if (oneOffDebit > 0) {
     await tx`
-      insert into wallet_transactions (customer_id, balance_type, txn_type, amount, balance_after, related_invoice_id)
-      values (${customerId}, 'one_off', 'debit', ${oneOffDebit}, ${newBalance}, ${invoiceId})
+      insert into wallet_transactions (
+        customer_id, balance_type, txn_type, amount, balance_after, related_invoice_id, related_subscription_id
+      )
+      values (${customerId}, 'one_off', 'debit', ${oneOffDebit}, ${newBalance}, ${invoiceId}, ${subscriptionId})
     `
   }
   return { newBalance, promotionalBalance }
@@ -339,7 +345,7 @@ export async function payFromWallet(customerId: string, invoiceId: string, balan
     if (invoice.status !== 'unpaid' || !['invoiced', 'out_for_delivery'].includes(invoice.order_status))
       throw new Error('Invoice is not payable in its current order state')
 
-    const { newBalance } = await debitWalletForInvoice(tx, customerId, invoiceId, Number(invoice.amount), balanceType)
+    const { newBalance } = await debitWallet(tx, customerId, invoiceId, Number(invoice.amount), balanceType)
     const deliveryOtp = await generateFourDigitOtp(tx)
 
     await tx`update invoices set status = 'paid', paid_at = now() where id = ${invoiceId}`
@@ -655,7 +661,7 @@ export async function finalizeVendorOrder(
     const [wallet] = await tx`select one_off_balance, promotional_balance from wallets where customer_id = ${order.customer_id} for update`
     const availableBalance = Number(wallet?.one_off_balance ?? 0) + Number(wallet?.promotional_balance ?? 0)
     if (invoiceAmount <= availableBalance) {
-      await debitWalletForInvoice(tx, order.customer_id, invoice.id, invoiceAmount, 'one_off')
+      await debitWallet(tx, order.customer_id, invoice.id, invoiceAmount, 'one_off')
       const deliveryOtp = await generateFourDigitOtp(tx)
       await tx`update invoices set status = 'paid', paid_at = now() where id = ${invoice.id}`
       await tx`update orders set status = 'paid', delivery_otp = ${deliveryOtp} where id = ${orderId}`
@@ -855,6 +861,97 @@ export async function creditAdminWallet(customerId: string, amount: number) {
   return result
 }
 
+export async function getSpendableWalletBalance(customerId: string) {
+  const [wallet] = await sql<{ spendable_balance: number }[]>`
+    select
+      coalesce(customer_wallet.one_off_balance, 0) +
+      coalesce((
+        select sum(reward.remaining_value)
+        from referral_rewards reward
+        where reward.recipient_id = ${customerId}
+          and reward.status = 'issued'
+          and reward.expires_at > now()
+          and reward.remaining_value > 0
+      ), 0) as spendable_balance
+    from (select ${customerId}::uuid as customer_id) customer
+    left join wallets customer_wallet on customer_wallet.customer_id = customer.customer_id
+  `
+  return Number(wallet?.spendable_balance ?? 0)
+}
+
+export async function purchaseSubscriptionWithWallet(customerId: string, planId: string) {
+  const result = await sql.begin(async (tx) => {
+    await lockCustomerSubscription(tx, customerId)
+    await tx`insert into wallets (customer_id) values (${customerId}) on conflict (customer_id) do nothing`
+
+    const [plan] = await tx`
+      select id, name, type, price, semester_end_date
+      from plans
+      where id = ${planId}
+        and active = true
+      for share
+    `
+    if (!plan) throw new Error('This plan is no longer available.')
+
+    const [existingSubscription] = await tx`
+      select id
+      from subscriptions
+      where customer_id = ${customerId}
+        and status = 'active'
+        and (end_date is null or end_date >= current_date)
+      limit 1
+      for update
+    `
+    if (existingSubscription) throw new Error('You already have an active subscription.')
+
+    const [settings] = await tx`
+      select semester_end_date from app_settings where key = 'semester' limit 1
+    `
+    const startDate = new Date()
+    const startDateValue = startDate.toISOString().slice(0, 10)
+    const endDate =
+      plan.type === 'semester'
+        ? (settings?.semester_end_date ??
+          plan.semester_end_date ??
+          new Date(startDate.getFullYear(), startDate.getMonth() + 6, startDate.getDate()).toISOString().slice(0, 10))
+        : new Date(startDate.getFullYear(), startDate.getMonth() + 1, startDate.getDate()).toISOString().slice(0, 10)
+    const subscription = await insertSubscriptionWithSnapshot(tx, {
+      customerId,
+      planId: plan.id,
+      startDate: startDateValue,
+      endDate,
+    })
+
+    await debitWallet(tx, customerId, null, Number(plan.price), 'one_off', subscription.id)
+
+    return {
+      subscriptionId: subscription.id,
+      planName: plan.name,
+      amount: Number(plan.price),
+    }
+  })
+
+  await sendCustomerNotification({
+    eventKey: `subscription:${result.subscriptionId}:activated`,
+    customerId,
+    notificationType: 'subscription_activated',
+    subscriptionId: result.subscriptionId,
+    payload: {
+      title: 'Plan activated',
+      body: `Your ${result.planName} plan is now active.`,
+      details: [
+        `Plan: ${result.planName}`,
+        `Paid from wallet: ₦${result.amount.toLocaleString()}`,
+        'Your subscription benefits are now available.',
+      ],
+      url: '/plans',
+      tag: `subscription:${result.subscriptionId}`,
+    },
+  })
+
+  return result
+}
+
 /** Completes a paid subscription transaction without changing either wallet balance. */
 export async function activateSubscriptionFromPayment(customerId: string, paymentReference: string) {
   return sql.begin(async (tx) => {
@@ -976,7 +1073,7 @@ export async function chargeSubscriptionInvoice(customerId: string, invoiceId: s
       throw new Error('Invoice is not payable in its current order state')
 
     const amount = Number(invoice.amount)
-    const { newBalance } = await debitWalletForInvoice(tx, customerId, invoiceId, amount, 'one_off')
+    const { newBalance } = await debitWallet(tx, customerId, invoiceId, amount, 'one_off')
     const deliveryOtp = await generateFourDigitOtp(tx)
     await tx`update invoices set status = 'paid', paid_at = now() where id = ${invoiceId}`
     await tx`

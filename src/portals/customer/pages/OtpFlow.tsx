@@ -15,7 +15,7 @@ export default function OtpFlow() {
     {
       label: 'Delivery OTP',
       detail: 'Use this to collect your clean clothes',
-      value: order?.paymentStatus === 'Paid' && order.dispatched ? order.deliveryOtp : undefined,
+      value: order?.paymentStatus === 'Paid' ? order.deliveryOtp : undefined,
     },
   ]
 
@@ -29,9 +29,7 @@ export default function OtpFlow() {
         ? 'Delivered'
         : order?.paymentStatus !== 'Paid'
           ? 'Awaiting payment'
-          : !order?.dispatched
-            ? 'Awaiting dispatch'
-            : 'Not ready'
+          : 'Preparing delivery code'
 
   return (
     <div className="space-y-5 pb-8">

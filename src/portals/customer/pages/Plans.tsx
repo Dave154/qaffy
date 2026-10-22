@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Check, ChevronRight } from 'lucide-react'
+import { Check, ChevronRight, X } from 'lucide-react'
 import { data, useFetcher, useLoaderData, useLocation, useRevalidator } from 'react-router'
 import type { Route } from './+types/Plans'
 import PlanEndingBanner from '../../../components/PlanEndingBanner'
@@ -7,6 +7,7 @@ import { useCustomerStore } from '../customer-store-hook'
 import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
 import { toast } from '../../../lib/toast'
 import type { Plan } from '../../../types/database.types'
+import { getSpendableWalletBalance, purchaseSubscriptionWithWallet } from '../../../lib/wallet.server'
 
 type BillingPeriod = 'monthly' | 'semester'
 
@@ -61,12 +62,12 @@ export async function action({ request }: Route.ActionArgs) {
   if (!userData.user) return data({ ok: false, message: 'Please sign in first.' }, { status: 401, headers })
 
   const formData = await request.formData()
-  const { data: planRows, error: planError } = await serverSupabase
-    .from('plans')
-    .select('*')
-    .eq('id', String(formData.get('planId') ?? ''))
-    .eq('active', true)
-    .limit(1)
+  const intent = String(formData.get('intent') ?? 'choose')
+  if (!['choose', 'wallet', 'paystack'].includes(intent))
+    return data({ ok: false, message: 'Choose a valid payment method.' }, { status: 400, headers })
+  const planId = String(formData.get('planId') ?? '')
+  if (!planId) return data({ ok: false, message: 'Choose a plan.' }, { status: 400, headers })
+  const { data: planRows, error: planError } = await serverSupabase.from('plans').select('*').eq('id', planId).eq('active', true).limit(1)
 
   if (planError || !planRows?.[0])
     return data({ ok: false, message: 'This plan is not configured in the database.' }, { status: 400, headers })
@@ -77,27 +78,72 @@ export async function action({ request }: Route.ActionArgs) {
     .select('id, end_date')
     .eq('customer_id', userData.user.id)
     .eq('status', 'active')
+    .or(`end_date.is.null,end_date.gte.${new Date().toISOString().slice(0, 10)}`)
     .limit(1)
     .maybeSingle()
 
   if (existingError) return data({ ok: false, message: 'Could not check your current subscription.' }, { status: 500, headers })
-  if (existingSubscription && (!existingSubscription.end_date || existingSubscription.end_date >= new Date().toISOString().slice(0, 10))) {
+  if (existingSubscription) {
     return data({ ok: false, message: 'You already have an active subscription.' }, { status: 409, headers })
   }
 
   const amount = Number(plan.price)
+  if (intent === 'choose') {
+    const spendableBalance = await getSpendableWalletBalance(userData.user.id)
+    if (spendableBalance >= amount)
+      return data(
+        {
+          ok: true,
+          showPaymentChoices: true,
+          requestId: String(formData.get('requestId') ?? ''),
+          planId: plan.id,
+          planName: plan.name,
+          amount,
+          spendableBalance,
+        },
+        { headers },
+      )
+  }
+
+  if (intent === 'wallet') {
+    try {
+      await purchaseSubscriptionWithWallet(userData.user.id, plan.id)
+      return data({ ok: true, walletPurchase: true, requestId: String(formData.get('requestId') ?? '') }, { headers })
+    } catch (error) {
+      if (error instanceof Error && error.message === 'INSUFFICIENT_BALANCE') {
+        const spendableBalance = await getSpendableWalletBalance(userData.user.id)
+        return data(
+          {
+            ok: false,
+            message: 'Your wallet balance changed. Choose Paystack to pay the full plan price.',
+            walletNoLongerEnough: true,
+            requestId: String(formData.get('requestId') ?? ''),
+            planId: plan.id,
+            amount,
+            spendableBalance,
+          },
+          { status: 409, headers },
+        )
+      }
+      if (error instanceof Error && error.message === 'You already have an active subscription.')
+        return data({ ok: false, message: error.message }, { status: 409, headers })
+      if (error instanceof Error && error.message === 'This plan is no longer available.')
+        return data({ ok: false, message: error.message }, { status: 409, headers })
+      console.error('[customer-plans] Wallet plan purchase failed', error)
+      return data({ ok: false, message: 'The wallet payment could not be completed. Please try again.' }, { status: 500, headers })
+    }
+  }
+
   const reference = `subscription_${crypto.randomUUID()}`
-  const { error: paymentError } = await serverSupabase
-    .from('payments')
-    .insert({
-      customer_id: userData.user.id,
-      provider: 'paystack',
-      reference,
-      amount,
-      balance_type: 'subscription',
-      plan_id: plan.id,
-      status: 'pending',
-    })
+  const { error: paymentError } = await serverSupabase.from('payments').insert({
+    customer_id: userData.user.id,
+    provider: 'paystack',
+    reference,
+    amount,
+    balance_type: 'subscription',
+    plan_id: plan.id,
+    status: 'pending',
+  })
   if (paymentError) return data({ ok: false, message: 'The subscription payment could not be recorded.' }, { status: 500, headers })
 
   const secretKey = process.env.PAYSTACK_SECRET_KEY
@@ -138,6 +184,8 @@ export default function Plans() {
   const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>(() =>
     plans.some((plan) => plan.billingPeriod === 'semester') ? 'semester' : 'monthly',
   )
+  const [isPaymentChoiceDismissed, setIsPaymentChoiceDismissed] = useState(false)
+  const [latestPaymentRequestId, setLatestPaymentRequestId] = useState<string | null>(null)
   const visiblePlans = plans.filter((plan) => plan.billingPeriod === billingPeriod)
   const currentPlan = activePlan
     ? {
@@ -172,20 +220,51 @@ export default function Plans() {
   }, [activePlan, location.search, revalidator])
 
   const isSubscribing = fetcher.state !== 'idle'
+  const submittingIntent = isSubscribing ? String(fetcher.formData?.get('intent') ?? 'choose') : ''
   const submittingPlanId = isSubscribing ? String(fetcher.formData?.get('planId') ?? '') : ''
   useEffect(() => {
     if (fetcher.data?.ok && 'authorizationUrl' in fetcher.data && fetcher.data.authorizationUrl) {
       window.location.assign(fetcher.data.authorizationUrl)
       return
     }
+    if (fetcher.data?.ok && 'showPaymentChoices' in fetcher.data && fetcher.data.showPaymentChoices) return
     if (fetcher.data && !fetcher.data.ok && 'message' in fetcher.data) {
       toast.error(fetcher.data.message)
     }
     if (fetcher.data?.ok && !('authorizationUrl' in fetcher.data)) {
-      toast.success('Subscription payment completed.')
+      toast.success(
+        'walletPurchase' in fetcher.data && fetcher.data.walletPurchase
+          ? 'Plan purchased with your wallet.'
+          : 'Subscription payment completed.',
+      )
       revalidator.revalidate()
     }
   }, [fetcher.data, revalidator])
+  const isLatestPaymentResponse =
+    fetcher.data &&
+    'requestId' in fetcher.data &&
+    typeof fetcher.data.requestId === 'string' &&
+    fetcher.data.requestId === latestPaymentRequestId
+  const canChoosePayment =
+    isLatestPaymentResponse && fetcher.data?.ok && 'showPaymentChoices' in fetcher.data && fetcher.data.showPaymentChoices
+  const walletRetryRequired =
+    isLatestPaymentResponse &&
+    fetcher.data &&
+    !fetcher.data.ok &&
+    'walletNoLongerEnough' in fetcher.data &&
+    fetcher.data.walletNoLongerEnough === true
+  const shouldShowPaymentChoices = !isSubscribing && Boolean(walletRetryRequired || (canChoosePayment && !isPaymentChoiceDismissed))
+  const paymentChoicePlanId =
+    shouldShowPaymentChoices && fetcher.data && 'planId' in fetcher.data && typeof fetcher.data.planId === 'string'
+      ? fetcher.data.planId
+      : null
+  const paymentChoicePlan = plans.find((plan) => plan.id === paymentChoicePlanId) ?? null
+  const choiceSpendableBalance = fetcher.data && 'spendableBalance' in fetcher.data ? Number(fetcher.data.spendableBalance) : 0
+  const choicePlanAmount =
+    fetcher.data && 'amount' in fetcher.data && typeof fetcher.data.amount === 'number'
+      ? fetcher.data.amount
+      : (paymentChoicePlan?.price ?? 0)
+  const walletNoLongerEnough = Boolean(walletRetryRequired)
 
   return (
     <div className="space-y-6 pb-8">
@@ -288,7 +367,10 @@ export default function Plans() {
                   type="button"
                   disabled={Boolean(activePlan) || isSubscribing}
                   onClick={() => {
-                    fetcher.submit({ planId: plan.id }, { method: 'post' })
+                    setIsPaymentChoiceDismissed(false)
+                    const requestId = window.crypto.randomUUID()
+                    setLatestPaymentRequestId(requestId)
+                    fetcher.submit({ intent: 'choose', planId: plan.id, requestId }, { method: 'post' })
                   }}
                   className={`mt-6 flex w-full items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold transition ${isCurrent ? 'cursor-default bg-[#eef9f7] text-[#418d87]' : activePlan ? 'cursor-not-allowed border border-slate-200 bg-slate-50 text-slate-400' : plan.featured ? 'bg-brand-strong text-white hover:bg-brand-strong-hover' : 'border border-brand-border bg-white text-brand-strong hover:bg-brand-soft'} ${isSubscribing && submittingPlanId !== plan.id ? 'opacity-50' : ''}`}
                 >
@@ -299,7 +381,13 @@ export default function Plans() {
                   ) : activePlan ? (
                     'Current subscription active'
                   ) : submittingPlanId === plan.id ? (
-                    'Opening secure checkout...'
+                    submittingIntent === 'paystack' ? (
+                      'Opening secure checkout...'
+                    ) : submittingIntent === 'wallet' ? (
+                      'Paying with wallet...'
+                    ) : (
+                      'Checking payment options...'
+                    )
                   ) : (
                     <>
                       Choose plan <ChevronRight className="h-4 w-4" />
@@ -311,6 +399,67 @@ export default function Plans() {
           })
         )}
       </section>
+
+      {paymentChoicePlan && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="plan-payment-title"
+            className="w-full max-w-md rounded-3xl bg-white p-6 text-center shadow-2xl sm:p-8"
+          >
+            <h3 id="plan-payment-title" className="text-2xl font-bold tracking-tight text-slate-900">
+              Choose how to pay
+            </h3>
+            <div className="mt-6 rounded-2xl bg-slate-50 px-4 py-4">
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{paymentChoicePlan.name}</p>
+              <p className="mt-1 text-2xl font-bold text-slate-900">{formatPrice(choicePlanAmount)}</p>
+            </div>
+            {!walletNoLongerEnough && (
+              <p className="mt-3 text-xs text-slate-500">Wallet available: {formatPrice(choiceSpendableBalance)}</p>
+            )}
+            <div className="mt-6 grid gap-3">
+              {!walletNoLongerEnough && (
+                <button
+                  type="button"
+                  disabled={isSubscribing}
+                  onClick={() => {
+                    setIsPaymentChoiceDismissed(true)
+                    const requestId = window.crypto.randomUUID()
+                    setLatestPaymentRequestId(requestId)
+                    fetcher.submit({ intent: 'wallet', planId: paymentChoicePlan.id, requestId }, { method: 'post' })
+                  }}
+                  className="flex min-h-14 items-center justify-center rounded-2xl bg-brand-strong px-5 py-3.5 text-sm font-semibold text-white shadow-[0_6px_16px_rgba(0,143,166,0.2)] transition duration-200 hover:-translate-y-0.5 hover:bg-brand-strong-hover hover:shadow-[0_9px_20px_rgba(0,143,166,0.24)] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-brand-focus/40 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
+                >
+                  {isSubscribing && submittingIntent === 'wallet' ? 'Paying with wallet...' : 'Pay with wallet'}
+                </button>
+              )}
+              <button
+                type="button"
+                disabled={isSubscribing}
+                onClick={() => {
+                  setIsPaymentChoiceDismissed(true)
+                  const requestId = window.crypto.randomUUID()
+                  setLatestPaymentRequestId(requestId)
+                  fetcher.submit({ intent: 'paystack', planId: paymentChoicePlan.id, requestId }, { method: 'post' })
+                }}
+                className="flex min-h-14 items-center justify-center rounded-2xl border border-slate-200 bg-white px-5 py-3.5 text-sm font-semibold text-slate-700 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-brand-border hover:bg-brand-soft hover:text-brand-strong hover:shadow-md focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-brand-focus/40 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
+              >
+                {isSubscribing && submittingIntent === 'paystack' ? 'Opening secure checkout...' : 'Pay with Paystack'}
+              </button>
+              <button
+                type="button"
+                disabled={isSubscribing}
+                onClick={() => setIsPaymentChoiceDismissed(true)}
+                className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold text-rose-600 transition hover:bg-rose-50 hover:text-rose-700 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <X size={16} aria-hidden="true" />
+                Cancel
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
 
       {fetcher.data && !fetcher.data.ok && 'message' in fetcher.data && (
         <p role="alert" className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">

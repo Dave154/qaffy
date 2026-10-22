@@ -593,7 +593,7 @@ The customer portal is the current completion target. Do not move to another por
 - Confirmed vendor mismatches appear as customer notifications and on the affected order in Home, Orders, and order details; mismatch visibility begins only after vendor confirmation.
 - Customer Home shows a dismissible mismatch banner, following the subscription-ending banner pattern, with a link to affected orders.
 - Mismatch banner lifecycle: unpaid mismatches remain visible until the invoice is paid; paid mismatches show once and can be dismissed, while the mismatch remains on the order details.
-- Customer order details hide pickup OTP after pickup and delivery OTP after delivery; trusted logistics updates also nullify both OTPs at handoff.
+- Customer order details hide pickup OTP after pickup and delivery OTP after delivery. Once the invoice is paid, the customer can see the delivery OTP before or after dispatch; trusted logistics updates still nullify the OTP at delivery.
 - Validation for this slice: `npm run typecheck` and `npm run build` pass.
 
 ### Next customer task
@@ -630,10 +630,12 @@ The customer portal payment and subscription foundation is now implemented as of
 
 - One-time wallet top-ups initialize Paystack from `src/portals/customer/pages/Home.tsx`.
 - Subscription purchases initialize Paystack from `src/portals/customer/pages/Plans.tsx`.
-- Both payment types create a pending `payments` row before Paystack initialization.
-- One-time payments have `plan_id = null`; subscription payments store the selected `plan_id`.
-- `src/routes/paystack-webhook.ts` is the only payment authority that can mark payments successful, credit one-time wallet funds, or activate subscriptions.
+- Paystack top-ups and Paystack subscription purchases create a pending `payments` row before initialization. Wallet plan purchases do not create a Paystack payment.
+- Paystack top-ups have `plan_id = null`; Paystack subscription payments store the selected `plan_id`.
+- `src/routes/paystack-webhook.ts` is the payment authority for Paystack payments and their wallet/subscription effects. Full-price wallet subscription purchases use the trusted wallet service.
 - The browser never verifies Paystack payments and never mutates wallet balances or subscriptions.
+- When spendable one-off balance plus unexpired promotional credits covers the full plan price, the Plans page offers Paystack or wallet payment. Wallet purchases spend promotional credit first, have no partial-payment option or cashback, atomically debit and activate, and appear in customer transaction history.
+- Apply `supabase/migrations/20261021110000_wallet_subscription_purchase_ledger.sql` before enabling wallet plan purchases.
 - Paystack return URLs are navigation-only: `/` for top-ups and `/plans?payment=pending` for subscriptions.
 - Subscription return handling uses Supabase Realtime first and a bounded 15-attempt loader refresh fallback; it does not verify payment.
 - Wallet and subscription Realtime subscriptions are in `src/portals/customer/CustomerLayout.tsx`.
@@ -644,7 +646,7 @@ The customer portal payment and subscription foundation is now implemented as of
 - Purchase actions re-read the selected active plan server-side, so the client cannot control price or weekly limit.
 - A customer with an unexpired active subscription cannot select another plan; the UI disables all purchase buttons and the server rejects duplicates.
 - Expired subscriptions no longer count as current. Active subscriptions with no end date remain active.
-- Subscription purchase price does not credit `one_off_balance` or `subscription_balance`; it creates the subscription after webhook success.
+- Paystack subscription purchase price does not credit `one_off_balance` or `subscription_balance`; it creates the subscription after webhook success. Wallet purchases debit one-off and eligible promotional balances directly.
 - The active-plan usage bar uses live `subscriptionUsedUnits / weekly_limit` data in both the Plans page and customer sidebar.
 
 #### Required migrations

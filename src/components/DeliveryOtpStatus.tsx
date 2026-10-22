@@ -11,7 +11,7 @@ export default function DeliveryOtpStatus() {
         </span>
         <span className="absolute inset-x-0 top-[4.5%] bottom-[4.5%] flex items-center justify-center gap-1.5 bg-white px-2 text-xs font-bold text-brand-primary backdrop-blur-md drop-shadow-[0_1px_2px_rgba(255,255,255,0.8)] [-webkit-mask-image:radial-gradient(ellipse_at_center,black_40%,transparent_100%)] [mask-image:radial-gradient(ellipse_at_center,black_40%,transparent_100%)]">
           <LockKeyhole className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-          <span>Awaiting dispatch</span>
+          <span>Preparing delivery code</span>
         </span>
       </div>
     </div>

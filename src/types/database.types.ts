@@ -190,6 +190,7 @@ export interface WalletTransaction {
   related_invoice_id: string | null
   related_payment_id: string | null
   related_referral_reward_id: string | null
+  related_subscription_id: string | null
   created_at: string
 }
 

@@ -49,16 +49,14 @@ export async function action({ request }: Route.ActionArgs) {
   const secretKey = process.env.PAYSTACK_SECRET_KEY
   if (!secretKey) return data({ ok: false, message: 'Paystack is not configured.' }, { status: 503, headers })
   const paymentReference = `topup_${crypto.randomUUID()}`
-  const { error: paymentError } = await serverSupabase
-    .from('payments')
-    .insert({
-      customer_id: userData.user.id,
-      provider: 'paystack',
-      reference: paymentReference,
-      amount,
-      balance_type: 'one_off',
-      status: 'pending',
-    })
+  const { error: paymentError } = await serverSupabase.from('payments').insert({
+    customer_id: userData.user.id,
+    provider: 'paystack',
+    reference: paymentReference,
+    amount,
+    balance_type: 'one_off',
+    status: 'pending',
+  })
   if (paymentError) {
     console.error('Paystack pending payment insert failed:', paymentError)
     return data(
@@ -90,8 +88,18 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function Home() {
-  const { balance, subscriptionBalance, customerName, customerId, referralCode, orders, invoices, subscription, subscriptionEndDate, pendingTopUp } =
-    useCustomerStore()
+  const {
+    balance,
+    subscriptionBalance,
+    customerName,
+    customerId,
+    referralCode,
+    orders,
+    invoices,
+    subscription,
+    subscriptionEndDate,
+    pendingTopUp,
+  } = useCustomerStore()
   const [searchParams, setSearchParams] = useSearchParams()
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false)
   const [isTopUpModalOpen, setIsTopUpModalOpen] = useState(() => searchParams.get('topup') === '1')
@@ -108,7 +116,7 @@ export default function Home() {
     .reduce((total, order) => total + order.total, 0)
   const getVisibleOtp = (order: (typeof orders)[number]) => {
     if (order.status === 'Awaiting pickup') return order.pickupOtp
-    if (order.paymentStatus === 'Paid' && order.dispatched && order.deliveryOtp) return order.deliveryOtp
+    if (order.paymentStatus === 'Paid' && order.status !== 'Delivered' && order.deliveryOtp) return order.deliveryOtp
     return ''
   }
   const getVisibleOtpLabel = (order: (typeof orders)[number]) => (order.status === 'Awaiting pickup' ? 'Pickup OTP' : 'Delivery OTP')
@@ -358,103 +366,103 @@ export default function Home() {
             const isCancelling = cancelFetcher.state !== 'idle' && cancelFetcher.formData?.get('orderId') === order.id
             return (
               <article key={order.id} className="border-b border-[#eeeeee] bg-white p-4 last:border-b-0">
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                <div className="min-w-0 flex-1 sm:pr-4">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-lg font-semibold text-slate-900">
-                      <CopyableOrderId id={order.publicOrderNumber} />
-                    </p>
-                    <span
-                      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold ${order.statusTone}`}
-                    >
-                      <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" aria-hidden="true" />
-                      <span>{order.status}</span>
-                    </span>
-                  </div>
-                  <p className="mt-2 text-sm font-medium text-slate-700">{order.title}</p>
-                  <p className="mt-1 text-xs text-slate-500">{order.date}</p>
-                  {order.mismatch && (
-                    <div className="mt-3 min-w-0 overflow-hidden rounded-xl border border-amber-200 bg-amber-50 p-3 text-left">
-                      <p className="text-xs font-semibold text-amber-800">
-                        Count update: {order.mismatch.direction === 'over' ? 'extra items confirmed' : 'fewer items confirmed'}
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0 flex-1 sm:pr-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-lg font-semibold text-slate-900">
+                        <CopyableOrderId id={order.publicOrderNumber} />
                       </p>
-                      <p className="mt-1 min-w-0 truncate text-xs text-amber-700" title={order.mismatch.detail}>
-                        {order.mismatch.detail}
-                      </p>
+                      <span
+                        className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold ${order.statusTone}`}
+                      >
+                        <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" aria-hidden="true" />
+                        <span>{order.status}</span>
+                      </span>
                     </div>
-                  )}
-                </div>
-
-                <div className="shrink-0 sm:ml-2">
-                  {order.status === 'Pending payment' && order.total > 0 ? (
-                    <DeliveryOtpPaywall
-                      amount={order.total}
-                      walletBalance={balance}
-                      invoiceId={invoices.find((invoice) => invoice.orderId === order.id && invoice.status === 'Awaiting payment')?.id}
-                      onClick={() => setIsTopUpModalOpen(true)}
-                    />
-                  ) : order.paymentStatus === 'Paid' && !order.dispatched && order.status !== 'Delivered' ? (
-                    <DeliveryOtpStatus />
-                  ) : getVisibleOtp(order) ? (
-                    <div className="flex items-start gap-3 sm:flex-col sm:items-end">
-                      <div className="min-w-0">
-                        <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-brand-primary">
-                          {getVisibleOtpLabel(order)}
+                    <p className="mt-2 text-sm font-medium text-slate-700">{order.title}</p>
+                    <p className="mt-1 text-xs text-slate-500">{order.date}</p>
+                    {order.mismatch && (
+                      <div className="mt-3 min-w-0 overflow-hidden rounded-xl border border-amber-200 bg-amber-50 p-3 text-left">
+                        <p className="text-xs font-semibold text-amber-800">
+                          Count update: {order.mismatch.direction === 'over' ? 'extra items confirmed' : 'fewer items confirmed'}
                         </p>
-                        <div className="mt-2">
-                          <ProtectedOtp value={getVisibleOtp(order)} digitClassName="h-10 w-10 text-base" />
+                        <p className="mt-1 min-w-0 truncate text-xs text-amber-700" title={order.mismatch.detail}>
+                          {order.mismatch.detail}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="shrink-0 sm:ml-2">
+                    {order.status === 'Pending payment' && order.total > 0 ? (
+                      <DeliveryOtpPaywall
+                        amount={order.total}
+                        walletBalance={balance}
+                        invoiceId={invoices.find((invoice) => invoice.orderId === order.id && invoice.status === 'Awaiting payment')?.id}
+                        onClick={() => setIsTopUpModalOpen(true)}
+                      />
+                    ) : order.paymentStatus === 'Paid' && order.status !== 'Delivered' && !order.deliveryOtp ? (
+                      <DeliveryOtpStatus />
+                    ) : getVisibleOtp(order) ? (
+                      <div className="flex items-start gap-3 sm:flex-col sm:items-end">
+                        <div className="min-w-0">
+                          <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-brand-primary">
+                            {getVisibleOtpLabel(order)}
+                          </p>
+                          <div className="mt-2">
+                            <ProtectedOtp value={getVisibleOtp(order)} digitClassName="h-10 w-10 text-base" />
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ) : (
-                    <div className="text-left sm:text-right">
-                      <p className="max-w-40 text-sm font-bold text-slate-900">{getAmountLabel(order)}</p>
-                      <p className="mt-1 text-xs text-slate-500">{order.items} clothes</p>
-                    </div>
-                  )}
+                    ) : (
+                      <div className="text-left sm:text-right">
+                        <p className="max-w-40 text-sm font-bold text-slate-900">{getAmountLabel(order)}</p>
+                        <p className="mt-1 text-xs text-slate-500">{order.items} clothes</p>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
 
-              <div className="mt-4 flex flex-col gap-3 border-t border-slate-200 pt-3 sm:flex-row sm:items-center sm:justify-between">
-                <p className="text-sm text-slate-600">{order.pickup}</p>
-                <div className="flex flex-wrap items-center gap-2">
-                  {order.status === 'Awaiting pickup' && (
-                    <cancelFetcher.Form
-                      method="post"
-                      action="/orders"
-                      onSubmit={(event) => {
-                        if (!window.confirm('Are you sure you want to cancel this order?')) event.preventDefault()
-                      }}
-                    >
-                      <input type="hidden" name="intent" value="cancel-order" />
-                      <input type="hidden" name="orderId" value={order.id} />
-                      <button
-                        type="submit"
-                        disabled={cancelFetcher.state !== 'idle'}
-                        className="rounded-lg border border-rose-200 bg-white px-3.5 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                <div className="mt-4 flex flex-col gap-3 border-t border-slate-200 pt-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-sm text-slate-600">{order.pickup}</p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {order.status === 'Awaiting pickup' && (
+                      <cancelFetcher.Form
+                        method="post"
+                        action="/orders"
+                        onSubmit={(event) => {
+                          if (!window.confirm('Are you sure you want to cancel this order?')) event.preventDefault()
+                        }}
                       >
-                        {cancelFetcher.state !== 'idle' && cancelFetcher.formData?.get('orderId') === order.id
-                          ? 'Cancelling…'
-                          : 'Cancel order'}
-                      </button>
-                    </cancelFetcher.Form>
-                  )}
-                  <Link
-                    to={`/orders?order=${encodeURIComponent(order.publicOrderNumber)}&returnTo=${encodeURIComponent('/')}`}
-                    prefetch="intent"
-                    aria-disabled={isCancelling}
-                    tabIndex={isCancelling ? -1 : undefined}
-                    onClick={(event) => {
-                      if (isCancelling) event.preventDefault()
-                    }}
-                    className={`rounded-lg border border-brand-border bg-white px-3.5 py-2 text-center text-sm font-semibold text-brand-primary hover:bg-brand-soft ${
-                      isCancelling ? 'pointer-events-none cursor-not-allowed opacity-50' : ''
-                    }`}
-                  >
-                    View order
-                  </Link>
+                        <input type="hidden" name="intent" value="cancel-order" />
+                        <input type="hidden" name="orderId" value={order.id} />
+                        <button
+                          type="submit"
+                          disabled={cancelFetcher.state !== 'idle'}
+                          className="rounded-lg border border-rose-200 bg-white px-3.5 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                        >
+                          {cancelFetcher.state !== 'idle' && cancelFetcher.formData?.get('orderId') === order.id
+                            ? 'Cancelling…'
+                            : 'Cancel order'}
+                        </button>
+                      </cancelFetcher.Form>
+                    )}
+                    <Link
+                      to={`/orders?order=${encodeURIComponent(order.publicOrderNumber)}&returnTo=${encodeURIComponent('/')}`}
+                      prefetch="intent"
+                      aria-disabled={isCancelling}
+                      tabIndex={isCancelling ? -1 : undefined}
+                      onClick={(event) => {
+                        if (isCancelling) event.preventDefault()
+                      }}
+                      className={`rounded-lg border border-brand-border bg-white px-3.5 py-2 text-center text-sm font-semibold text-brand-primary hover:bg-brand-soft ${
+                        isCancelling ? 'pointer-events-none cursor-not-allowed opacity-50' : ''
+                      }`}
+                    >
+                      View order
+                    </Link>
+                  </div>
                 </div>
-              </div>
               </article>
             )
           })}
