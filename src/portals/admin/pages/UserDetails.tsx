@@ -8,7 +8,11 @@ import { createManualSubscriptionWithSnapshot } from '../../../lib/subscriptions
 import { sql } from '../../../lib/db.server'
 import { toast } from '../../../lib/toast'
 import { sumSuccessfulPlanPayments } from '../../../lib/revenue-reporting'
-import { calculateSubscriptionAllowance, calculateSubscriptionUnitsApplied } from '../../../lib/subscription-week'
+import {
+  calculateSubscriptionAllowance,
+  calculateSubscriptionUnitsApplied,
+  calculateSubscriptionUnitsUsed,
+} from '../../../lib/subscription-week'
 
 type DetailOrder = {
   id: string
@@ -75,6 +79,8 @@ type UserDetailsData = {
   activeSubscriptionAllowance: {
     weeklyUnits: number
     availableUnits: number
+    usedThisWeek: number
+    totalUnitsUsed: number
     reservedUnits: number
   } | null
   orders: DetailOrder[]
@@ -180,6 +186,15 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   const activeSubscription = (subscriptions ?? []).find(
     (subscription) => subscription.status === 'active' && (!subscription.end_date || subscription.end_date >= today),
   )
+  const allowanceReference = new Date()
+  const totalSubscriptionUnitsUsed = activeSubscription
+    ? calculateSubscriptionUnitsApplied(orders ?? [], {
+        id: activeSubscription.id,
+        startDate: activeSubscription.start_date,
+        endDate: activeSubscription.end_date,
+      })
+    : 0
+  const subscriptionUnitsUsedThisWeek = calculateSubscriptionUnitsUsed(orders ?? [], allowanceReference)
   const activeSubscriptionAllowance = activeSubscription
     ? calculateSubscriptionAllowance(
         {
@@ -187,13 +202,9 @@ export async function loader({ request, params }: Route.LoaderArgs) {
           startDate: activeSubscription.start_date,
           startAt: activeSubscription.created_at,
           endDate: activeSubscription.end_date,
-          usedUnits: calculateSubscriptionUnitsApplied(orders ?? [], {
-            id: activeSubscription.id,
-            startDate: activeSubscription.start_date,
-            endDate: activeSubscription.end_date,
-          }),
+          usedUnits: totalSubscriptionUnitsUsed,
         },
-        new Date(),
+        allowanceReference,
       )
     : null
   const stats = {
@@ -225,6 +236,8 @@ export async function loader({ request, params }: Route.LoaderArgs) {
         ? {
             weeklyUnits: Number(activeSubscription?.weekly_limit_snapshot ?? 0),
             availableUnits: Math.max(0, activeSubscriptionAllowance.balance),
+            usedThisWeek: subscriptionUnitsUsedThisWeek,
+            totalUnitsUsed: totalSubscriptionUnitsUsed,
             reservedUnits: Math.max(0, -activeSubscriptionAllowance.balance),
           }
         : null,
@@ -649,25 +662,27 @@ export default function UserDetails() {
         <ManualSubscription plans={details.plans} semesterEndDate={details.semesterEndDate} isSaving={isSaving} />
       </section>
       {details.activeSubscriptionAllowance && (
-        <section className="rounded-2xl border border-[#a7d7d2] bg-[#eef9f7] p-5 shadow-sm">
-          <h3 className="font-bold text-slate-900">This week’s subscription units</h3>
-          <div className="mt-4 grid gap-4 sm:grid-cols-3">
-            <div>
-              <p className="text-xs text-slate-500">Weekly allowance</p>
-              <p className="mt-1 text-xl font-bold text-slate-900">{details.activeSubscriptionAllowance.weeklyUnits} units</p>
+        <section className="rounded-2xl border border-brand-border bg-brand-soft p-5 shadow-sm">
+          <h3 className="font-bold text-slate-900">Subscription units</h3>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-xl border border-brand-border bg-white/80 p-3">
+              <p className="text-xs font-medium text-slate-500">Weekly allowance</p>
+              <p className="mt-1 text-2xl font-bold text-brand-primary">{details.activeSubscriptionAllowance.weeklyUnits}</p>
             </div>
-            <div>
-              <p className="text-xs text-slate-500">Available balance, including rollover</p>
-              <p className="mt-1 text-xl font-bold text-slate-900">{details.activeSubscriptionAllowance.availableUnits} units</p>
+            <div className="rounded-xl border border-brand-border bg-white/80 p-3">
+              <p className="text-xs font-medium text-slate-500">Total used</p>
+              <p className="mt-1 text-2xl font-bold text-brand-primary">{details.activeSubscriptionAllowance.totalUnitsUsed}</p>
+              <p className="mt-1 text-xs text-slate-500">This week: {details.activeSubscriptionAllowance.usedThisWeek}</p>
             </div>
-            <div>
-              <p className="text-xs text-slate-500">Reserved from upcoming allowance</p>
-              <p className="mt-1 text-xl font-bold text-amber-700">{details.activeSubscriptionAllowance.reservedUnits} units</p>
+            <div className="rounded-xl border border-brand-border bg-white/80 p-3">
+              <p className="text-xs font-medium text-slate-500">Available (rollover)</p>
+              <p className="mt-1 text-2xl font-bold text-brand-primary">{details.activeSubscriptionAllowance.availableUnits}</p>
+            </div>
+            <div className="rounded-xl border border-brand-border bg-white/80 p-3">
+              <p className="text-xs font-medium text-slate-500">Borrowed from next week</p>
+              <p className="mt-1 text-2xl font-bold text-brand-primary">{details.activeSubscriptionAllowance.reservedUnits}</p>
             </div>
           </div>
-          <p className="mt-3 text-xs text-slate-500">
-            Reserved units are allowance already borrowed through vendor-confirmed orders; they reduce future available balance.
-          </p>
         </section>
       )}
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
