@@ -7,8 +7,12 @@ import {
   sendCustomerNotification,
   sendWalletInvoicePaidNotifications,
 } from './notifications.server'
-import { getSubscriptionWeekStart } from './subscription-week'
-import { insertSubscriptionWithSnapshot, lockCustomerSubscription } from './subscriptions.server'
+import {
+  calculateSubscriptionAllowance,
+  getAuthorizedSubscriptionBorrowUnits,
+  getSubscriptionWeekStart,
+} from './subscription-week'
+import { addCalendarMonthsToDate, insertSubscriptionWithSnapshot, lockCustomerSubscription } from './subscriptions.server'
 import { calculateSubscriptionBilling } from './subscription-billing'
 import { isValidVendorReceivedItems } from './vendor-received-counts'
 
@@ -16,6 +20,10 @@ class InsufficientBalanceError extends Error {
   constructor() {
     super('INSUFFICIENT_BALANCE')
   }
+}
+
+function toDateOnly(value: Date | string) {
+  return value instanceof Date ? value.toISOString().slice(0, 10) : value.slice(0, 10)
 }
 
 async function generateFourDigitOtp(tx: TransactionSql) {
@@ -505,14 +513,19 @@ export async function finalizeVendorOrder(
 
     let invoiceAmount = Math.round(finalAmount * 100) / 100
     let subscriptionUnitsApplied = 0
+    let subscriptionUnitsBorrowed = 0
+    let subscriptionBalanceAfterNextCredit: number | null = null
+    let appliedSubscriptionId: string | null = order.subscription_id ?? null
     let billingBreakdown: { coveredUnits: number; subscriberAmount: number; regularAmount: number } | null = null
     if (order.is_subscription_order) {
-      const weekStart = getSubscriptionWeekStart()
-      let weeklyLimit = 0
+      let weeklyLimit: number
+      let startDate: string | null
+      let startAt: string | null
+      let endDate: string | null
       let coverage = { wash: true, iron: true }
       if (order.subscription_id) {
         const [snapshot] = await tx`
-          select weekly_limit_snapshot, covers_wash_snapshot, covers_iron_snapshot
+          select weekly_limit_snapshot, covers_wash_snapshot, covers_iron_snapshot, start_date, end_date, created_at
           from subscriptions
           where id = ${order.subscription_id} and customer_id = ${order.customer_id}
           for update
@@ -520,9 +533,12 @@ export async function finalizeVendorOrder(
         if (!snapshot) throw new Error('The subscription terms for this order could not be found')
         weeklyLimit = Number(snapshot.weekly_limit_snapshot)
         coverage = { wash: Boolean(snapshot.covers_wash_snapshot), iron: Boolean(snapshot.covers_iron_snapshot) }
+        startDate = toDateOnly(snapshot.start_date)
+        startAt = snapshot.created_at instanceof Date ? snapshot.created_at.toISOString() : String(snapshot.created_at)
+        endDate = snapshot.end_date ? toDateOnly(snapshot.end_date) : null
       } else {
         const [legacyPlan] = await tx`
-          select s.weekly_limit_snapshot as weekly_limit
+          select s.id, s.weekly_limit_snapshot as weekly_limit, s.start_date, s.end_date, s.created_at
           from subscriptions s
           where s.customer_id = ${order.customer_id}
             and s.status = 'active'
@@ -532,18 +548,62 @@ export async function finalizeVendorOrder(
           for update of s
         `
         weeklyLimit = Number(legacyPlan?.weekly_limit ?? 0)
+        appliedSubscriptionId = legacyPlan?.id ?? null
+        startDate = legacyPlan ? toDateOnly(legacyPlan.start_date) : null
+        startAt = legacyPlan
+          ? legacyPlan.created_at instanceof Date
+            ? legacyPlan.created_at.toISOString()
+            : String(legacyPlan.created_at)
+          : null
+        endDate = legacyPlan?.end_date ? toDateOnly(legacyPlan.end_date) : null
       }
-      const [usage] = await tx`
+      let usedUnits = 0
+      let confirmationTime = new Date()
+      if (startDate && appliedSubscriptionId) {
+        const [clock] = await tx<{ now: Date | string }[]>`select now() as now`
+        confirmationTime = new Date(clock.now)
+        const currentWeekStart = getSubscriptionWeekStart(confirmationTime)
+        const [usage] = await tx<{ used_units: number | string }[]>`
         select coalesce(sum(subscription_units_applied), 0) as used_units
         from orders
         where customer_id = ${order.customer_id}
           and is_subscription_order = true
           and subscription_units_applied is not null
           and status <> 'cancelled'
-          and subscription_units_applied_at >= ${weekStart}
           and id <> ${orderId}
-      `
-      const remainingUnits = Math.max(0, weeklyLimit - Number(usage?.used_units ?? 0))
+          and (
+            subscription_id = ${appliedSubscriptionId}
+            or (
+              subscription_id is not null
+              and subscription_id <> ${appliedSubscriptionId}
+              and subscription_units_applied_at >= ${currentWeekStart}
+            )
+            or (
+              subscription_id is null
+              and (created_at at time zone 'Africa/Lagos')::date >= ${startDate}::date
+              and (${endDate}::date is null or (created_at at time zone 'Africa/Lagos')::date <= ${endDate}::date)
+            )
+          )
+          `
+          usedUnits = Number(usage?.used_units ?? 0)
+      }
+      const allowance = startDate
+        ? calculateSubscriptionAllowance(
+            {
+              weeklyLimit,
+              startDate,
+              startAt,
+              endDate,
+              usedUnits,
+            },
+            confirmationTime,
+          )
+        : null
+      const currentBalanceUnits = Math.max(0, allowance?.balance ?? 0)
+      const authorizedBorrowUnits = allowance
+        ? getAuthorizedSubscriptionBorrowUnits(allowance, Number(order.subscription_borrow_consent_units ?? 0))
+        : 0
+      const remainingUnits = currentBalanceUnits + authorizedBorrowUnits
       invoiceAmount = 0
       if (order.subscription_id) {
         if (
@@ -620,6 +680,10 @@ export async function finalizeVendorOrder(
         }
       }
       invoiceAmount = Math.round(invoiceAmount * 100) / 100
+      if (allowance?.nextBalanceAfterCredit !== null && allowance?.nextBalanceAfterCredit !== undefined) {
+        subscriptionUnitsBorrowed = Math.max(0, subscriptionUnitsApplied - currentBalanceUnits)
+        subscriptionBalanceAfterNextCredit = allowance.nextBalanceAfterCredit - subscriptionUnitsApplied
+      }
       await tx`
         update orders
         set subscription_units_applied = ${subscriptionUnitsApplied}, subscription_units_applied_at = now()
@@ -701,6 +765,9 @@ export async function finalizeVendorOrder(
       invoiceStatus: finalInvoice.status as 'paid' | 'unpaid',
       customerId: order.customer_id,
       publicOrderNumber: order.public_order_number,
+      subscriptionId: appliedSubscriptionId,
+      subscriptionUnitsBorrowed,
+      subscriptionBalanceAfterNextCredit: subscriptionUnitsBorrowed > 0 ? subscriptionBalanceAfterNextCredit : null,
       referralRewardRecipients,
     }
   })
@@ -913,8 +980,8 @@ export async function purchaseSubscriptionWithWallet(customerId: string, planId:
       plan.type === 'semester'
         ? (settings?.semester_end_date ??
           plan.semester_end_date ??
-          new Date(startDate.getFullYear(), startDate.getMonth() + 6, startDate.getDate()).toISOString().slice(0, 10))
-        : new Date(startDate.getFullYear(), startDate.getMonth() + 1, startDate.getDate()).toISOString().slice(0, 10)
+          addCalendarMonthsToDate(startDateValue, 6))
+        : addCalendarMonthsToDate(startDateValue, 1)
     const subscription = await insertSubscriptionWithSnapshot(tx, {
       customerId,
       planId: plan.id,
@@ -985,8 +1052,8 @@ export async function activateSubscriptionFromPayment(customerId: string, paymen
       payment.type === 'semester'
         ? (settings?.semester_end_date ??
           payment.semester_end_date ??
-          new Date(startDate.getFullYear(), startDate.getMonth() + 6, startDate.getDate()).toISOString().slice(0, 10))
-        : new Date(startDate.getFullYear(), startDate.getMonth() + 1, startDate.getDate()).toISOString().slice(0, 10)
+          addCalendarMonthsToDate(startDate.toISOString().slice(0, 10), 6))
+        : addCalendarMonthsToDate(startDate.toISOString().slice(0, 10), 1)
 
     const subscription = await insertSubscriptionWithSnapshot(tx, {
       customerId,

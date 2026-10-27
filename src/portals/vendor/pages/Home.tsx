@@ -72,6 +72,28 @@ export async function action({ request }: Route.ActionArgs) {
 
   try {
     const result = await finalizeVendorOrder(orderId, vendorAuth.profile.id, receivedItems, addedItems, mismatchDetail)
+    if (result.subscriptionId && result.subscriptionUnitsBorrowed > 0) {
+      const borrowedUnits = result.subscriptionUnitsBorrowed
+      const nextBalance = result.subscriptionBalanceAfterNextCredit ?? 0
+      await sendCustomerNotification({
+        eventKey: `subscription:${result.subscriptionId}:order:${orderId}:allowance-borrowed`,
+        customerId: result.customerId,
+        notificationType: 'subscription_allowance_borrowed',
+        subscriptionId: result.subscriptionId,
+        orderId,
+        payload: {
+          title: 'Upcoming plan allowance used',
+          body: `${borrowedUnits} units were borrowed from an upcoming weekly allowance for ${result.publicOrderNumber}. ${nextBalance} units will remain after that allowance is added.`,
+          details: [
+            `Order: ${result.publicOrderNumber}`,
+            `Borrowed from the upcoming allowance: ${borrowedUnits} units`,
+            `Expected balance after the next allowance: ${nextBalance} units`,
+          ],
+          url: '/plans',
+          tag: `subscription:${result.subscriptionId}:allowance-borrowed`,
+        },
+      })
+    }
     if (result.mismatchDirection) {
       await sendCustomerNotification({
         eventKey: `mismatch:${orderId}:confirmed`,

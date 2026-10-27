@@ -4,6 +4,7 @@ import stylesheetUrl from './index.css?url'
 import { Toaster } from 'sonner'
 import RouteLoadingScreen from './components/RouteLoadingScreen'
 import NotFoundPage from './components/NotFoundPage'
+import RecoverableError from './components/RecoverableError'
 import { useEffect } from 'react'
 import { initializePwaInstall } from './lib/pwa-install.client'
 
@@ -90,15 +91,15 @@ export default function App() {
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
   if (isRouteErrorResponse(error) && error.status === 404) return <NotFoundPage />
 
-  const message = isRouteErrorResponse(error)
-    ? `${error.status} ${error.statusText}`
-    : error instanceof Error
-      ? error.message
-      : 'Unknown error'
-
   return (
-    <main className="flex min-h-screen items-center justify-center p-4">
-      <p className="text-gray-700">{message}</p>
+    <main className="mx-auto flex min-h-screen w-full max-w-2xl items-center justify-center p-4">
+      <RecoverableError
+        title="Something went wrong"
+        description="The page couldn’t be loaded. Please try again."
+        retryLabel="Reload page"
+        onRetry={() => window.location.reload()}
+        className="w-full"
+      />
     </main>
   )
 }

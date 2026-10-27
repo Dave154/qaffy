@@ -9,7 +9,7 @@ import CopyableOrderId from '../../../components/CopyableOrderId'
 import ProtectedOtp from '../../../components/ProtectedOtp'
 import DeliveryOtpStatus from '../../../components/DeliveryOtpStatus'
 import { toast } from '../../../lib/toast'
-import { calculateSubscriptionBilling } from '../../../lib/subscription-billing'
+import { calculateSubscriptionBilling, type SubscriptionBillingItem } from '../../../lib/subscription-billing'
 import { addOrIncrementOrderLine } from '../../../lib/order-lines'
 import {
   getMixedServiceGroups,
@@ -57,7 +57,10 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
     preferredPickupLocationId,
     preferredPickupLocationName,
     subscription,
-    subscriptionRemainingUnits,
+    subscriptionAvailableUnits,
+    subscriptionBorrowableUnits,
+    subscriptionBorrowedUnits,
+    subscriptionNextBalanceAfterCredit,
   } = useCustomerStore()
   const isReadOnly = Boolean(order)
   const [categories, setCategories] = useState<Category[]>([])
@@ -68,6 +71,10 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
   const [quantity, setQuantity] = useState(1)
   const [quantityInput, setQuantityInput] = useState<string | null>(null)
   const [items, setItems] = useState<OrderLine[]>([])
+  const [itemsError, setItemsError] = useState('')
+  const [borrowConsentKey, setBorrowConsentKey] = useState<string | null>(null)
+  const [borrowConsentError, setBorrowConsentError] = useState('')
+  const itemsSectionRef = useRef<HTMLElement | null>(null)
   const [itemQuantityInputs, setItemQuantityInputs] = useState<Record<string, string>>({})
   const [pickupLocation, setPickupLocation] = useState(preferredPickupLocationName ?? '')
   const [notes, setNotes] = useState('')
@@ -193,10 +200,9 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
     ? displayItems.reduce((sum, item) => sum + item.quantity, 0)
     : items.reduce((sum, item) => sum + item.quantity, 0)
   const availableCategories = categories
-  const subscriptionBillingPreview = useMemo(() => {
+  const subscriptionBillingPreviews = useMemo(() => {
     if (!activePlan) return null
-    return calculateSubscriptionBilling(
-      items.map((item, index) => {
+    const billingItems = items.map<SubscriptionBillingItem>((item, index) => {
         const categoryRow = categories.find((candidate) => candidate.name.trim().toLowerCase() === item.category.trim().toLowerCase())
         const regularWashPrice = categoryRow?.rates.Wash ?? item.unitPrice
         const regularIronPrice = categoryRow?.rates.Iron ?? item.unitPrice
@@ -212,11 +218,32 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
           subscriberIronPrice: categoryRow?.subscriberRates.Iron ?? regularIronPrice,
           subscriberWashIronPrice: categoryRow?.subscriberRates['Wash + Iron'] ?? item.unitPrice,
         }
-      }),
-      { wash: activePlan.covers_wash, iron: activePlan.covers_iron },
-      subscriptionRemainingUnits ?? 0,
+      })
+    const coverage = { wash: activePlan.covers_wash, iron: activePlan.covers_iron }
+    const availableUnits = Math.max(0, subscriptionAvailableUnits ?? 0)
+    const regularAllowancePreview = calculateSubscriptionBilling(billingItems, coverage, availableUnits)
+    const borrowAllowancePreview = calculateSubscriptionBilling(
+      billingItems,
+      coverage,
+      availableUnits + subscriptionBorrowableUnits,
     )
-  }, [activePlan, categories, items, subscriptionRemainingUnits])
+    return {
+      regularAllowancePreview,
+      borrowAllowancePreview,
+      borrowUnitsNeeded: Math.max(0, borrowAllowancePreview.coveredUnits - regularAllowancePreview.coveredUnits),
+    }
+  }, [activePlan, categories, items, subscriptionAvailableUnits, subscriptionBorrowableUnits])
+  const borrowEstimateKey = JSON.stringify({
+    items: items.map((item) => [item.category, item.service, item.quantity, item.subscriptionUnits]),
+    availableUnits: subscriptionAvailableUnits,
+    borrowableUnits: subscriptionBorrowableUnits,
+    borrowUnitsNeeded: subscriptionBillingPreviews?.borrowUnitsNeeded ?? 0,
+  })
+  const hasBorrowConsent = borrowConsentKey === borrowEstimateKey
+  const subscriptionBillingPreview =
+    hasBorrowConsent && subscriptionBillingPreviews?.borrowUnitsNeeded
+      ? subscriptionBillingPreviews.borrowAllowancePreview
+      : subscriptionBillingPreviews?.regularAllowancePreview
   const pickupDetailsFields = (
     <>
       <label>
@@ -305,12 +332,25 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
   const addItem = () => {
     if (!draftLine) return
     setItems((currentItems) => addOrIncrementOrderLine(currentItems, draftLine))
+    setItemsError('')
+    setBorrowConsentError('')
     setCategory(category)
     setQuantity(1)
     setQuantityInput(null)
   }
 
   const handleCreateOrder = async () => {
+    if (items.length === 0) {
+      setItemsError('Please add at least one item before continuing to pickup details.')
+      itemsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      return
+    }
+    setItemsError('')
+    if (subscriptionBillingPreviews && subscriptionBillingPreviews.borrowUnitsNeeded > 0 && !hasBorrowConsent) {
+      setBorrowConsentError('Please confirm whether you agree to borrow the displayed units from next week.')
+      return
+    }
+    setBorrowConsentError('')
     if (mixedServiceGroups.length > 0 && !hasMinimumMixedServiceInstructions(notes)) {
       setNotesError(
         `Please provide at least ${MIN_MIXED_SERVICE_INSTRUCTION_LENGTH} characters explaining which items are for each service.`,
@@ -325,7 +365,13 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
     setPickupLocationError('')
     setIsSaving(true)
     try {
-      await addOrder({ items, notes, pickupLocation })
+      await addOrder({
+        items,
+        notes,
+        pickupLocation,
+        subscriptionBorrowConsentUnits:
+          subscriptionBillingPreviews && hasBorrowConsent ? subscriptionBillingPreviews.borrowUnitsNeeded : 0,
+      })
       onClose()
       // window.location.reload()
     } catch (error) {
@@ -374,7 +420,12 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
           </button>
         </header>
 
-        <section className="mt-6 rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-sm">
+        <section
+          ref={itemsSectionRef}
+          className={`mt-6 rounded-2xl border p-4 shadow-sm transition-colors sm:p-5 ${
+            itemsError ? 'border-rose-300' : 'border-slate-200'
+          }`}
+        >
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
               <h3 className="text-lg font-bold text-slate-900">{isReadOnly ? 'Laundry items' : 'Add laundry items'}</h3>
@@ -537,6 +588,7 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
                             setItemQuantityInputs((currentInputs) => ({ ...currentInputs, [lineKey]: value }))
                             const parsedQuantity = parsePositiveQuantity(value)
                             if (parsedQuantity !== null) {
+                              setBorrowConsentError('')
                               setItems((currentItems) =>
                                 currentItems.map((currentItem) =>
                                   getOrderLineKey(currentItem) === lineKey ? { ...currentItem, quantity: parsedQuantity } : currentItem,
@@ -572,6 +624,7 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
                           type="button"
                           aria-label={`Remove ${item.category}`}
                           onClick={() => {
+                            setBorrowConsentError('')
                             setItems((currentItems) => currentItems.filter((_, itemIndex) => itemIndex !== index))
                             setItemQuantityInputs((currentInputs) => {
                               const nextInputs = { ...currentInputs }
@@ -591,6 +644,12 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
             </div>
           )}
         </section>
+
+        {itemsError && (
+          <p className="mt-2 text-sm font-medium text-rose-600" role="alert">
+            {itemsError}
+          </p>
+        )}
 
         {isReadOnly && (
           <section className="mt-6 grid gap-3 sm:grid-cols-2">
@@ -641,9 +700,20 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
         )}
 
         {!isReadOnly && subscription && (
-          <p className="mt-6 rounded-2xl bg-brand-soft p-4 text-sm text-brand-strong shadow-sm border border-brand-border">
-            {subscriptionRemainingUnits} weighted units remain on your {subscription.name} plan this week.
-          </p>
+          <div className="mt-6 rounded-2xl border border-brand-border bg-brand-soft p-4 text-sm text-brand-strong shadow-sm">
+            <p>
+              Your {subscription.name} plan has {Math.max(0, subscriptionAvailableUnits ?? 0)} weighted units in its rollover balance. Up to{' '}
+              {activePlan?.weekly_limit ?? 0} units are added each week.
+            </p>
+            {subscriptionBorrowedUnits > 0 && (
+              <p className="mt-1 font-medium text-amber-800">
+                {subscriptionBorrowedUnits} units have been borrowed
+                {subscriptionNextBalanceAfterCredit !== null
+                  ? `; ${subscriptionNextBalanceAfterCredit} are expected after the next allowance is added.`
+                  : '.'}
+              </p>
+            )}
+          </div>
         )}
 
         <section className="mt-6 rounded-2xl border border-brand-border bg-brand-soft p-5 sm:p-6 shadow-sm">
@@ -692,6 +762,43 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
                 {subscriptionBillingPreview.totalAmount === 0 && <p className="font-semibold text-brand-strong">No extra charge</p>}
               </div>
             )}
+            {subscription &&
+              !isReadOnly &&
+              subscriptionBillingPreviews &&
+              subscriptionBillingPreviews.borrowUnitsNeeded > 0 && (
+                <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                  <p className="font-semibold">
+                    This order may borrow up to {subscriptionBillingPreviews.borrowUnitsNeeded} units from next week.
+                  </p>
+                  <p className="mt-1">
+                    Extra confirmed units use your subscriber rate. About{' '}
+                    {Math.max(
+                      0,
+                      (subscriptionAvailableUnits ?? 0) +
+                        (activePlan?.weekly_limit ?? 0) -
+                        subscriptionBillingPreviews.borrowAllowancePreview.coveredUnits,
+                    )}{' '}
+                    units will remain after next week&apos;s allowance.
+                  </p>
+                  <label className="mt-3 flex cursor-pointer items-start gap-2.5 font-medium">
+                    <input
+                      type="checkbox"
+                      checked={hasBorrowConsent}
+                      onChange={(event) => {
+                        setBorrowConsentKey(event.target.checked ? borrowEstimateKey : null)
+                        setBorrowConsentError('')
+                      }}
+                      className="mt-0.5 h-4 w-4 shrink-0 rounded border-amber-400 text-brand-primary focus:ring-brand-focus"
+                    />
+                    <span>I agree to borrow up to {subscriptionBillingPreviews.borrowUnitsNeeded} units.</span>
+                  </label>
+                  {borrowConsentError && (
+                    <p className="mt-2 font-medium text-rose-700" role="alert">
+                      {borrowConsentError}
+                    </p>
+                  )}
+                </div>
+              )}
             {!subscription && !isReadOnly && <p className="text-2xl font-bold text-brand-strong">₦{total.toLocaleString()}</p>}
           </div>
           {isReadOnly && order?.paymentStatus === 'Pending' && order.status !== 'Delivered' && order.total > 0 ? (
@@ -762,9 +869,9 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
           ) : (
             <button
               type="button"
-              disabled={items.length === 0 || isSaving || catalogState !== 'ready'}
+              disabled={isSaving || catalogState !== 'ready'}
               onClick={handleCreateOrder}
-              className="mt-5 w-full rounded-2xl bg-brand-primary px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-primary-hover hover:shadow-md"
+              className="mt-5 w-full rounded-2xl bg-brand-primary px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-primary-hover hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isSaving ? 'Saving order...' : 'Continue to pickup details'}
             </button>

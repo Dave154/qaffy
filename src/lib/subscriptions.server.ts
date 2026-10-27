@@ -8,6 +8,14 @@ type SubscriptionSnapshotInput = {
   endDate: string | null
 }
 
+export function addCalendarMonthsToDate(date: string, months: number) {
+  const [year, month, day] = date.split('-').map(Number)
+  const targetMonth = new Date(Date.UTC(year, month - 1 + months, 1))
+  const lastDay = new Date(Date.UTC(targetMonth.getUTCFullYear(), targetMonth.getUTCMonth() + 1, 0)).getUTCDate()
+  targetMonth.setUTCDate(Math.min(day, lastDay))
+  return `${targetMonth.getUTCFullYear()}-${String(targetMonth.getUTCMonth() + 1).padStart(2, '0')}-${String(targetMonth.getUTCDate()).padStart(2, '0')}`
+}
+
 export async function lockCustomerSubscription(tx: TransactionSql, customerId: string) {
   await tx`select pg_advisory_xact_lock(hashtextextended(${customerId}, 0))`
 }

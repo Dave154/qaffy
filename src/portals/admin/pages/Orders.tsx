@@ -1252,9 +1252,9 @@ export default function Orders() {
       }),
     )
   }
-  const exportParams = new URLSearchParams(
-    buildSearch({ page: 1, query, statusFilter, paymentFilter, dateType, sortRules, dateMode, startDate, endDate }).slice(1),
-  )
+  const exportParams = new URLSearchParams(location.search)
+  exportParams.delete('page')
+  exportParams.delete('orderId')
   const csvExportUrl = `/admin/orders/export?${exportParams.toString()}`
 
   return (
@@ -1311,7 +1311,8 @@ export default function Orders() {
                   link.download = 'qaffy-admin-orders.csv'
                   link.click()
                 }}
-                disabled={total === 0}
+                disabled={total === 0 || navigation.state !== 'idle'}
+                title={navigation.state !== 'idle' ? 'Wait for the current filters to finish applying.' : `Export all ${total} filtered orders`}
                 className="h-10 rounded-full bg-brand-primary px-5 text-sm font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Export CSV

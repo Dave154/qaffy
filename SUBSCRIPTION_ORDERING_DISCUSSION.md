@@ -54,13 +54,17 @@ Each plan would cover a chosen service: Wash, Iron, or both. Services not covere
 - For a Wash-only plan and a Wash + Iron order line, the Wash component uses the plan allowance and the Iron component is charged separately at its regular rate.
 - An active subscriber may place an order containing both covered and uncovered services; each component is handled according to plan coverage.
 - Plan coverage and weekly limit are fixed for the current subscription. Admin changes to those plan terms apply when the customer starts their next subscription.
+- The first weekly limit is credited immediately when the subscription activates. Later credits are added Sunday at 00:00 in `Africa/Lagos`, up to four credits per subscription month including the activation credit. Unused credits roll over for the plan duration, so a fifth calendar week does not add a fifth credit; earlier unused units can cover it. Monthly entitlement is four weekly limits. Semester entitlement is four weekly limits for each subscription month.
+- Vendor confirmation debits the pooled balance. It may borrow from at most one upcoming weekly credit, only when that credit is scheduled within the next week and remains within the plan's total entitlement. Orders placed under a subscription may consume its remaining accrued balance after expiry; no new credits accrue after the subscription ends.
+- If the order estimate requires borrowing, the customer sees the estimated borrowed units and expected remaining balance after the next credit, then must consent at order submission. The consented amount is stored with the order. If vendor-confirmed quantities require more borrowing than consented, the excess is billed at the existing subscriber over-limit rate.
+- When confirmation borrows units, notify the customer and show the borrowed units and expected balance after the upcoming credit.
 - Subscriber extra rates are global per category/service, shared across all plans. The rate applicable to an order is saved when that order is placed, so a rate update affects later orders even for current subscribers.
 
 ## 3. Set a Discounted Subscriber Rate for Over-Limit Covered Units
 
 ### Agreed behavior
 
-When an order exceeds the customer's remaining weekly allowance, charge the over-limit quantity for services covered by the plan at a discounted subscriber rate rather than the standard customer rate. The admin configures this rate from category pricing settings.
+When an order exceeds the customer's available pooled allowance, charge the over-limit quantity for services covered by the plan at a discounted subscriber rate rather than the standard customer rate. The admin configures this rate from category pricing settings.
 
 Example: a customer has 5 weighted units remaining and a vendor-confirmed order uses 8 eligible units. The subscription covers 5 units; the remaining 3 are charged at the configured subscriber rate.
 
@@ -68,10 +72,10 @@ Example: a customer has 5 weighted units remaining and a vendor-confirmed order 
 
 - The subscriber discount does not apply to services outside the customer's plan. For example, a Wash-only subscriber does not receive a discount on Iron service just because the order also includes Wash.
 - On a Wash-only plan with a Wash + Iron order line, the Wash component may use plan coverage; Iron is charged separately at the regular rate, without the subscriber discount.
-- If the Wash component exceeds the remaining weekly allowance, only the excess Wash units use the configured subscriber rate; Iron remains at the regular rate.
+- If the Wash component exceeds the remaining pooled allowance, only the excess Wash units use the configured subscriber rate; Iron remains at the regular rate.
 - Subscriber extra rates should be configured once per category and service, not separately for each plan. A plan's coverage decides whether the global category/service subscriber rate is eligible.
 - The applicable customer and subscriber rates are saved when the customer places the order, even though the final quantity is confirmed later by the vendor.
-- When covered items compete for the remaining weekly allowance, keep the current deterministic allocation that maximizes the weighted units covered.
+- When covered items compete for the remaining pooled allowance, keep the current deterministic allocation that maximizes the weighted units covered.
 - Vendor payout rates and amounts are not reduced by a customer discount.
 - Keep invoice presentation as minimal as possible while still distinguishing plan-covered units, discounted excess, and full-rate uncovered services when those charges apply.
 - The regular and global subscriber rates used by an order are saved when the customer places it. Plan coverage and weekly limit are snapshotted when a subscription starts, so plan edits affect the customer's next subscription, not the active one.
@@ -79,7 +83,7 @@ Example: a customer has 5 weighted units remaining and a vendor-confirmed order 
 ### Confirmed follow-up decisions
 
 - If a category is added while a customer has an active subscription, the global subscriber rate applies to orders placed after that rate is configured; the rate is captured per order at placement.
-- Covered units already used earlier in the same Lagos week carry over if the customer changes subscription midweek. The new plan starts with its limit reduced by those units; usage resets at the next Sunday boundary.
+- The first allowance credit is granted at activation; later credits accrue Sunday at 00:00 in `Africa/Lagos`, up to four credits per subscription month total. Unused units roll over for the subscription duration. A vendor confirmation can borrow from one upcoming weekly credit; the borrowed balance reduces the next credit. Monthly plans receive four weekly limits total. Semester plans receive four weekly limits per subscription month.
 
 ## Implementation Sequence
 

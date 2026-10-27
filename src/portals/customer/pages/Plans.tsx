@@ -3,6 +3,7 @@ import { Check, ChevronRight, X } from 'lucide-react'
 import { data, useFetcher, useLoaderData, useLocation, useRevalidator } from 'react-router'
 import type { Route } from './+types/Plans'
 import PlanEndingBanner from '../../../components/PlanEndingBanner'
+import RecoverableError from '../../../components/RecoverableError'
 import { useCustomerStore } from '../customer-store-hook'
 import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
 import { toast } from '../../../lib/toast'
@@ -23,34 +24,43 @@ type CustomerPlan = {
   featured: boolean
 }
 
-type PlansData = { plans: CustomerPlan[] }
+type PlansData = { plans: CustomerPlan[]; loadError: boolean }
 
 // eslint-disable-next-line react-refresh/only-export-components
 export async function loader({ request }: Route.LoaderArgs) {
-  if (!isSupabaseServerConfigured) return data<PlansData>({ plans: [] }, { status: 200 })
+  if (!isSupabaseServerConfigured) return data<PlansData>({ plans: [], loadError: false }, { status: 200 })
   const { supabase, headers } = getSupabaseServerClient(request)
-  const { data: rows, error } = await supabase
-    .from('plans')
-    .select('id, name, type, price, weekly_limit, covers_wash, covers_iron, active')
-    .eq('active', true)
-    .order('price')
-  if (error) return data<PlansData>({ plans: [] }, { headers, status: 200 })
-  return data<PlansData>(
-    {
-      plans: (rows ?? []).map((plan, index) => ({
-        id: plan.id,
-        name: plan.name,
-        billingPeriod: plan.type,
-        price: Number(plan.price),
-        currency: '₦',
-        weeklyLimit: plan.weekly_limit,
-        service: plan.covers_wash && plan.covers_iron ? 'Wash + Iron' : plan.covers_wash ? 'Wash' : 'Iron',
-        description: `${plan.weekly_limit} clothes per week for ${plan.covers_wash && plan.covers_iron ? 'Wash + Iron' : plan.covers_wash ? 'Wash' : 'Iron'}.`,
-        featured: index === 1,
-      })),
-    },
-    { headers, status: 200 },
-  )
+  try {
+    const { data: rows, error } = await supabase
+      .from('plans')
+      .select('id, name, type, price, weekly_limit, covers_wash, covers_iron, active')
+      .eq('active', true)
+      .order('price')
+    if (error) {
+      console.error('[customer-plans] Could not load plans', error)
+      return data<PlansData>({ plans: [], loadError: true }, { headers, status: 200 })
+    }
+    return data<PlansData>(
+      {
+        plans: (rows ?? []).map((plan, index) => ({
+          id: plan.id,
+          name: plan.name,
+          billingPeriod: plan.type,
+          price: Number(plan.price),
+          currency: '₦',
+          weeklyLimit: plan.weekly_limit,
+          service: plan.covers_wash && plan.covers_iron ? 'Wash + Iron' : plan.covers_wash ? 'Wash' : 'Iron',
+          description: `${plan.weekly_limit} clothes per week for ${plan.covers_wash && plan.covers_iron ? 'Wash + Iron' : plan.covers_wash ? 'Wash' : 'Iron'}.`,
+          featured: index === 1,
+        })),
+        loadError: false,
+      },
+      { headers, status: 200 },
+    )
+  } catch (error) {
+    console.error('[customer-plans] Could not load plans', error)
+    return data<PlansData>({ plans: [], loadError: true }, { headers, status: 200 })
+  }
 }
 
 // eslint-disable-next-line react-refresh/only-export-components
@@ -176,17 +186,26 @@ function formatPrice(price: number) {
 }
 
 export default function Plans() {
-  const { plans } = useLoaderData<typeof loader>()
-  const { activePlan, subscriptionEndDate, subscriptionUsedUnits } = useCustomerStore()
+  const { plans, loadError } = useLoaderData<typeof loader>()
+  const {
+    activePlan,
+    subscriptionEndDate,
+    subscriptionAvailableUnits,
+    subscriptionBorrowedUnits,
+    subscriptionNextBalanceAfterCredit,
+  } = useCustomerStore()
   const fetcher = useFetcher<typeof action>()
   const revalidator = useRevalidator()
   const location = useLocation()
+  const [lastSuccessfulPlans, setLastSuccessfulPlans] = useState(plans)
+  if (!loadError && lastSuccessfulPlans !== plans) setLastSuccessfulPlans(plans)
+  const availablePlans = loadError ? lastSuccessfulPlans : plans
   const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>(() =>
     plans.some((plan) => plan.billingPeriod === 'semester') ? 'semester' : 'monthly',
   )
   const [isPaymentChoiceDismissed, setIsPaymentChoiceDismissed] = useState(false)
   const [latestPaymentRequestId, setLatestPaymentRequestId] = useState<string | null>(null)
-  const visiblePlans = plans.filter((plan) => plan.billingPeriod === billingPeriod)
+  const visiblePlans = availablePlans.filter((plan) => plan.billingPeriod === billingPeriod)
   const currentPlan = activePlan
     ? {
         id: activePlan.id,
@@ -200,8 +219,8 @@ export default function Plans() {
         featured: false,
       }
     : null
-  const displayedUsedUnits = currentPlan ? Math.min(subscriptionUsedUnits, currentPlan.weeklyLimit) : subscriptionUsedUnits
-  const planUsagePercent = currentPlan ? Math.min(100, Math.round((displayedUsedUnits / currentPlan.weeklyLimit) * 100)) : 0
+  const displayedAvailableUnits = Math.max(0, subscriptionAvailableUnits ?? 0)
+  const planBalancePercent = currentPlan ? Math.min(100, Math.round((displayedAvailableUnits / currentPlan.weeklyLimit) * 100)) : 0
 
   useEffect(() => {
     if (!new URLSearchParams(location.search).has('payment')) return
@@ -285,8 +304,16 @@ export default function Plans() {
                 </span>
               </div>
               <p className="mt-2 text-sm text-slate-600">
-                {currentPlan.service} · {displayedUsedUnits} of {currentPlan.weeklyLimit} weekly units used
+                {currentPlan.service} · {displayedAvailableUnits} units available · {currentPlan.weeklyLimit} added weekly
               </p>
+              {subscriptionBorrowedUnits > 0 && (
+                <p className="mt-1 text-sm font-medium text-amber-700">
+                  {subscriptionBorrowedUnits} units borrowed
+                  {subscriptionNextBalanceAfterCredit !== null
+                    ? ` · ${subscriptionNextBalanceAfterCredit} expected after the next allowance`
+                    : ''}
+                </p>
+              )}
             </div>
             <div className="text-left sm:text-right">
               <p className="text-sm font-semibold text-slate-900">
@@ -297,9 +324,9 @@ export default function Plans() {
           </div>
           <div
             className="mt-5 h-2 overflow-hidden rounded-full bg-[#d3ebe8]"
-            aria-label={`${planUsagePercent}% of weekly plan allowance used`}
+            aria-label={`${planBalancePercent}% of the weekly plan allowance is available`}
           >
-            <div className="h-full rounded-full bg-[#55aaa3] transition-[width] duration-500" style={{ width: `${planUsagePercent}%` }} />
+            <div className="h-full rounded-full bg-[#55aaa3] transition-[width] duration-500" style={{ width: `${planBalancePercent}%` }} />
           </div>
         </section>
       )}
@@ -327,11 +354,26 @@ export default function Plans() {
         </div>
       </section>
 
+      {loadError && (
+        <RecoverableError
+          title={availablePlans.length > 0 ? 'Couldn’t refresh plans' : 'Couldn’t load plans'}
+          description={
+            availablePlans.length > 0
+              ? 'Showing the plans loaded earlier. Try again to check for updates.'
+              : 'Please check your connection and try again.'
+          }
+          onRetry={() => revalidator.revalidate()}
+          retrying={revalidator.state !== 'idle'}
+        />
+      )}
+
       <section className="grid gap-4 xl:grid-cols-3">
         {visiblePlans.length === 0 ? (
-          <div className="col-span-full rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
-            <p className="text-sm font-semibold text-slate-700">No {billingPeriod} plans are available yet.</p>
-          </div>
+          loadError && availablePlans.length === 0 ? null : (
+            <div className="col-span-full rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
+              <p className="text-sm font-semibold text-slate-700">No {billingPeriod} plans are available yet.</p>
+            </div>
+          )
         ) : (
           visiblePlans.map((plan) => {
             const isCurrent = plan.id === activePlan?.id
