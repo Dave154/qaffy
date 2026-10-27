@@ -1,5 +1,5 @@
 import { ChevronLeft, ChevronRight, LoaderCircle, Search, SlidersHorizontal, UserRound, X } from 'lucide-react'
-import { Form, Link, useLoaderData, useNavigate, useNavigation } from 'react-router'
+import { Form, Link, useLoaderData, useLocation, useNavigate, useNavigation } from 'react-router'
 import { useState } from 'react'
 import type { Route } from './+types/Users'
 import { MultiSortManager, SortColumnHeader, type MultiSortRule } from '../../../components/admin/MultiSortControls'
@@ -353,6 +353,7 @@ export default function Users() {
     startDate,
     endDate,
   } = useLoaderData<typeof loader>()
+  const location = useLocation()
   const navigate = useNavigate()
   const navigation = useNavigation()
   const [isFilterOpen, setIsFilterOpen] = useState(false)
@@ -413,9 +414,8 @@ export default function Users() {
     const updatedRules = [{ column, direction }, ...sortRules.filter((rule) => rule.column !== column)]
     navigate(buildSearch({ page: 1, query, roleFilter, subscriptionFilter, sortRules: updatedRules, dateMode, startDate, endDate }))
   }
-  const csvExportParams = new URLSearchParams(
-    buildSearch({ page: 1, query, roleFilter, subscriptionFilter, sortRules, dateMode, startDate, endDate }).slice(1),
-  )
+  const csvExportParams = new URLSearchParams(location.search)
+  csvExportParams.delete('page')
   csvExportParams.set('export', 'csv')
   const csvExportUrl = `/admin/users/export?${csvExportParams.toString()}`
   const openFilterDrawer = () => {
@@ -530,7 +530,8 @@ export default function Users() {
                   link.download = 'qaffy-admin-users.csv'
                   link.click()
                 }}
-                disabled={total === 0}
+                disabled={total === 0 || navigation.state !== 'idle'}
+                title={navigation.state !== 'idle' ? 'Wait for the current filters to finish applying.' : `Export all ${total} filtered customers`}
                 className="h-10 rounded-full bg-brand-primary px-5 text-sm font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Export CSV

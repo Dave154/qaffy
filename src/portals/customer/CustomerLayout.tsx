@@ -27,7 +27,7 @@ import type { CustomerReferral, MismatchLine, PersistedOrderItem, PickupLocation
 import { useCustomerStore } from './customer-store-hook'
 import type { Invoice, Order, Payment, Plan, Subscription, Wallet, WalletTransaction } from '../../types/database.types'
 import { ensurePushSubscription, savePushSubscription } from '../../lib/push.client'
-import { calculateSubscriptionUnitsUsed } from '../../lib/subscription-week'
+import { calculateSubscriptionAllowance, calculateSubscriptionUnitsApplied } from '../../lib/subscription-week'
 
 const navItems = [
   { to: '/', label: 'Overview', icon: Home, end: true },
@@ -132,8 +132,6 @@ export async function loader({ request }: Route.LoaderArgs) {
     ...item,
     category_name: categoryNameById.get(item.category_id) ?? 'Laundry item',
   }))
-  const subscriptionUsedUnits = calculateSubscriptionUnitsUsed(orders ?? [])
-
   const { data: wallet } = await serverSupabase.from('wallets').select('*').eq('customer_id', userData.user.id).maybeSingle()
 
   const { data: walletTransactions } = await serverSupabase
@@ -216,6 +214,23 @@ export async function loader({ request }: Route.LoaderArgs) {
           covers_iron: subscription.covers_iron_snapshot,
         }
       : null
+  const subscriptionAllowance =
+    subscription && subscriptionPlanSnapshot
+      ? calculateSubscriptionAllowance(
+          {
+            weeklyLimit: Number(subscription.weekly_limit_snapshot),
+            startDate: subscription.start_date,
+            startAt: subscription.created_at,
+            endDate: subscription.end_date,
+            usedUnits: calculateSubscriptionUnitsApplied(orders ?? [], {
+              id: subscription.id,
+              startDate: subscription.start_date,
+              endDate: subscription.end_date,
+            }),
+          },
+          new Date(),
+        )
+      : null
 
   const [{ data: referredRows, error: referredRowsError }, { data: referrerRows, error: referrerRowsError }] = await Promise.all([
     serverSupabase
@@ -277,7 +292,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       invoiceAmountsByOrderId: Object.fromEntries((orderInvoices ?? []).map((invoice) => [invoice.order_id, Number(invoice.amount)])),
       pickupLocations: pickupLocations ?? [],
       orderItems: persistedOrderItems,
-      subscriptionUsedUnits,
+      subscriptionAllowance,
       wallet,
       walletTransactions: walletTransactions ?? [],
       payments: payments ?? [],
@@ -301,9 +316,16 @@ export async function loader({ request }: Route.LoaderArgs) {
 }
 
 function PlanSummary({ onNavigate }: { onNavigate?: () => void }) {
-  const { activePlan, subscription, subscriptionBalance, subscriptionUsedUnits } = useCustomerStore()
-  const displayedUsedUnits = activePlan ? Math.min(subscriptionUsedUnits, activePlan.weekly_limit) : subscriptionUsedUnits
-  const usagePercent = activePlan ? Math.min(100, Math.round((displayedUsedUnits / activePlan.weekly_limit) * 100)) : 0
+  const {
+    activePlan,
+    subscription,
+    subscriptionBalance,
+    subscriptionAvailableUnits,
+    subscriptionBorrowedUnits,
+    subscriptionNextBalanceAfterCredit,
+  } = useCustomerStore()
+  const displayedAvailableUnits = Math.max(0, subscriptionAvailableUnits ?? 0)
+  const balancePercent = activePlan ? Math.min(100, Math.round((displayedAvailableUnits / activePlan.weekly_limit) * 100)) : 0
   const coverageLabel = activePlan
     ? activePlan.covers_wash && activePlan.covers_iron
       ? 'Wash, Iron, and Wash + Iron'
@@ -329,11 +351,19 @@ function PlanSummary({ onNavigate }: { onNavigate?: () => void }) {
       )}
       {activePlan && (
         <p className="mt-2 text-xs text-slate-600">
-          {displayedUsedUnits} of {activePlan.weekly_limit} weekly units used
+          {displayedAvailableUnits} units available · {activePlan.weekly_limit} added weekly
         </p>
       )}
-      <div className="mt-3 h-1.5 overflow-hidden bg-[#d3ebe8]" aria-label={`${usagePercent}% of weekly plan allowance used`}>
-        <div className="h-full bg-[#55aaa3] transition-[width] duration-500" style={{ width: `${usagePercent}%` }} />
+      {subscriptionBorrowedUnits > 0 && (
+        <p className="mt-1 text-xs text-amber-700">
+          {subscriptionBorrowedUnits} units borrowed
+          {subscriptionNextBalanceAfterCredit !== null
+            ? ` · ${subscriptionNextBalanceAfterCredit} expected after the next allowance`
+            : ''}
+        </p>
+      )}
+      <div className="mt-3 h-1.5 overflow-hidden bg-[#d3ebe8]" aria-label={`${balancePercent}% of the weekly allowance is available`}>
+        <div className="h-full bg-[#55aaa3] transition-[width] duration-500" style={{ width: `${balancePercent}%` }} />
       </div>
     </NavLink>
   )
@@ -479,7 +509,7 @@ export default function CustomerLayout() {
         loaderData?.orderMismatches as
           Array<{ id: string; order_id: string; direction: 'over' | 'under'; detail: string | null; details: MismatchLine[] }> | undefined
       }
-      persistedSubscriptionUsedUnits={loaderData?.subscriptionUsedUnits as number | undefined}
+      persistedSubscriptionAllowance={loaderData?.subscriptionAllowance}
       persistedWallet={loaderData?.wallet as Wallet | null | undefined}
       persistedWalletTransactions={loaderData?.walletTransactions as WalletTransaction[] | undefined}
       persistedPayments={loaderData?.payments as Payment[] | undefined}

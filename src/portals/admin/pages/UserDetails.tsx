@@ -8,6 +8,7 @@ import { createManualSubscriptionWithSnapshot } from '../../../lib/subscriptions
 import { sql } from '../../../lib/db.server'
 import { toast } from '../../../lib/toast'
 import { sumSuccessfulPlanPayments } from '../../../lib/revenue-reporting'
+import { calculateSubscriptionAllowance, calculateSubscriptionUnitsApplied } from '../../../lib/subscription-week'
 
 type DetailOrder = {
   id: string
@@ -71,6 +72,11 @@ type UserDetailsData = {
     activeSubscriptions: number
   }
   wallet: { oneOff: number; subscription: number }
+  activeSubscriptionAllowance: {
+    weeklyUnits: number
+    availableUnits: number
+    reservedUnits: number
+  } | null
   orders: DetailOrder[]
   subscriptions: DetailSubscription[]
   payments: DetailPayment[]
@@ -130,7 +136,9 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     supabase.from('wallets').select('one_off_balance, subscription_balance').eq('customer_id', customerId).maybeSingle(),
     supabase
       .from('orders')
-      .select('id, public_order_number, status, clothes_count_customer, clothes_count_vendor, created_at')
+      .select(
+        'id, public_order_number, status, clothes_count_customer, clothes_count_vendor, created_at, subscription_id, is_subscription_order, subscription_units_applied, subscription_units_applied_at',
+      )
       .eq('customer_id', customerId)
       .order('created_at', { ascending: false }),
     supabase
@@ -139,7 +147,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
       .in('order_id', (await supabase.from('orders').select('id').eq('customer_id', customerId)).data?.map((order) => order.id) ?? []),
     supabase
       .from('subscriptions')
-      .select('id, plan_id, status, start_date, end_date')
+      .select('id, plan_id, status, start_date, end_date, weekly_limit_snapshot, created_at')
       .eq('customer_id', customerId)
       .order('created_at', { ascending: false }),
     supabase.from('plans').select('id, name, type, semester_end_date, active').order('created_at', { ascending: false }),
@@ -168,6 +176,26 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   if (!profile) return data<UserDetailsData | null>(null, { headers, status: 404 })
   const planById = new Map((plans ?? []).map((plan) => [plan.id, plan]))
   const invoiceByOrder = new Map((invoices ?? []).map((invoice) => [invoice.order_id, invoice]))
+  const today = new Date().toISOString().slice(0, 10)
+  const activeSubscription = (subscriptions ?? []).find(
+    (subscription) => subscription.status === 'active' && (!subscription.end_date || subscription.end_date >= today),
+  )
+  const activeSubscriptionAllowance = activeSubscription
+    ? calculateSubscriptionAllowance(
+        {
+          weeklyLimit: Number(activeSubscription.weekly_limit_snapshot),
+          startDate: activeSubscription.start_date,
+          startAt: activeSubscription.created_at,
+          endDate: activeSubscription.end_date,
+          usedUnits: calculateSubscriptionUnitsApplied(orders ?? [], {
+            id: activeSubscription.id,
+            startDate: activeSubscription.start_date,
+            endDate: activeSubscription.end_date,
+          }),
+        },
+        new Date(),
+      )
+    : null
   const stats = {
     totalOrders: orders?.length ?? 0,
     completedOrders: (orders ?? []).filter((order) => order.status === 'delivered').length,
@@ -193,6 +221,13 @@ export async function loader({ request, params }: Route.LoaderArgs) {
         oneOff: Number(wallet?.one_off_balance ?? 0),
         subscription: Number(wallet?.subscription_balance ?? 0),
       },
+      activeSubscriptionAllowance: activeSubscriptionAllowance
+        ? {
+            weeklyUnits: Number(activeSubscription?.weekly_limit_snapshot ?? 0),
+            availableUnits: Math.max(0, activeSubscriptionAllowance.balance),
+            reservedUnits: Math.max(0, -activeSubscriptionAllowance.balance),
+          }
+        : null,
       orders: (orders ?? []).map((order) => ({
         id: order.id,
         publicOrderNumber: order.public_order_number,
@@ -613,6 +648,28 @@ export default function UserDetails() {
         </div>
         <ManualSubscription plans={details.plans} semesterEndDate={details.semesterEndDate} isSaving={isSaving} />
       </section>
+      {details.activeSubscriptionAllowance && (
+        <section className="rounded-2xl border border-[#a7d7d2] bg-[#eef9f7] p-5 shadow-sm">
+          <h3 className="font-bold text-slate-900">This week’s subscription units</h3>
+          <div className="mt-4 grid gap-4 sm:grid-cols-3">
+            <div>
+              <p className="text-xs text-slate-500">Weekly allowance</p>
+              <p className="mt-1 text-xl font-bold text-slate-900">{details.activeSubscriptionAllowance.weeklyUnits} units</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500">Available balance, including rollover</p>
+              <p className="mt-1 text-xl font-bold text-slate-900">{details.activeSubscriptionAllowance.availableUnits} units</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500">Reserved from upcoming allowance</p>
+              <p className="mt-1 text-xl font-bold text-amber-700">{details.activeSubscriptionAllowance.reservedUnits} units</p>
+            </div>
+          </div>
+          <p className="mt-3 text-xs text-slate-500">
+            Reserved units are allowance already borrowed through vendor-confirmed orders; they reduce future available balance.
+          </p>
+        </section>
+      )}
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <h3 className="font-bold text-slate-900">Subscriptions</h3>
         <div className="mt-4 overflow-x-auto">

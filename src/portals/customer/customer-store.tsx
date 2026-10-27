@@ -139,7 +139,10 @@ export type CustomerStore = {
   subscription: { name: string; billingPeriod: 'monthly' | 'semester' } | null
   subscriptionEndDate: string | null
   activePlan: Plan | null
-  subscriptionUsedUnits: number
+  subscriptionAvailableUnits: number | null
+  subscriptionBorrowableUnits: number
+  subscriptionBorrowedUnits: number
+  subscriptionNextBalanceAfterCredit: number | null
   subscriptionRemainingUnits: number | null
   preferredPickupLocationId: string | null
   preferredPickupLocationName: string | null
@@ -151,7 +154,12 @@ export type CustomerStore = {
   invoice: CustomerInvoice | null
   invoices: CustomerInvoice[]
   topUpWallet: (amount: number) => Promise<void>
-  addOrder: (input: { items: OrderLine[]; notes: string; pickupLocation: string }) => Promise<CustomerOrder> | CustomerOrder
+  addOrder: (input: {
+    items: OrderLine[]
+    notes: string
+    pickupLocation: string
+    subscriptionBorrowConsentUnits: number
+  }) => Promise<CustomerOrder> | CustomerOrder
 }
 
 const initialOrders: CustomerOrder[] = []
@@ -465,7 +473,12 @@ type CustomerStoreProviderProps = {
     detail: string | null
     details: MismatchLine[]
   }>
-  persistedSubscriptionUsedUnits?: number
+  persistedSubscriptionAllowance?: {
+    balance: number
+    borrowableUnits: number
+    unitsAvailableForConfirmation: number
+    nextBalanceAfterCredit: number | null
+  } | null
 }
 
 export function CustomerStoreProvider({
@@ -485,7 +498,7 @@ export function CustomerStoreProvider({
   persistedPickupLocations,
   persistedOrderItems,
   persistedOrderMismatches = [],
-  persistedSubscriptionUsedUnits = 0,
+  persistedSubscriptionAllowance = null,
 }: CustomerStoreProviderProps) {
   const unpaidInvoiceOrderIds = new Set(persistedUnpaidInvoiceOrderIds)
   const orderReferenceByInvoiceId = new Map(
@@ -534,7 +547,12 @@ export function CustomerStoreProvider({
   )
   const [invoices] = useState(() => (persistedInvoices ?? []).map(mapDatabaseInvoice))
   const invoice = invoices[0] ?? null
-  const [subscriptionUsedUnits] = useState(persistedSubscriptionUsedUnits)
+  const subscriptionAvailableUnits = persistedSubscription ? (persistedSubscriptionAllowance?.balance ?? 0) : null
+  const subscriptionBorrowedUnits = Math.max(0, -(subscriptionAvailableUnits ?? 0))
+  const subscriptionBorrowableUnits = Math.max(
+    0,
+    (persistedSubscriptionAllowance?.unitsAvailableForConfirmation ?? 0) - Math.max(0, subscriptionAvailableUnits ?? 0),
+  )
 
   const store = useMemo<CustomerStore>(() => {
     const subscription = persistedSubscription
@@ -558,10 +576,11 @@ export function CustomerStoreProvider({
       subscription,
       subscriptionEndDate: persistedSubscription?.subscription.end_date ?? null,
       activePlan: persistedSubscription?.plan ?? null,
-      subscriptionUsedUnits,
-      subscriptionRemainingUnits: persistedSubscription
-        ? Math.max(0, persistedSubscription.plan.weekly_limit - subscriptionUsedUnits)
-        : null,
+      subscriptionAvailableUnits,
+      subscriptionBorrowableUnits,
+      subscriptionBorrowedUnits,
+      subscriptionNextBalanceAfterCredit: persistedSubscriptionAllowance?.nextBalanceAfterCredit ?? null,
+      subscriptionRemainingUnits: persistedSubscriptionAllowance?.unitsAvailableForConfirmation ?? null,
       preferredPickupLocationId: preferredPickupLocation?.id ?? null,
       preferredPickupLocationName: preferredPickupLocation?.name ?? null,
       pickupLocations: persistedPickupLocations ?? [],
@@ -582,7 +601,7 @@ export function CustomerStoreProvider({
         setOneOffBalance((currentBalance) => currentBalance + Math.max(0, amount - Math.max(0, -subscriptionBalance)))
         toast.success(`₦${amount.toLocaleString()} added to your wallet.`)
       },
-      addOrder: async ({ items, notes, pickupLocation }) => {
+      addOrder: async ({ items, notes, pickupLocation, subscriptionBorrowConsentUnits }) => {
         if (getMixedServiceGroups(items).length > 0 && !hasMinimumMixedServiceInstructions(notes)) {
           throw new Error(`Mixed-service instructions must contain at least ${MIN_MIXED_SERVICE_INSTRUCTION_LENGTH} characters.`)
         }
@@ -700,6 +719,7 @@ export function CustomerStoreProvider({
               notes: notes || null,
               pickup_location_id: selectedLocation?.id ?? null,
               is_subscription_order: hasSubscription,
+              subscription_borrow_consent_units: hasSubscription ? subscriptionBorrowConsentUnits : 0,
               billed_extra_amount: null,
             })
             .select('*')
@@ -765,10 +785,13 @@ export function CustomerStoreProvider({
     profile,
     persistedPickupLocations,
     persistedSubscription,
+    subscriptionBorrowableUnits,
     promotionalBalance,
     savedPickupLocationId,
     subscriptionBalance,
-    subscriptionUsedUnits,
+    persistedSubscriptionAllowance,
+    subscriptionAvailableUnits,
+    subscriptionBorrowedUnits,
     transactions,
   ])
 
