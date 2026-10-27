@@ -1,5 +1,5 @@
 import { data, useFetcher, useOutletContext, useRevalidator } from 'react-router'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { waitUntil } from '@vercel/functions'
 import type { Route } from './+types/Home'
 import { sql } from '../../../lib/db.server'
@@ -174,6 +174,14 @@ export async function action({ request }: Route.ActionArgs) {
     `
     if (used) {
       const usedStatus = used.handoff_type === 'picked_up' ? 'already picked up' : 'already delivered'
+      if (used.handoff_type === (isPickup ? 'picked_up' : 'delivered')) {
+        return data({
+          ok: true,
+          orderId,
+          status: isPickup ? 'picked_up' : 'delivered',
+          alreadyConfirmed: true,
+        })
+      }
       return data({ ok: false, alreadyUsed: true, message: `${usedStatus}: ${used.public_order_number}.` }, { status: 409 })
     }
     const errorMessage = intent === 'final_delivery' ? 'This order cannot be marked delivered yet.' : 'This pickup could not be confirmed.'
@@ -232,6 +240,109 @@ type OrderRecord = {
   customer_uid?: string | null
 }
 
+type HandoffQueueEntry = {
+  orderId: string
+  otp: string
+  handoffType: 'pickup' | 'delivery'
+  publicOrderNumber: string
+  customerName: string
+  pickupLocation: string | null
+  status: 'pending' | 'confirmed' | 'failed'
+  message?: string
+}
+
+function HandoffQueueItem({
+  entry,
+  onResult,
+}: {
+  entry: HandoffQueueEntry
+  onResult: (orderId: string, result: { status: 'confirmed' | 'failed'; message?: string }) => void
+}) {
+  const fetcher = useFetcher<typeof action>()
+  const started = useRef(false)
+  const handledResponse = useRef<unknown>(null)
+  const wasSubmitting = useRef(false)
+
+  const submit = useCallback(() => {
+    const formData = new FormData()
+    formData.set('intent', entry.handoffType === 'delivery' ? 'final_delivery' : 'pickup')
+    formData.set('orderId', entry.orderId)
+    formData.set('otp', entry.otp)
+    fetcher.submit(formData, { method: 'post' })
+  }, [entry.handoffType, entry.orderId, entry.otp, fetcher])
+
+  useEffect(() => {
+    if (started.current) return
+    started.current = true
+    submit()
+  }, [submit])
+
+  useEffect(() => {
+    if (fetcher.state !== 'idle') {
+      wasSubmitting.current = true
+      return
+    }
+    if (!wasSubmitting.current) return
+    wasSubmitting.current = false
+    if (!fetcher.data || handledResponse.current === fetcher.data) {
+      onResult(entry.orderId, {
+        status: 'failed',
+        message: 'No confirmation response. Check handoff history before retrying.',
+      })
+      return
+    }
+    handledResponse.current = fetcher.data
+    if (fetcher.data.ok && 'orderId' in fetcher.data && fetcher.data.orderId === entry.orderId) {
+      onResult(entry.orderId, { status: 'confirmed' })
+    } else if (!fetcher.data.ok && 'message' in fetcher.data) {
+      onResult(entry.orderId, {
+        status: 'failed',
+        message: 'alreadyUsed' in fetcher.data && fetcher.data.alreadyUsed
+          ? `${fetcher.data.message} Refresh handoff history to verify.`
+          : fetcher.data.message,
+      })
+    }
+  }, [entry.orderId, fetcher.data, fetcher.state, onResult])
+
+  const isSubmitting = fetcher.state !== 'idle'
+
+  return (
+    <li className="flex flex-col gap-2 rounded-xl border border-brand-border bg-white px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0">
+        <p className="text-sm font-semibold text-slate-900">
+          {entry.publicOrderNumber} · {entry.customerName}
+        </p>
+        <p className="mt-1 text-xs text-slate-500">
+          {entry.handoffType === 'pickup' ? 'Pickup' : 'Delivery'} · {entry.pickupLocation ?? 'Location pending'}
+        </p>
+        {entry.status === 'failed' && <p className="mt-1 text-xs text-rose-700">{entry.message}</p>}
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        <span
+          className={`text-xs font-semibold ${
+            isSubmitting || entry.status === 'pending'
+              ? 'text-brand-primary'
+              : entry.status === 'confirmed'
+                ? 'text-emerald-700'
+                : 'text-rose-700'
+          }`}
+        >
+          {isSubmitting || entry.status === 'pending' ? 'Confirming…' : entry.status === 'confirmed' ? 'Confirmed' : 'Needs attention'}
+        </span>
+        {entry.status === 'failed' && !isSubmitting && (
+          <button
+            type="button"
+            onClick={submit}
+            className="rounded-full border border-brand-border px-3 py-1.5 text-xs font-semibold text-brand-primary hover:bg-brand-soft"
+          >
+            Retry
+          </button>
+        )}
+      </div>
+    </li>
+  )
+}
+
 function isWithinRange(dateIso: string, range: (typeof filters)[number]) {
   const date = new Date(dateIso)
   const now = new Date()
@@ -259,13 +370,13 @@ export default function Home() {
     orders: OrderRecord[]
     logisticsEvents: Array<{ order_id: string; event_type: 'picked_up' | 'delivered'; created_at: string }>
   }>()
-  const fetcher = useFetcher<typeof action>()
   const lookupFetcher = useFetcher<typeof action>()
   const revalidator = useRevalidator()
   const [selectedRange, setSelectedRange] = useState<(typeof filters)[number]>('Today')
   const [selectedLocation, setSelectedLocation] = useState('All locations')
   const [selectedHistory, setSelectedHistory] = useState<'picked_up' | 'delivered'>('picked_up')
   const [otp, setOtp] = useState(['', '', '', ''])
+  const [handoffQueue, setHandoffQueue] = useState<HandoffQueueEntry[]>([])
   const inputRefs = useRef<Array<HTMLInputElement | null>>([])
 
   const locationOptions = useMemo(
@@ -278,19 +389,22 @@ export default function Home() {
     return order.pickup_location_name === selectedLocation
   }
 
-  const isPickingUp = fetcher.state !== 'idle'
-  const pendingOrderId = isPickingUp ? String(fetcher.formData?.get('orderId') ?? '') : null
-
-  useEffect(() => {
-    if (fetcher.data?.ok && 'orderId' in fetcher.data) {
-      revalidator.revalidate()
-      setOtp(['', '', '', ''])
-      toast.success('Handoff confirmed successfully.')
-      window.requestAnimationFrame(() => inputRefs.current[0]?.focus())
-    } else if (fetcher.data && !fetcher.data.ok && 'message' in fetcher.data) {
-      toast.error(fetcher.data.message)
-    }
-  }, [fetcher.data, revalidator.revalidate])
+  const handleHandoffResult = useCallback(
+    (orderId: string, result: { status: 'confirmed' | 'failed'; message?: string }) => {
+      setHandoffQueue((current) =>
+        result.status === 'confirmed'
+          ? current.filter((entry) => entry.orderId !== orderId)
+          : current.map((entry) => (entry.orderId === orderId ? { ...entry, ...result } : entry)),
+      )
+      if (result.status === 'confirmed') {
+        revalidator.revalidate()
+        toast.success('Handoff confirmed.')
+      } else {
+        toast.error(result.message ?? 'Handoff could not be confirmed.')
+      }
+    },
+    [revalidator],
+  )
 
   const enteredOtp = otp.join('').trim()
   const lookupResponse =
@@ -430,13 +544,28 @@ export default function Home() {
     focusInput(nextIndex)
   }
 
-  const submitOrderAction = (orderId: string, action: 'pickup' | 'delivery') => {
-    if (isPickingUp) return
-    const formData = new FormData()
-    formData.set('intent', action === 'delivery' ? 'final_delivery' : 'pickup')
-    formData.set('orderId', orderId)
-    formData.set('otp', enteredOtp)
-    fetcher.submit(formData, { method: 'post' })
+  const queueOrderAction = (
+    orderId: string,
+    publicOrderNumber: string,
+    customerName: string,
+    pickupLocation: string | null,
+    handoffType: 'pickup' | 'delivery',
+  ) => {
+    if (handoffQueue.some((entry) => entry.orderId === orderId && entry.status !== 'failed')) return
+    setHandoffQueue((current) => [
+      ...current.filter((entry) => entry.orderId !== orderId),
+      {
+        orderId,
+        otp: enteredOtp,
+        handoffType,
+        publicOrderNumber,
+        customerName,
+        pickupLocation,
+        status: 'pending',
+      },
+    ])
+    setOtp(['', '', '', ''])
+    window.requestAnimationFrame(() => inputRefs.current[0]?.focus())
   }
 
   return (
@@ -566,16 +695,18 @@ export default function Home() {
                     {match.kind === 'active' && (
                       <button
                         type="button"
-                        onClick={() => submitOrderAction(match.order_id, match.handoff_type)}
-                        disabled={isPickingUp}
+                        onClick={() =>
+                          queueOrderAction(
+                            match.order_id,
+                            match.public_order_number,
+                            match.customer_name,
+                            match.pickup_location_name ?? null,
+                            match.handoff_type === 'pickup' ? 'pickup' : 'delivery',
+                          )
+                        }
                         className="inline-flex shrink-0 items-center justify-center gap-2 rounded-full bg-brand-primary px-3 py-2 text-xs font-semibold text-white transition hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        {pendingOrderId === match.order_id ? (
-                          <>
-                            <span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                            Saving...
-                          </>
-                        ) : match.handoff_type === 'pickup' ? 'Confirm pickup' : 'Complete delivery'}
+                        {match.handoff_type === 'pickup' ? 'Confirm pickup' : 'Complete delivery'}
                       </button>
                     )}
                   </div>
@@ -598,16 +729,18 @@ export default function Home() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => submitOrderAction(match.order_id, match.handoff_type)}
-                    disabled={isPickingUp}
+                    onClick={() =>
+                      queueOrderAction(
+                        match.order_id,
+                        match.public_order_number,
+                        match.customer_name,
+                        match.pickup_location_name ?? null,
+                        match.handoff_type === 'pickup' ? 'pickup' : 'delivery',
+                      )
+                    }
                     className="inline-flex shrink-0 items-center justify-center gap-2 rounded-full bg-brand-primary px-3 py-2 text-xs font-semibold text-white transition hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    {pendingOrderId === match.order_id ? (
-                      <>
-                        <span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                        Saving...
-                      </>
-                    ) : match.handoff_type === 'pickup' ? 'Confirm pickup' : 'Complete delivery'}
+                    {match.handoff_type === 'pickup' ? 'Confirm pickup' : 'Complete delivery'}
                   </button>
                 </div>
               ))
@@ -619,6 +752,22 @@ export default function Home() {
           </div>
         </div>
       </div>
+
+      {handoffQueue.length > 0 && (
+        <section className="rounded-[24px] border border-brand-border bg-brand-soft p-4">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-base font-bold text-slate-900">Handoff confirmations</h2>
+            <span className="text-xs font-medium text-slate-600">
+              {handoffQueue.filter((entry) => entry.status === 'pending').length} pending
+            </span>
+          </div>
+          <ul className="mt-3 space-y-2">
+            {handoffQueue.map((entry) => (
+              <HandoffQueueItem key={entry.orderId} entry={entry} onResult={handleHandoffResult} />
+            ))}
+          </ul>
+        </section>
+      )}
 
       <section className="rounded-[28px] border border-[#e7e7e7] bg-white p-4 shadow-sm shadow-slate-100 md:p-5">
         <div className="flex items-center justify-between gap-3">
