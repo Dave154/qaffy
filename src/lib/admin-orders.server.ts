@@ -452,7 +452,9 @@ export async function loadAdminOrders(request: Request) {
         (select max(delivery_event.created_at) from order_logistics_events delivery_event
           where delivery_event.order_id = o.id and delivery_event.event_type = 'delivered') as delivery_date,
         o.order_type, o.status,
-        o.clothes_count_customer, o.clothes_count_customer as item_count, o.clothes_count_vendor, o.notes, o.is_subscription_order,
+        o.clothes_count_customer,
+        (select coalesce(sum(oi_count.quantity), 0)::int from order_items oi_count where oi_count.order_id = o.id) as item_count,
+        o.clothes_count_vendor, o.notes, o.is_subscription_order,
         json_build_object('id', customer.id, 'name', customer.name, 'qaffy_id', customer.qaffy_id, 'email', customer.email, 'phone', customer.phone) as customer,
         case when location.id is null then null else json_build_object('name', location.name) end as location,
         coalesce((select json_agg(json_build_object(

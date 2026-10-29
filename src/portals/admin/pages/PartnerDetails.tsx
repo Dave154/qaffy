@@ -184,7 +184,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
             o.public_order_number,
             o.status::text as status,
             o.created_at,
-            coalesce(o.clothes_count_customer, 0)::int as customer_items,
+            (select coalesce(sum(oi.quantity), 0)::int from order_items oi where oi.order_id = o.id) as customer_items,
             o.clothes_count_vendor::int as confirmed_items,
             invoice.amount as invoice_amount,
             invoice.status as invoice_status,

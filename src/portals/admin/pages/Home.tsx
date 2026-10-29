@@ -213,10 +213,12 @@ export async function loader({ request }: Route.LoaderArgs) {
   const orderById = new Map(allOrders.map((order) => [order.id, order]))
   const paidInvoiceOrderIds = new Set(paidInvoices.map((invoice) => invoice.order_id))
   const orderItemsByOrder = new Map<string, typeof orderItems>()
+  const itemCountByOrder = new Map<string, number>()
   for (const item of orderItems ?? []) {
     const items = orderItemsByOrder.get(item.order_id) ?? []
     items.push(item)
     orderItemsByOrder.set(item.order_id, items)
+    itemCountByOrder.set(item.order_id, (itemCountByOrder.get(item.order_id) ?? 0) + Number(item.quantity))
   }
   const paidSettlementIds = new Set((settlements ?? []).filter((settlement) => settlement.status === 'paid').map((settlement) => settlement.id))
   const settledOrderIds = new Set(
@@ -291,7 +293,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   for (const order of allOrders) {
     const point = getDailyPoint(localDayKey(new Date(order.created_at)))
     point.orders += 1
-    point.clothes += order.clothes_count_customer
+    point.clothes += itemCountByOrder.get(order.id) ?? 0
     if (order.status !== 'cancelled') {
       if (order.is_subscription_order) point.subscriptionOrders += 1
       else point.oneTimeOrders += 1
@@ -364,7 +366,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     if (localDayKey(createdAt) !== localDayKey(localToday)) continue
     const point = getHourlyPoint(createdAt)
     point.orders += 1
-    point.clothes += order.clothes_count_customer
+    point.clothes += itemCountByOrder.get(order.id) ?? 0
     if (order.status !== 'cancelled') {
       if (order.is_subscription_order) point.subscriptionOrders += 1
       else point.oneTimeOrders += 1
@@ -421,7 +423,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     .map((order, index) => ({
       id: order.id,
       title: index === 0 ? 'New order received' : order.status === 'delivered' ? 'Order delivered' : 'Order updated',
-      detail: `${order.id} - ${order.clothes_count_customer} clothes`,
+      detail: `${order.id} - ${itemCountByOrder.get(order.id) ?? 0} clothes`,
       time: formatTime(order.created_at),
       tone: index % 3 === 0 ? 'cyan' : index % 3 === 1 ? 'pink' : 'green',
     }))
@@ -438,7 +440,7 @@ export async function loader({ request }: Route.LoaderArgs) {
           .filter((invoice) => invoice.status === 'unpaid')
           .reduce((sum, invoice) => sum + Number(invoice.amount), 0),
         revenue: paidInvoices.reduce((sum, invoice) => sum + Number(invoice.amount), 0) + planPaymentRevenue,
-        clothes: allOrders.reduce((sum, order) => sum + order.clothes_count_customer, 0),
+        clothes: (orderItems ?? []).reduce((sum, item) => sum + Number(item.quantity), 0),
         washClothes: clothesByService.wash,
         ironClothes: clothesByService.iron,
         washIronClothes: clothesByService.wash_iron,

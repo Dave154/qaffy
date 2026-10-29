@@ -395,7 +395,7 @@ function mapDatabaseOrder(
     createdAt: order.created_at,
     pickup: order.status === 'pending_pickup' ? 'Pickup pending' : 'Pickup confirmed',
     total: invoiceAmountsByOrderId?.[order.id] ?? order.billed_extra_amount ?? 0,
-    items: order.clothes_count_customer,
+    items: persistedItems.filter((item) => item.order_id === order.id).reduce((total, item) => total + item.quantity, 0),
     action: 'View details',
     pickupOtp: order.pickup_otp ?? '',
     deliveryOtp: paymentStatus === 'Paid' && order.status !== 'delivered' ? (order.delivery_otp ?? undefined) : undefined,
@@ -641,8 +641,6 @@ export function CustomerStoreProvider({
         let savedPublicOrderNumber: string | null = null
 
         if (supabase && profile?.id) {
-          const serviceTypes = new Set(items.map((item) => item.service))
-          const orderType = serviceTypes.size > 1 ? 'mixed' : serviceTypes.has('Wash + Iron') ? 'wash_iron' : 'wash'
           const selectedLocation = persistedPickupLocations?.find((location) => location.name === pickupLocation)
           if (!savedPickupLocationId && selectedLocation) {
             const { error: profileLocationError } = await supabase
@@ -679,13 +677,7 @@ export function CustomerStoreProvider({
           }
 
           const rateByCategoryId = new Map((categoryRates ?? []).map((rate) => [rate.category_id, rate]))
-          const weightedClothes = items.reduce((sum, item) => {
-            const categoryId = categoryIdByName.get(item.category)
-            const subscriptionUnits = categoryId ? Number(rateByCategoryId.get(categoryId)?.subscription_units ?? 0) : 0
-            return sum + item.quantity * subscriptionUnits
-          }, 0)
           if (
-            weightedClothes <= 0 ||
             items.some((item) => {
               const categoryId = categoryIdByName.get(item.category)
               const rate = categoryId ? rateByCategoryId.get(categoryId) : undefined
@@ -698,32 +690,18 @@ export function CustomerStoreProvider({
             throw new Error('Missing cloth category or subscription units')
           }
 
-          const hasSubscription = Boolean(persistedSubscription)
-          const authoritativeItems = items.map((item) => {
+          const orderItems = items.map((item) => {
             const categoryId = categoryIdByName.get(item.category)!
-            const rate = rateByCategoryId.get(categoryId)!
-            return {
-              ...item,
-              unitPrice: getRateValue(rate, item.service as RateCardService),
-              subscriptionUnits: Number(rate.subscription_units),
-            }
+            const service: 'wash' | 'iron' | 'wash_iron' =
+              item.service === 'Wash + Iron' ? 'wash_iron' : item.service === 'Iron' ? 'iron' : 'wash'
+            return { category_id: categoryId, quantity: item.quantity, service }
           })
-          const { data: insertedOrder, error: orderInsertError } = await supabase
-            .from('orders')
-            .insert({
-              customer_id: profile.id,
-              order_type: orderType,
-              clothes_count_customer: clothes,
-              clothes_count_customer_units: hasSubscription ? weightedClothes : clothes,
-              status: 'pending_pickup',
-              notes: notes || null,
-              pickup_location_id: selectedLocation?.id ?? null,
-              is_subscription_order: hasSubscription,
-              subscription_borrow_consent_units: hasSubscription ? subscriptionBorrowConsentUnits : 0,
-              billed_extra_amount: null,
-            })
-            .select('*')
-            .single()
+          const { data: insertedOrder, error: orderInsertError } = await supabase.rpc('create_customer_order', {
+            p_items: orderItems,
+            p_notes: notes || null,
+            p_pickup_location_id: selectedLocation?.id ?? null,
+            p_subscription_borrow_consent_units: persistedSubscription ? subscriptionBorrowConsentUnits : 0,
+          })
 
           if (orderInsertError || !insertedOrder) {
             toast.error(`Order could not be saved: ${orderInsertError?.message ?? 'No order was returned.'}`)
@@ -732,34 +710,6 @@ export function CustomerStoreProvider({
           savedOrderId = insertedOrder.id
           savedPickupOtp = insertedOrder.pickup_otp
           savedPublicOrderNumber = insertedOrder.public_order_number
-
-          if (insertedOrder) {
-            const orderItems = authoritativeItems.flatMap((item) => {
-              const categoryId = categoryIdByName.get(item.category)
-              if (!categoryId) return []
-
-              const service: 'wash' | 'iron' | 'wash_iron' =
-                item.service === 'Wash + Iron' ? 'wash_iron' : item.service === 'Iron' ? 'iron' : 'wash'
-
-              return [
-                {
-                  order_id: insertedOrder.id,
-                  category_id: categoryId,
-                  quantity: item.quantity,
-                  service,
-                  unit_price: item.unitPrice,
-                },
-              ]
-            })
-
-            if (orderItems.length > 0) {
-              const { error: itemInsertError } = await supabase.from('order_items').insert(orderItems)
-              if (itemInsertError) {
-                toast.error(`Order items could not be saved: ${itemInsertError.message}`)
-                throw itemInsertError
-              }
-            }
-          }
         }
 
         setOrders((currentOrders) => [
