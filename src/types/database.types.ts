@@ -28,6 +28,7 @@ export type ReferralCampaignStatus = 'draft' | 'active' | 'paused' | 'ended'
 export type ReferralRewardStatus = 'pending' | 'issued' | 'expired' | 'reversed' | 'failed'
 export type ReferralRewardType = 'wallet_credit'
 export type LogisticsEventType = 'picked_up' | 'delivered'
+export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[]
 
 export interface Profile {
   id: string
@@ -226,6 +227,7 @@ export interface OrderItem {
   category_id: string
   quantity: number
   confirmed_quantity: number | null
+  is_vendor_added: boolean
   service: 'wash' | 'iron' | 'wash_iron'
   unit_price: number
   subscription_units_snapshot: number | null
@@ -456,6 +458,15 @@ export interface Database {
     }
     Views: Record<string, never>
     Functions: {
+      create_customer_order: {
+        Args: {
+          p_items: Json
+          p_notes: string | null
+          p_pickup_location_id: string | null
+          p_subscription_borrow_consent_units: number
+        }
+        Returns: Order
+      }
       has_role: { Args: { p_role: UserRole }; Returns: boolean }
       is_admin: { Args: Record<string, never>; Returns: boolean }
     }

@@ -257,7 +257,7 @@ export default function Orders() {
                 </div>
 
                 <div className="shrink-0 sm:ml-2">
-                  {order.status === 'Pending payment' && order.total > 0 ? (
+                  {order.paymentStatus === 'Pending' && order.total > 0 ? (
                     <DeliveryOtpPaywall
                       amount={order.total}
                       walletBalance={balance}

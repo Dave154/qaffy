@@ -173,6 +173,16 @@ export async function loader({ request, params }: Route.LoaderArgs) {
       .eq('referrer_id', customerId)
       .order('created_at', { ascending: false }),
   ])
+  const orderIds = (orders ?? []).map((order) => order.id)
+  const { data: orderItems, error: orderItemsError } =
+    orderIds.length > 0
+      ? await supabase.from('order_items').select('order_id, quantity').in('order_id', orderIds)
+      : { data: [], error: null }
+  if (orderItemsError) throw new Error(`Customer order items could not be loaded: ${orderItemsError.message}`)
+  const itemCountByOrder = new Map<string, number>()
+  for (const item of orderItems ?? []) {
+    itemCountByOrder.set(item.order_id, (itemCountByOrder.get(item.order_id) ?? 0) + item.quantity)
+  }
   const [semesterSettings] = await sql<{ semester_end_date: Date | string | null }[]>`
     select semester_end_date
     from app_settings
@@ -246,7 +256,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
         publicOrderNumber: order.public_order_number,
         status: order.status,
         createdAt: order.created_at,
-        customerCount: order.clothes_count_customer,
+        customerCount: itemCountByOrder.get(order.id) ?? 0,
         vendorCount: order.clothes_count_vendor,
         invoiceAmount: invoiceByOrder.get(order.id) ? Number(invoiceByOrder.get(order.id)?.amount) : null,
         invoiceStatus: invoiceByOrder.get(order.id)?.status ?? null,

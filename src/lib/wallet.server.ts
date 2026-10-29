@@ -423,8 +423,8 @@ export async function finalizeVendorOrder(
       if (!rate) throw new Error(`Rate not configured: ${item.categoryName}`)
       const unitPrice = item.service === 'wash_iron' ? rate.wash_iron_price : item.service === 'iron' ? rate.iron_price : rate.wash_price
       const [insertedItem] = await tx`
-        insert into order_items (order_id, category_id, quantity, service, unit_price, confirmed_quantity)
-        values (${orderId}, ${category.id}, ${item.quantity}, ${item.service}, ${unitPrice}, ${item.quantity})
+        insert into order_items (order_id, category_id, quantity, service, unit_price, confirmed_quantity, is_vendor_added)
+        values (${orderId}, ${category.id}, ${item.quantity}, ${item.service}, ${unitPrice}, ${item.quantity}, true)
         returning id
       `
       addedItemIds.push(insertedItem.id)
