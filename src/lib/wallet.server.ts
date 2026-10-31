@@ -572,16 +572,22 @@ export async function finalizeVendorOrder(
           and status <> 'cancelled'
           and id <> ${orderId}
           and (
-            subscription_id = ${appliedSubscriptionId}
+            subscription_allowance_subscription_id = ${appliedSubscriptionId}
             or (
-              subscription_id is not null
-              and subscription_id <> ${appliedSubscriptionId}
-              and subscription_units_applied_at >= ${currentWeekStart}
-            )
-            or (
-              subscription_id is null
-              and (created_at at time zone 'Africa/Lagos')::date >= ${startDate}::date
-              and (${endDate}::date is null or (created_at at time zone 'Africa/Lagos')::date <= ${endDate}::date)
+              subscription_allowance_subscription_id is null
+              and (
+                subscription_id = ${appliedSubscriptionId}
+                or (
+                  subscription_id is not null
+                  and subscription_id <> ${appliedSubscriptionId}
+                  and subscription_units_applied_at >= ${currentWeekStart}
+                )
+                or (
+                  subscription_id is null
+                  and (created_at at time zone 'Africa/Lagos')::date >= ${startDate}::date
+                  and (${endDate}::date is null or (created_at at time zone 'Africa/Lagos')::date <= ${endDate}::date)
+                )
+              )
             )
           )
           `

@@ -13,7 +13,8 @@ import {
 } from 'react-router'
 import { useEffect, useRef, useState } from 'react'
 import { waitUntil } from '@vercel/functions'
-import { ChevronLeft, ChevronRight, CircleAlert, LoaderCircle, RefreshCw, SlidersHorizontal, X } from 'lucide-react'
+import type postgres from 'postgres'
+import { ChevronLeft, ChevronRight, LoaderCircle, RefreshCw, SlidersHorizontal, X } from 'lucide-react'
 import type { Route } from './+types/Orders'
 import { MultiSortManager, SortColumnHeader } from '../../../components/admin/MultiSortControls'
 import { requireRole } from '../../../lib/auth.server'
@@ -24,6 +25,12 @@ import { isReadyForDispatch, isReadyForFinalDelivery } from '../../../lib/orderL
 import { sendCustomerNotification } from '../../../lib/notifications.server'
 import { issueReferralRewards, sendReferralRewardNotifications } from '../../../lib/wallet.server'
 import { loadAdminOrders } from '../../../lib/admin-orders.server'
+import { calculateSubscriptionBilling } from '../../../lib/subscription-billing'
+import {
+  calculateSubscriptionAllowance,
+  calculateSubscriptionAllowanceThroughCurrentMonth,
+  getSubscriptionWeekStart,
+} from '../../../lib/subscription-week'
 
 type AdminOrder = {
   id: string
@@ -40,6 +47,7 @@ type AdminOrder = {
   clothes_count_vendor: number | null
   notes: string | null
   is_subscription_order: boolean
+  subscription_id: string | null
   customer: { id: string; name: string | null; qaffy_id: string | null; email: string | null; phone: string | null } | null
   location: { name: string } | null
   items: Array<{
@@ -78,6 +86,282 @@ const sortableColumns: Array<{ value: SortColumn; label: string }> = [
   { value: 'status', label: 'Status' },
 ]
 
+type OfflinePaymentCalculation = {
+  amount: number
+  coveredUnits: number
+  borrowedUnits: number
+  allowanceSubscriptionId: string | null
+  currentUnitsAvailable: number
+  futureUnitsAvailable: number
+  eligibleOrderUnits: number
+  billedExtraAmount: number
+  billingBreakdown: BillingBreakdown | null
+  mismatchItems: Array<{
+    itemId: string
+    category: string
+    service: string
+    originalQuantity: number
+    confirmedQuantity: number
+    difference: number
+    unitPrice: number
+    extraAmount: number
+  }>
+}
+
+class OfflinePaymentCalculationError extends Error {}
+
+type OfflinePaymentOrderRow = {
+  invoice_id: string
+  amount: number | string
+  order_id: string
+  customer_id: string
+  public_order_number: string
+  order_status: string
+  is_subscription_order: boolean
+  subscription_id: string | null
+}
+
+type OfflinePaymentSubscriptionRow = {
+  id: string
+  weekly_limit_snapshot: number
+  covers_wash_snapshot: boolean
+  covers_iron_snapshot: boolean
+  start_date: string | Date
+  end_date: string | Date | null
+  created_at: string | Date
+}
+
+type OfflinePaymentItemRow = {
+  id: string
+  quantity: number
+  confirmed_quantity: number | null
+  service: 'wash' | 'iron' | 'wash_iron'
+  unit_price: number | string
+  subscription_units_snapshot: number | null
+  regular_wash_price_snapshot: number | string | null
+  regular_iron_price_snapshot: number | string | null
+  regular_wash_iron_price_snapshot: number | string | null
+  subscriber_wash_price_snapshot: number | string | null
+  subscriber_iron_price_snapshot: number | string | null
+  subscriber_wash_iron_price_snapshot: number | string | null
+  category_name: string
+}
+
+type AdminTransaction = postgres.TransactionSql
+
+function asDateOnly(value: string | Date) {
+  return value instanceof Date ? value.toISOString().slice(0, 10) : value.slice(0, 10)
+}
+
+function asTimestamp(value: string | Date) {
+  return value instanceof Date ? value.toISOString() : value
+}
+
+function roundCurrency(value: number) {
+  return Math.round(value * 100) / 100
+}
+
+async function getOfflinePaymentCalculation(
+  tx: AdminTransaction,
+  orderId: string,
+  applySubscriptionAllowance: boolean,
+): Promise<{ order: OfflinePaymentOrderRow; calculation: OfflinePaymentCalculation } | null> {
+  const [order] = await tx<OfflinePaymentOrderRow[]>`
+    select i.id as invoice_id, i.amount, o.id as order_id, o.customer_id,
+      o.public_order_number, o.status::text as order_status, o.is_subscription_order, o.subscription_id
+    from orders o
+    join invoices i on i.order_id = o.id
+    where o.id = ${orderId}
+      and o.status in ('invoiced', 'out_for_delivery')
+      and o.clothes_count_vendor is not null
+      and i.status = 'unpaid'
+    for update of o, i
+  `
+  if (!order) return null
+
+  const unchangedCalculation: OfflinePaymentCalculation = {
+    amount: Number(order.amount),
+    coveredUnits: 0,
+    borrowedUnits: 0,
+    allowanceSubscriptionId: null,
+    currentUnitsAvailable: 0,
+    futureUnitsAvailable: 0,
+    eligibleOrderUnits: 0,
+    billedExtraAmount: 0,
+    billingBreakdown: null,
+    mismatchItems: [],
+  }
+  if (!applySubscriptionAllowance) return { order, calculation: unchangedCalculation }
+  if (!order.is_subscription_order) {
+    throw new OfflinePaymentCalculationError('Subscription allowance can only be applied to subscription orders.')
+  }
+
+  const [subscription] = await tx<OfflinePaymentSubscriptionRow[]>`
+    select id, weekly_limit_snapshot, covers_wash_snapshot, covers_iron_snapshot, start_date, end_date, created_at
+    from subscriptions
+    where customer_id = ${order.customer_id}
+      and status = 'active'
+      and (end_date is null or end_date >= current_date)
+    order by created_at desc
+    limit 1
+    for update
+  `
+  if (!subscription) {
+    throw new OfflinePaymentCalculationError('The customer does not have an active subscription to apply.')
+  }
+
+  const items = await tx<OfflinePaymentItemRow[]>`
+    select
+      oi.id, oi.quantity, oi.confirmed_quantity, oi.service, oi.unit_price, oi.subscription_units_snapshot,
+      oi.regular_wash_price_snapshot, oi.regular_iron_price_snapshot, oi.regular_wash_iron_price_snapshot,
+      oi.subscriber_wash_price_snapshot, oi.subscriber_iron_price_snapshot, oi.subscriber_wash_iron_price_snapshot,
+      category.name as category_name
+    from order_items oi
+    join cloth_categories category on category.id = oi.category_id
+    where oi.order_id = ${orderId}
+    order by oi.id
+  `
+  if (
+    items.length === 0 ||
+    items.some(
+      (item) =>
+        item.confirmed_quantity === null ||
+        !Number.isSafeInteger(item.confirmed_quantity) ||
+        item.confirmed_quantity < 0 ||
+        !Number.isSafeInteger(item.subscription_units_snapshot) ||
+        Number(item.subscription_units_snapshot) <= 0 ||
+        [
+          item.unit_price,
+          item.regular_wash_price_snapshot,
+          item.regular_iron_price_snapshot,
+          item.regular_wash_iron_price_snapshot,
+          item.subscriber_wash_price_snapshot,
+          item.subscriber_iron_price_snapshot,
+          item.subscriber_wash_iron_price_snapshot,
+        ].some((value) => value === null || !Number.isFinite(Number(value)) || Number(value) < 0),
+    )
+  ) {
+    throw new OfflinePaymentCalculationError('Saved item counts or subscription rates are missing; allowance cannot be safely applied.')
+  }
+
+  const [clock] = await tx<{ now: Date | string }[]>`select now() as now`
+  const now = new Date(clock.now)
+  const startDate = asDateOnly(subscription.start_date)
+  const endDate = subscription.end_date ? asDateOnly(subscription.end_date) : null
+  const startAt = asTimestamp(subscription.created_at)
+  const [usage] = await tx<{ used_units: number | string }[]>`
+    select coalesce(sum(subscription_units_applied), 0) as used_units
+    from orders
+    where customer_id = ${order.customer_id}
+      and is_subscription_order = true
+      and subscription_units_applied is not null
+      and clothes_count_vendor is not null
+      and status <> 'cancelled'
+      and id <> ${orderId}
+      and (
+        subscription_allowance_subscription_id = ${subscription.id}
+        or (
+          subscription_allowance_subscription_id is null
+          and (
+            subscription_id = ${subscription.id}
+            or (
+              subscription_id is not null
+              and subscription_id <> ${subscription.id}
+              and subscription_units_applied_at >= ${getSubscriptionWeekStart(now)}
+            )
+            or (
+              subscription_id is null
+              and (created_at at time zone 'Africa/Lagos')::date >= ${startDate}::date
+              and (${endDate}::date is null or (created_at at time zone 'Africa/Lagos')::date <= ${endDate}::date)
+            )
+          )
+        )
+      )
+  `
+  const usedUnits = Number(usage?.used_units ?? 0)
+  const allowanceInput = {
+    weeklyLimit: Number(subscription.weekly_limit_snapshot),
+    startDate,
+    startAt,
+    endDate,
+    usedUnits,
+  }
+  const allowanceThroughMonth = calculateSubscriptionAllowanceThroughCurrentMonth(allowanceInput, now)
+  const allowanceAccruedNow = calculateSubscriptionAllowance(allowanceInput, now)
+  const billingItems = items.map((item) => ({
+    id: item.id,
+    service: item.service,
+    quantity: Number(item.confirmed_quantity),
+    unitsPerItem: Number(item.subscription_units_snapshot),
+    regularPrice: Number(item.unit_price),
+    regularWashPrice: Number(item.regular_wash_price_snapshot),
+    regularIronPrice: Number(item.regular_iron_price_snapshot),
+    regularWashIronPrice: Number(item.regular_wash_iron_price_snapshot),
+    subscriberWashPrice: Number(item.subscriber_wash_price_snapshot),
+    subscriberIronPrice: Number(item.subscriber_iron_price_snapshot),
+    subscriberWashIronPrice: Number(item.subscriber_wash_iron_price_snapshot),
+  }))
+  const coverage = {
+    wash: subscription.covers_wash_snapshot,
+    iron: subscription.covers_iron_snapshot,
+  }
+  const billing = calculateSubscriptionBilling(billingItems, coverage, allowanceThroughMonth.unitsAvailableForConfirmation)
+  const eligibleOrderUnits = billingItems.reduce((total, item) => {
+    const isCovered =
+      (item.service === 'wash' && coverage.wash) ||
+      (item.service === 'iron' && coverage.iron) ||
+      (item.service === 'wash_iron' && (coverage.wash || coverage.iron))
+    return total + (isCovered ? item.quantity * item.unitsPerItem : 0)
+  }, 0)
+  const originalBilling = calculateSubscriptionBilling(
+    billingItems.map((item, index) => ({ ...item, quantity: items[index].quantity })),
+    coverage,
+    allowanceThroughMonth.unitsAvailableForConfirmation,
+  )
+  const originalLineAmounts = new Map(originalBilling.lines.map((line) => [line.id, line.totalAmount]))
+  const mismatchItems = items
+    .map((item, index) => {
+      const originalQuantity = Number(item.quantity)
+      const confirmedQuantity = Number(item.confirmed_quantity)
+      const difference = confirmedQuantity - originalQuantity
+      return {
+        itemId: item.id,
+        category: item.category_name,
+        service: item.service,
+        originalQuantity,
+        confirmedQuantity,
+        difference,
+        unitPrice: Number(item.unit_price),
+        extraAmount: Math.max(0, roundCurrency(billing.lines[index].totalAmount - (originalLineAmounts.get(item.id) ?? 0))),
+      }
+    })
+    .filter((item) => item.difference !== 0)
+  const amount = roundCurrency(billing.totalAmount)
+  const currentlyAvailable = Math.max(0, allowanceAccruedNow.balance)
+  const totalAvailable = allowanceThroughMonth.unitsAvailableForConfirmation
+  const futureAvailable = Math.max(0, totalAvailable - currentlyAvailable)
+
+  return {
+    order,
+    calculation: {
+      amount,
+      coveredUnits: billing.coveredUnits,
+      borrowedUnits: Math.max(0, billing.coveredUnits - currentlyAvailable),
+      allowanceSubscriptionId: subscription.id,
+      currentUnitsAvailable: currentlyAvailable,
+      futureUnitsAvailable: futureAvailable,
+      eligibleOrderUnits,
+      billedExtraAmount: Math.max(0, roundCurrency(billing.totalAmount - originalBilling.totalAmount)),
+      billingBreakdown: {
+        coveredUnits: billing.coveredUnits,
+        subscriberAmount: roundCurrency(billing.subscriberAmount),
+        regularAmount: roundCurrency(billing.regularAmount),
+      },
+      mismatchItems,
+    },
+  }
+}
+
 // eslint-disable-next-line react-refresh/only-export-components
 export async function action({ request }: Route.ActionArgs) {
   const auth = await requireRole(request, 'admin')
@@ -91,6 +375,7 @@ export async function action({ request }: Route.ActionArgs) {
     'mark-picked-up',
     'dispatch-order',
     'mark-delivered',
+    'preview-offline-payment',
     'record-offline-payment-and-complete',
   ] as const
   if (
@@ -101,6 +386,42 @@ export async function action({ request }: Route.ActionArgs) {
   }
 
   try {
+    if (intent === 'preview-offline-payment') {
+      const previewId = String(formData.get('previewId') ?? '')
+      if (!/^[\w-]{1,80}$/.test(previewId)) {
+        return data({ ok: false, intent, orderId, message: 'Invalid payment preview request.' }, { status: 400, headers: auth.headers })
+      }
+      try {
+        const result = await sql.begin((tx) => getOfflinePaymentCalculation(tx, orderId, true))
+        if (!result) {
+          return data(
+            { ok: false, intent, orderId, previewId, message: 'This order is no longer awaiting offline payment.' },
+            { status: 409, headers: auth.headers },
+          )
+        }
+        return data(
+          {
+            ok: true,
+            intent,
+            orderId,
+            previewId,
+            amount: result.calculation.amount,
+            coveredUnits: result.calculation.coveredUnits,
+            borrowedUnits: result.calculation.borrowedUnits,
+            currentUnitsAvailable: result.calculation.currentUnitsAvailable,
+            futureUnitsAvailable: result.calculation.futureUnitsAvailable,
+            eligibleOrderUnits: result.calculation.eligibleOrderUnits,
+          },
+          { headers: auth.headers },
+        )
+      } catch (error) {
+        if (error instanceof OfflinePaymentCalculationError) {
+          return data({ ok: false, intent, orderId, previewId, message: error.message }, { status: 409, headers: auth.headers })
+        }
+        throw error
+      }
+    }
+
     if (intent === 'mark-picked-up') {
       const [order] = await sql`
         with updated_order as (
@@ -279,39 +600,76 @@ export async function action({ request }: Route.ActionArgs) {
     }
 
     if (intent === 'record-offline-payment-and-complete') {
-      const result = await sql.begin(async (tx) => {
-        const [invoice] = await tx`
-          select i.id as invoice_id, i.amount, o.id as order_id, o.customer_id,
-            o.public_order_number, o.status::text as order_status
-          from orders o
-          join invoices i on i.order_id = o.id
-          where o.id = ${orderId}
-            and o.status in ('invoiced', 'out_for_delivery')
-            and o.clothes_count_vendor is not null
-            and i.status = 'unpaid'
-          for update of o, i
-        `
-        if (!invoice) return null
+      const applySubscriptionAllowance = formData.get('applySubscriptionAllowance') === 'true'
+      const expectedAmountValue = formData.get('expectedAmount')
+      const expectedAmount = Number(expectedAmountValue)
+      if (
+        typeof expectedAmountValue !== 'string' ||
+        expectedAmountValue.trim() === '' ||
+        !Number.isFinite(expectedAmount) ||
+        expectedAmount < 0
+      ) {
+        return data(
+          { ok: false, intent, orderId, message: 'A valid confirmed payment amount is required.' },
+          { status: 400, headers: auth.headers },
+        )
+      }
 
-        const [paidInvoice] = await tx`
-          update invoices
-          set status = 'paid', payment_method = 'offline', paid_at = now()
-          where id = ${invoice.invoice_id} and status = 'unpaid'
-          returning id
-        `
-        if (!paidInvoice) return null
+      const result = await sql.begin(async (tx) => {
+        const payment = await getOfflinePaymentCalculation(tx, orderId, applySubscriptionAllowance)
+        if (!payment) return { kind: 'not-ready' as const }
+
+        const { order, calculation } = payment
+        if (Math.round(expectedAmount * 100) !== Math.round(calculation.amount * 100)) {
+          return { kind: 'amount-changed' as const, amount: calculation.amount }
+        }
+
+        const [paidInvoice] = applySubscriptionAllowance
+          ? await tx`
+              update invoices
+              set amount = ${calculation.amount},
+                  billing_breakdown = ${tx.json(calculation.billingBreakdown)},
+                  status = 'paid',
+                  payment_method = 'offline',
+                  paid_at = now()
+              where id = ${order.invoice_id} and status = 'unpaid'
+              returning id
+            `
+          : await tx`
+              update invoices
+              set status = 'paid', payment_method = 'offline', paid_at = now()
+              where id = ${order.invoice_id} and status = 'unpaid'
+              returning id
+            `
+        if (!paidInvoice) return { kind: 'not-ready' as const }
+
+        if (applySubscriptionAllowance) {
+          await tx`
+                update orders
+                set subscription_units_applied = ${calculation.coveredUnits},
+                    subscription_units_applied_at = now(),
+                    subscription_allowance_subscription_id = ${calculation.allowanceSubscriptionId},
+                    billed_extra_amount = ${calculation.billedExtraAmount}
+                where id = ${order.order_id}
+              `
+          await tx`
+                update mismatches
+                set details = ${tx.json(calculation.mismatchItems)}
+                where order_id = ${order.order_id}
+              `
+        }
 
         const [deliveredOrder] = await tx`
           update orders
           set status = 'delivered', delivery_otp = null
-          where id = ${invoice.order_id} and status = ${invoice.order_status}
+          where id = ${order.order_id} and status = ${order.order_status}
           returning id
         `
         if (!deliveredOrder) throw new Error('Order status changed while completing offline payment.')
 
         await tx`
           insert into order_logistics_events (order_id, agent_profile_id, event_type)
-          values (${invoice.order_id}, null, 'delivered')
+          values (${order.order_id}, null, 'delivered')
         `
         await tx`
           insert into admin_audit_events (admin_profile_id, action, entity_type, entity_id, metadata)
@@ -319,29 +677,50 @@ export async function action({ request }: Route.ActionArgs) {
             ${auth.profile.id},
             'admin_offline_order_payment_recorded',
             'order',
-            ${invoice.order_id},
+            ${order.order_id},
             ${tx.json({
-              fromStatus: invoice.order_status,
+              fromStatus: order.order_status,
               toStatus: 'delivered',
               paymentMethod: 'offline',
-              invoiceId: invoice.invoice_id,
-              amount: Number(invoice.amount),
+              invoiceId: order.invoice_id,
+              amount: calculation.amount,
+              subscriptionAllowanceApplied: applySubscriptionAllowance,
+              subscriptionUnitsApplied: applySubscriptionAllowance ? calculation.coveredUnits : null,
+              subscriptionUnitsBorrowed: applySubscriptionAllowance ? calculation.borrowedUnits : null,
             })}
           )
         `
-        const referralRewardRecipients = await issueReferralRewards(tx, invoice.customer_id, invoice.order_id, Number(invoice.amount))
+        const referralRewardRecipients = await issueReferralRewards(tx, order.customer_id, order.order_id, calculation.amount)
 
         return {
-          id: invoice.order_id,
-          invoiceId: invoice.invoice_id,
-          customerId: invoice.customer_id,
-          publicOrderNumber: invoice.public_order_number,
-          amount: Number(invoice.amount),
+          kind: 'success' as const,
+          id: order.order_id,
+          invoiceId: order.invoice_id,
+          customerId: order.customer_id,
+          publicOrderNumber: order.public_order_number,
+          amount: calculation.amount,
+          applySubscriptionAllowance,
+          coveredUnits: calculation.coveredUnits,
+          borrowedUnits: calculation.borrowedUnits,
           referralRewardRecipients,
         }
       })
 
-      if (!result) {
+      if (result.kind === 'amount-changed') {
+        return data(
+          {
+            ok: false,
+            intent,
+            orderId,
+            amountChanged: true,
+            amount: result.amount,
+            message: 'The invoice amount changed while confirming. Review the updated amount before recording payment.',
+          },
+          { status: 409, headers: auth.headers },
+        )
+      }
+
+      if (result.kind === 'not-ready') {
         return data(
           {
             ok: false,
@@ -367,6 +746,14 @@ export async function action({ request }: Route.ActionArgs) {
                 `Amount recorded: ${money(result.amount)}`,
                 `Order: ${result.publicOrderNumber}`,
                 'This payment was handled outside Qaffy; no wallet balance was used.',
+                ...(result.applySubscriptionAllowance
+                  ? [
+                      `Subscription allowance applied: ${result.coveredUnits} units.`,
+                      ...(result.borrowedUnits > 0
+                        ? [`${result.borrowedUnits} units were borrowed from future weekly credits in this subscription month.`]
+                        : []),
+                    ]
+                  : []),
               ],
               url: `/orders?order=${encodeURIComponent(result.publicOrderNumber)}`,
               tag: `order:${result.id}:offline-payment`,
@@ -407,6 +794,9 @@ export async function action({ request }: Route.ActionArgs) {
     }
     return data({ ok: true, intent, orderId }, { headers: auth.headers })
   } catch (error) {
+    if (error instanceof OfflinePaymentCalculationError) {
+      return data({ ok: false, intent, orderId, message: error.message }, { status: 409, headers: auth.headers })
+    }
     console.error('[admin-orders] Order action failed', error)
     return data(
       {
@@ -447,11 +837,10 @@ function searchWithoutOrderId(url: URL) {
 
 function getOrderDetailsReturnPath(state: unknown) {
   if (!state || typeof state !== 'object' || !('returnTo' in state) || typeof state.returnTo !== 'string') return null
-  return /^\/admin\/(?:users\/[^/?#]+|partners\/vendor\/[^/?#]+)(?:\?[^#]*)?$/.test(state.returnTo)
-    ? state.returnTo
-    : null
+  return /^\/admin\/(?:users\/[^/?#]+|partners\/vendor\/[^/?#]+)(?:\?[^#]*)?$/.test(state.returnTo) ? state.returnTo : null
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function shouldRevalidate({ currentUrl, nextUrl, formMethod, defaultShouldRevalidate }: ShouldRevalidateFunctionArgs) {
   const onlyOrderSelectionChanged =
     !formMethod &&
@@ -514,9 +903,14 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
   const handledCancelResponse = useRef<typeof cancelFetcher.data>(null)
   const workflowFetcher = useFetcher<typeof action>()
   const handledWorkflowResponse = useRef<typeof workflowFetcher.data>(null)
+  const allowancePreviewFetcher = useFetcher<typeof action>()
+  const allowancePreviewSequence = useRef(0)
   const location = useLocation()
   const revalidator = useRevalidator()
   const [confirmOfflinePayment, setConfirmOfflinePayment] = useState(false)
+  const [applySubscriptionAllowance, setApplySubscriptionAllowance] = useState(false)
+  const [activeAllowancePreviewId, setActiveAllowancePreviewId] = useState<string | null>(null)
+  const [paymentSubmitted, setPaymentSubmitted] = useState(false)
   const receivedCounts = getInitialReceivedCounts(
     order.items.map((item) => ({
       id: item.id,
@@ -565,15 +959,120 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
       'record-offline-payment-and-complete': 'Offline payment recorded and order completed.',
     }
     const completedIntent = 'intent' in result ? result.intent : ''
+    if (completedIntent === 'record-offline-payment-and-complete') onClose()
     toast.success(successMessages[completedIntent] ?? 'Order updated.')
     revalidator.revalidate()
-  }, [workflowFetcher.data, workflowFetcher.state, revalidator])
+  }, [workflowFetcher.data, workflowFetcher.state, onClose, revalidator])
 
-  const submitWorkflowAction = (intent: 'mark-picked-up' | 'dispatch-order' | 'mark-delivered' | 'record-offline-payment-and-complete') => {
+  const submitWorkflowAction = (intent: 'mark-picked-up' | 'dispatch-order' | 'mark-delivered') => {
+    if (intent === 'dispatch-order' && confirmOfflinePayment) {
+      setConfirmOfflinePayment(false)
+      setActiveAllowancePreviewId(null)
+    }
     workflowFetcher.submit({ intent, orderId: order.id }, { method: 'post' })
   }
   const submitOfflinePaymentAction = () => {
+    if (confirmOfflinePayment) {
+      setConfirmOfflinePayment(false)
+      setActiveAllowancePreviewId(null)
+      return
+    }
+    setApplySubscriptionAllowance(false)
+    setActiveAllowancePreviewId(null)
+    setPaymentSubmitted(false)
     setConfirmOfflinePayment(true)
+  }
+  const updateAllowanceChoice = (checked: boolean) => {
+    setApplySubscriptionAllowance(checked)
+    setPaymentSubmitted(false)
+    if (!checked) {
+      setActiveAllowancePreviewId(null)
+      return
+    }
+    const previewId = `${Date.now()}-${++allowancePreviewSequence.current}`
+    setActiveAllowancePreviewId(previewId)
+    allowancePreviewFetcher.submit({ intent: 'preview-offline-payment', orderId: order.id, previewId }, { method: 'post' })
+  }
+  const previewResponse = allowancePreviewFetcher.data
+  const matchingPreview =
+    previewResponse &&
+    'intent' in previewResponse &&
+    previewResponse.intent === 'preview-offline-payment' &&
+    'previewId' in previewResponse &&
+    typeof previewResponse.previewId === 'string' &&
+    previewResponse.previewId === activeAllowancePreviewId
+      ? previewResponse
+      : null
+  const allowancePreview =
+    matchingPreview?.ok &&
+    'amount' in matchingPreview &&
+    typeof matchingPreview.amount === 'number' &&
+    'coveredUnits' in matchingPreview &&
+    typeof matchingPreview.coveredUnits === 'number'
+      ? {
+          amount: matchingPreview.amount,
+          coveredUnits: matchingPreview.coveredUnits,
+          currentUnitsAvailable:
+            'currentUnitsAvailable' in matchingPreview && typeof matchingPreview.currentUnitsAvailable === 'number'
+              ? matchingPreview.currentUnitsAvailable
+              : 0,
+          futureUnitsAvailable:
+            'futureUnitsAvailable' in matchingPreview && typeof matchingPreview.futureUnitsAvailable === 'number'
+              ? matchingPreview.futureUnitsAvailable
+              : 0,
+          eligibleOrderUnits:
+            'eligibleOrderUnits' in matchingPreview && typeof matchingPreview.eligibleOrderUnits === 'number'
+              ? matchingPreview.eligibleOrderUnits
+              : 0,
+          borrowedUnits:
+            'borrowedUnits' in matchingPreview && typeof matchingPreview.borrowedUnits === 'number' ? matchingPreview.borrowedUnits : 0,
+        }
+      : null
+  const workflowResponse = workflowFetcher.data
+  const paymentAmountChanged =
+    paymentSubmitted &&
+    workflowFetcher.state === 'idle' &&
+    workflowResponse !== undefined &&
+    !workflowResponse.ok &&
+    'intent' in workflowResponse &&
+    workflowResponse.intent === 'record-offline-payment-and-complete' &&
+    'amountChanged' in workflowResponse &&
+    workflowResponse.amountChanged === true
+  const paymentAmountChangedValue =
+    paymentAmountChanged && workflowResponse && 'amount' in workflowResponse && typeof workflowResponse.amount === 'number'
+      ? workflowResponse.amount
+      : null
+  const allowancePreviewError =
+    matchingPreview && !matchingPreview.ok && 'message' in matchingPreview && typeof matchingPreview.message === 'string'
+      ? matchingPreview.message
+      : paymentAmountChanged && applySubscriptionAllowance
+        ? 'The invoice changed. Recalculate the allowance amount before trying again.'
+        : paymentAmountChanged
+          ? 'The invoice amount changed. Confirm the updated amount was received before trying again.'
+          : null
+  const canAdjustSubscriptionAllowance = order.is_subscription_order
+  const allowancePreviewPending =
+    applySubscriptionAllowance &&
+    (allowancePreviewFetcher.state !== 'idle' || (activeAllowancePreviewId !== null && matchingPreview === null))
+  const canConfirmAllowancePreview =
+    !applySubscriptionAllowance ||
+    (allowancePreview !== null && !allowancePreviewPending && allowancePreviewError === null && !paymentAmountChanged)
+  const offlinePaymentAmount = applySubscriptionAllowance
+    ? (allowancePreview?.amount ?? null)
+    : (paymentAmountChangedValue ?? Number(order.invoice?.amount ?? 0))
+  const confirmOfflinePaymentAndComplete = () => {
+    if (offlinePaymentAmount === null) return
+    setPaymentSubmitted(true)
+    if (applySubscriptionAllowance) setActiveAllowancePreviewId(null)
+    workflowFetcher.submit(
+      {
+        intent: 'record-offline-payment-and-complete',
+        orderId: order.id,
+        applySubscriptionAllowance: String(applySubscriptionAllowance),
+        expectedAmount: String(offlinePaymentAmount),
+      },
+      { method: 'post' },
+    )
   }
   const workflowActionPending = workflowFetcher.state !== 'idle'
   const pendingWorkflowIntent = workflowActionPending ? String(workflowFetcher.formData?.get('intent') ?? '') : ''
@@ -620,6 +1119,11 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
             {canRecordOfflinePayment ? (
               <>
                 <h4 className="font-bold text-slate-900">Choose next step</h4>
+                {order.is_subscription_order && !order.subscription_id && (
+                  <p className="mt-2 text-sm text-amber-800">
+                    This order has no saved subscription link. The adjustment will use the customer’s current active plan.
+                  </p>
+                )}
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                   {canDispatch && (
                     <div className="flex flex-col items-start rounded-xl border border-slate-200 bg-white p-4">
@@ -638,20 +1142,116 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
                   )}
                   <div className="flex flex-col items-start rounded-xl border border-brand-border bg-brand-soft/60 p-4">
                     <p className="font-semibold text-slate-900">Already paid and delivered?</p>
-                    <p className="mt-1 flex-1 text-sm text-slate-600">Record the offline payment to complete the order.</p>
+                    <p className="mt-1 flex-1 text-sm text-slate-600">Record the offline payment and confirm the amount received.</p>
                     <button
                       type="button"
                       onClick={submitOfflinePaymentAction}
                       disabled={workflowActionPending || cancelFetcher.state !== 'idle'}
                       className="mt-4 inline-flex items-center gap-2 rounded-lg border border-brand-primary/40 bg-white px-4 py-2 text-sm font-semibold text-brand-primary hover:bg-brand-soft disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      {pendingWorkflowIntent === 'record-offline-payment-and-complete' && (
-                        <LoaderCircle size={15} className="animate-spin" />
-                      )}
-                      {pendingWorkflowIntent === 'record-offline-payment-and-complete' ? 'Recording...' : 'Record & complete'}
+                      {confirmOfflinePayment ? 'Hide payment details' : 'Record offline payment'}
                     </button>
                   </div>
                 </div>
+                {confirmOfflinePayment && (
+                  <section
+                    className="mt-4 rounded-xl border border-brand-border bg-white p-4"
+                    aria-labelledby="offline-payment-confirm-title"
+                  >
+                    <h5 id="offline-payment-confirm-title" className="font-bold text-slate-900">
+                      Record offline payment
+                    </h5>
+                    <p className="mt-1 text-sm text-slate-600">
+                      Confirm the amount received for {order.public_order_number}, then complete the order.
+                    </p>
+                    {canAdjustSubscriptionAllowance && (
+                      <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-left">
+                        <input
+                          type="checkbox"
+                          checked={applySubscriptionAllowance}
+                          onChange={(event) => updateAllowanceChoice(event.target.checked)}
+                          disabled={workflowActionPending || allowancePreviewPending}
+                          className="mt-1 h-4 w-4 accent-brand-primary"
+                        />
+                        <span>
+                          <span className="block text-sm font-semibold text-slate-900">
+                            Apply current plan allowance
+                            {allowancePreview
+                              ? ` (${allowancePreview.currentUnitsAvailable + allowancePreview.futureUnitsAvailable} units available)`
+                              : ''}
+                          </span>
+                          <span className="mt-1 block text-xs leading-5 text-slate-600">
+                            Use the customer’s current plan credits, including future credits this month. Uncovered services are charged normally.
+                          </span>
+                        </span>
+                      </label>
+                    )}
+                    <div className="mt-4 rounded-xl bg-slate-50 p-3 text-left">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Amount to confirm received</p>
+                      <p className="mt-1 text-lg font-bold text-slate-900">
+                        {offlinePaymentAmount === null
+                          ? allowancePreviewPending
+                            ? 'Calculating amount…'
+                            : 'Unavailable'
+                          : money(offlinePaymentAmount)}
+                      </p>
+                      {applySubscriptionAllowance && allowancePreview && (
+                        <div className="mt-2 space-y-1 text-xs text-slate-600">
+                          <p>
+                            {allowancePreview.currentUnitsAvailable} current + {allowancePreview.futureUnitsAvailable} future ={' '}
+                            {allowancePreview.currentUnitsAvailable + allowancePreview.futureUnitsAvailable} units available.
+                          </p>
+                          <p>
+                            {allowancePreview.eligibleOrderUnits} eligible order units − {allowancePreview.coveredUnits} applied ={' '}
+                            {Math.max(0, allowancePreview.eligibleOrderUnits - allowancePreview.coveredUnits)} units billed at subscriber
+                            rates.
+                          </p>
+                        </div>
+                      )}
+                      {allowancePreviewError && (
+                        <div className="mt-2">
+                          <p className="text-xs font-medium text-rose-700">{allowancePreviewError}</p>
+                          {applySubscriptionAllowance && (
+                            <button
+                              type="button"
+                              onClick={() => updateAllowanceChoice(true)}
+                              disabled={allowancePreviewPending}
+                              className="mt-2 text-xs font-semibold text-brand-primary underline disabled:opacity-50"
+                            >
+                              Recalculate allowance amount
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    <div className="mt-4 flex flex-wrap justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setConfirmOfflinePayment(false)
+                          setActiveAllowancePreviewId(null)
+                        }}
+                        disabled={workflowActionPending}
+                        className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={confirmOfflinePaymentAndComplete}
+                        disabled={workflowActionPending || !canConfirmAllowancePreview || offlinePaymentAmount === null}
+                        className="inline-flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {workflowActionPending && <LoaderCircle size={15} className="animate-spin" />}
+                        {workflowActionPending
+                          ? 'Recording…'
+                          : offlinePaymentAmount === null
+                            ? 'Confirm payment'
+                            : 'Confirm payment & complete'}
+                      </button>
+                    </div>
+                  </section>
+                )}
               </>
             ) : (
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -850,51 +1450,6 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
           </button>
         </div>
       </div>
-      {confirmOfflinePayment && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
-          <section
-            role="alertdialog"
-            aria-modal="true"
-            aria-labelledby="offline-payment-confirm-title"
-            aria-describedby="offline-payment-confirm-description"
-            className="w-full max-w-md rounded-2xl bg-white p-6 text-center shadow-2xl"
-          >
-            <div className="flex flex-col items-center">
-              <span className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-soft text-brand-primary">
-                <CircleAlert size={20} aria-hidden="true" />
-              </span>
-              <div className="mt-3">
-                <h3 id="offline-payment-confirm-title" className="text-lg font-bold text-slate-900">
-                  Confirm offline payment
-                </h3>
-                <p id="offline-payment-confirm-description" className="mt-2 text-sm leading-6 text-slate-600">
-                  Confirm <span className="font-semibold text-slate-900">{money(Number(order.invoice?.amount ?? 0))}</span> was paid offline
-                  and <span className="font-semibold text-slate-900">{order.public_order_number}</span> delivered.
-                </p>
-              </div>
-            </div>
-            <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-center">
-              <button
-                type="button"
-                onClick={() => setConfirmOfflinePayment(false)}
-                className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setConfirmOfflinePayment(false)
-                  submitWorkflowAction('record-offline-payment-and-complete')
-                }}
-                className="inline-flex items-center justify-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-brand-primary-hover"
-              >
-                Confirm &amp; complete
-              </button>
-            </div>
-          </section>
-        </div>
-      )}
     </div>
   )
 }
@@ -1312,7 +1867,9 @@ export default function Orders() {
                   link.click()
                 }}
                 disabled={total === 0 || navigation.state !== 'idle'}
-                title={navigation.state !== 'idle' ? 'Wait for the current filters to finish applying.' : `Export all ${total} filtered orders`}
+                title={
+                  navigation.state !== 'idle' ? 'Wait for the current filters to finish applying.' : `Export all ${total} filtered orders`
+                }
                 className="h-10 rounded-full bg-brand-primary px-5 text-sm font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Export CSV

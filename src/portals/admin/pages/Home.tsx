@@ -39,6 +39,13 @@ type Activity = { id: string; title: string; detail: string; time: string; tone:
 type RecentVendor = { id: string; name: string; status: string }
 type RecentCustomer = { id: string; name: string; email: string | null }
 type DashboardData = {
+  sectionErrors: {
+    chart: boolean
+    pipeline: boolean
+    plans: boolean
+    recentVendors: boolean
+    recentCustomers: boolean
+  }
   metrics: {
     totalOrders: number
     ordersToday: number
@@ -67,6 +74,13 @@ type DashboardData = {
 }
 
 const emptyData: DashboardData = {
+  sectionErrors: {
+    chart: false,
+    pipeline: false,
+    plans: false,
+    recentVendors: false,
+    recentCustomers: false,
+  },
   metrics: {
     totalOrders: 0,
     ordersToday: 0,
@@ -144,290 +158,322 @@ export async function loader({ request }: Route.LoaderArgs) {
   if (!auth) return data({ dashboardData: Promise.resolve(emptyData) }, { status: 200 })
   const { supabase, headers } = auth
   const dashboardData = (async (): Promise<DashboardData> => {
-  const activeOnDate = new Date().toISOString().slice(0, 10)
-  const [
-    { data: orders },
-    { count: customers },
-    { count: vendors },
-    { count: logistics },
-    { data: invoices },
-    { data: plans },
-    { data: subscriptions },
-    { data: vendorRows },
-    { data: customerRows },
-    { data: orderItems },
-    { data: customerGrowthRows },
-    { data: paymentRows },
-    { data: payoutRows, error: payoutError },
-    { data: vendorRates, error: vendorRatesError },
-    { data: settlements, error: settlementsError },
-    { data: settlementOrders, error: settlementOrdersError },
-    { data: settlementItems, error: settlementItemsError },
-  ] = await Promise.all([
-    supabase
-      .from('orders')
-      .select('id, created_at, status, clothes_count_customer, clothes_count_vendor, vendor_id, is_subscription_order, customer_id')
-      .order('created_at', { ascending: false }),
-    supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('role', 'customer'),
-    supabase.from('vendors').select('id', { count: 'exact', head: true }).eq('status', 'approved'),
-    supabase.from('logistics_agents').select('id', { count: 'exact', head: true }).eq('status', 'approved'),
-    supabase.from('invoices').select('order_id, amount, status, created_at, paid_at').order('created_at', { ascending: false }),
-    supabase.from('plans').select('id, name, type, price, weekly_limit, active').order('created_at', { ascending: true }),
-    supabase
-      .from('subscriptions')
-      .select('customer_id, plan_id')
-      .eq('status', 'active')
-      .or(`end_date.is.null,end_date.gte.${activeOnDate}`),
-    supabase.from('vendors').select('id, business_name, status').order('created_at', { ascending: false }).limit(5),
-    supabase.from('profiles').select('id, name, email').eq('role', 'customer').order('created_at', { ascending: false }).limit(5),
-    supabase.from('order_items').select('id, order_id, category_id, service, quantity, confirmed_quantity, unit_price'),
-    supabase.from('profiles').select('created_at').eq('role', 'customer'),
-    supabase
-      .from('payments')
-      .select('amount, status, plan_id, succeeded_at, created_at')
-      .eq('status', 'success')
-      .not('plan_id', 'is', null),
-    supabase
-      .from('vendor_settlement_transfers')
-      .select('amount, status, completed_at')
-      .eq('status', 'success')
-      .not('completed_at', 'is', null),
-    supabase
-      .from('cloth_category_rates')
-      .select('category_id, vendor_wash_price, vendor_iron_price, vendor_wash_iron_price'),
-    supabase.from('vendor_settlements').select('id, status'),
-    supabase.from('vendor_settlement_orders').select('settlement_id, order_id'),
-    supabase.from('vendor_settlement_items').select('order_item_id, amount'),
-  ])
-  if (payoutError) throw payoutError
-  if (vendorRatesError) throw vendorRatesError
-  if (settlementsError) throw settlementsError
-  if (settlementOrdersError) throw settlementOrdersError
-  if (settlementItemsError) throw settlementItemsError
-  const allOrders = orders ?? []
-  const allInvoices = invoices ?? []
-  const planPayments = successfulPlanPayments(paymentRows ?? [])
-  const planPaymentRevenue = sumSuccessfulPlanPayments(planPayments)
-  const today = localDayKey(new Date())
-  const paidInvoices = allInvoices.filter((invoice) => invoice.status === 'paid')
-  const orderById = new Map(allOrders.map((order) => [order.id, order]))
-  const paidInvoiceOrderIds = new Set(paidInvoices.map((invoice) => invoice.order_id))
-  const orderItemsByOrder = new Map<string, typeof orderItems>()
-  const itemCountByOrder = new Map<string, number>()
-  for (const item of orderItems ?? []) {
-    const items = orderItemsByOrder.get(item.order_id) ?? []
-    items.push(item)
-    orderItemsByOrder.set(item.order_id, items)
-    itemCountByOrder.set(item.order_id, (itemCountByOrder.get(item.order_id) ?? 0) + Number(item.quantity))
-  }
-  const paidSettlementIds = new Set((settlements ?? []).filter((settlement) => settlement.status === 'paid').map((settlement) => settlement.id))
-  const settledOrderIds = new Set(
-    (settlementOrders ?? [])
-      .filter((membership) => paidSettlementIds.has(membership.settlement_id))
-      .map((membership) => membership.order_id),
-  )
-  const vendorRateByCategory = new Map((vendorRates ?? []).map((rate) => [rate.category_id, rate]))
-  const settlementAmountByItem = new Map((settlementItems ?? []).map((item) => [item.order_item_id, Number(item.amount ?? 0)]))
-  const owedByOrder = new Map<string, number>()
-  for (const order of allOrders) {
-    if (
-      !order.vendor_id ||
-      order.status === 'cancelled' ||
-      order.clothes_count_vendor === null ||
-      !paidInvoiceOrderIds.has(order.id) ||
-      settledOrderIds.has(order.id)
-    ) {
-      continue
+    const activeOnDate = new Date().toISOString().slice(0, 10)
+    const [
+      ordersResult,
+      customersResult,
+      vendorsResult,
+      logisticsResult,
+      invoicesResult,
+      subscriptionsResult,
+      orderItemsResult,
+      paymentRowsResult,
+      payoutRowsResult,
+      vendorRatesResult,
+      settlementsResult,
+      settlementOrdersResult,
+      settlementItemsResult,
+    ] = await Promise.all([
+      supabase
+        .from('orders')
+        .select('id, created_at, status, clothes_count_customer, clothes_count_vendor, vendor_id, is_subscription_order, customer_id')
+        .order('created_at', { ascending: false }),
+      supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('role', 'customer'),
+      supabase.from('vendors').select('id', { count: 'exact', head: true }).eq('status', 'approved'),
+      supabase.from('logistics_agents').select('id', { count: 'exact', head: true }).eq('status', 'approved'),
+      supabase.from('invoices').select('order_id, amount, status, created_at, paid_at').order('created_at', { ascending: false }),
+      supabase
+        .from('subscriptions')
+        .select('customer_id, plan_id')
+        .eq('status', 'active')
+        .or(`end_date.is.null,end_date.gte.${activeOnDate}`),
+      supabase.from('order_items').select('id, order_id, category_id, service, quantity, confirmed_quantity, unit_price'),
+      supabase
+        .from('payments')
+        .select('amount, status, plan_id, succeeded_at, created_at')
+        .eq('status', 'success')
+        .not('plan_id', 'is', null),
+      supabase
+        .from('vendor_settlement_transfers')
+        .select('amount, status, completed_at')
+        .eq('status', 'success')
+        .not('completed_at', 'is', null),
+      supabase.from('cloth_category_rates').select('category_id, vendor_wash_price, vendor_iron_price, vendor_wash_iron_price'),
+      supabase.from('vendor_settlements').select('id, status'),
+      supabase.from('vendor_settlement_orders').select('settlement_id, order_id'),
+      supabase.from('vendor_settlement_items').select('order_item_id, amount'),
+    ])
+    const cardQueryError = [
+      ordersResult.error,
+      customersResult.error,
+      vendorsResult.error,
+      logisticsResult.error,
+      invoicesResult.error,
+      subscriptionsResult.error,
+      orderItemsResult.error,
+      paymentRowsResult.error,
+      payoutRowsResult.error,
+      vendorRatesResult.error,
+      settlementsResult.error,
+      settlementOrdersResult.error,
+      settlementItemsResult.error,
+    ].find(Boolean)
+    if (cardQueryError) {
+      console.error('Admin overview card data could not be loaded:', cardQueryError)
+      throw new Error('Admin overview card data could not be loaded')
     }
-    for (const item of orderItemsByOrder.get(order.id) ?? []) {
-      if (item.confirmed_quantity === null) continue
-      const snapshotAmount = settlementAmountByItem.get(item.id)
-      const amount =
-        snapshotAmount ??
-        getRateValueFromItem(item, vendorRateByCategory.get(item.category_id), 'vendor') * Number(item.confirmed_quantity)
-      owedByOrder.set(order.id, (owedByOrder.get(order.id) ?? 0) + amount)
+
+    const [plansResult, vendorRowsResult, customerRowsResult, customerGrowthResult] = await Promise.all([
+      supabase.from('plans').select('id, name, type, price, weekly_limit, active').order('created_at', { ascending: true }),
+      supabase.from('vendors').select('id, business_name, status').order('created_at', { ascending: false }).limit(5),
+      supabase.from('profiles').select('id, name, email').eq('role', 'customer').order('created_at', { ascending: false }).limit(5),
+      supabase.from('profiles').select('created_at').eq('role', 'customer'),
+    ])
+
+    const orders = ordersResult.data ?? []
+    const customers = customersResult.count ?? 0
+    const vendors = vendorsResult.count ?? 0
+    const logistics = logisticsResult.count ?? 0
+    const invoices = invoicesResult.data ?? []
+    const subscriptions = subscriptionsResult.data ?? []
+    const orderItems = orderItemsResult.data ?? []
+    const paymentRows = paymentRowsResult.data ?? []
+    const payoutRows = payoutRowsResult.data ?? []
+    const vendorRates = vendorRatesResult.data ?? []
+    const settlements = settlementsResult.data ?? []
+    const settlementOrders = settlementOrdersResult.data ?? []
+    const settlementItems = settlementItemsResult.data ?? []
+    const plans = plansResult.data ?? []
+    const vendorRows = vendorRowsResult.data ?? []
+    const customerRows = customerRowsResult.data ?? []
+    const customerGrowthRows = customerGrowthResult.data ?? []
+    const allOrders = orders
+    const allInvoices = invoices
+    const planPayments = successfulPlanPayments(paymentRows)
+    const planPaymentRevenue = sumSuccessfulPlanPayments(planPayments)
+    const today = localDayKey(new Date())
+    const paidInvoices = allInvoices.filter((invoice) => invoice.status === 'paid')
+    const orderById = new Map(allOrders.map((order) => [order.id, order]))
+    const paidInvoiceOrderIds = new Set(paidInvoices.map((invoice) => invoice.order_id))
+    const orderItemsByOrder = new Map<string, typeof orderItems>()
+    const itemCountByOrder = new Map<string, number>()
+    for (const item of orderItems) {
+      const items = orderItemsByOrder.get(item.order_id) ?? []
+      items.push(item)
+      orderItemsByOrder.set(item.order_id, items)
+      itemCountByOrder.set(item.order_id, (itemCountByOrder.get(item.order_id) ?? 0) + Number(item.quantity))
     }
-  }
-  const revenueByType = paidInvoices.reduce(
-    (totals, invoice) => {
-      if (orderById.get(invoice.order_id)?.is_subscription_order) totals.subscription += Number(invoice.amount)
-      else totals.oneTime += Number(invoice.amount)
-      return totals
-    },
-    { subscription: 0, oneTime: 0 },
-  )
-  revenueByType.subscription += planPaymentRevenue
-  const clothesByService = (orderItems ?? []).reduce(
-    (totals, item) => {
+    const paidSettlementIds = new Set(settlements.filter((settlement) => settlement.status === 'paid').map((settlement) => settlement.id))
+    const settledOrderIds = new Set(
+      settlementOrders.filter((membership) => paidSettlementIds.has(membership.settlement_id)).map((membership) => membership.order_id),
+    )
+    const vendorRateByCategory = new Map(vendorRates.map((rate) => [rate.category_id, rate]))
+    const settlementAmountByItem = new Map(settlementItems.map((item) => [item.order_item_id, Number(item.amount ?? 0)]))
+    const owedByOrder = new Map<string, number>()
+    for (const order of allOrders) {
+      if (
+        !order.vendor_id ||
+        order.status === 'cancelled' ||
+        order.clothes_count_vendor === null ||
+        !paidInvoiceOrderIds.has(order.id) ||
+        settledOrderIds.has(order.id)
+      ) {
+        continue
+      }
+      for (const item of orderItemsByOrder.get(order.id) ?? []) {
+        if (item.confirmed_quantity === null) continue
+        const snapshotAmount = settlementAmountByItem.get(item.id)
+        const amount =
+          snapshotAmount ??
+          getRateValueFromItem(item, vendorRateByCategory.get(item.category_id), 'vendor') * Number(item.confirmed_quantity)
+        owedByOrder.set(order.id, (owedByOrder.get(order.id) ?? 0) + amount)
+      }
+    }
+    const revenueByType = paidInvoices.reduce(
+      (totals, invoice) => {
+        if (orderById.get(invoice.order_id)?.is_subscription_order) totals.subscription += Number(invoice.amount)
+        else totals.oneTime += Number(invoice.amount)
+        return totals
+      },
+      { subscription: 0, oneTime: 0 },
+    )
+    revenueByType.subscription += planPaymentRevenue
+    const clothesByService = orderItems.reduce(
+      (totals, item) => {
+        const quantity = Number(item.confirmed_quantity ?? item.quantity)
+        totals[item.service] += quantity
+        return totals
+      },
+      { wash: 0, iron: 0, wash_iron: 0 },
+    )
+    const dailyMetrics = new Map<string, DailyPoint>()
+    const getDailyPoint = (date: string) => {
+      const existing = dailyMetrics.get(date)
+      if (existing) return existing
+      const point: DailyPoint = {
+        date,
+        label: new Date(`${date}T12:00:00`).toLocaleDateString([], { month: 'short', day: 'numeric' }),
+        orders: 0,
+        revenue: 0,
+        customers: 0,
+        clothes: 0,
+        washClothes: 0,
+        ironClothes: 0,
+        washIronClothes: 0,
+        oneTimeOrders: 0,
+        subscriptionOrders: 0,
+        subscriptionPurchases: 0,
+        oneTimeRevenue: 0,
+        subscriptionRevenue: 0,
+        vendorPayouts: 0,
+        owedToVendors: 0,
+      }
+      dailyMetrics.set(date, point)
+      return point
+    }
+    for (const order of allOrders) {
+      const point = getDailyPoint(localDayKey(new Date(order.created_at)))
+      point.orders += 1
+      point.clothes += itemCountByOrder.get(order.id) ?? 0
+      if (order.status !== 'cancelled') {
+        if (order.is_subscription_order) point.subscriptionOrders += 1
+        else point.oneTimeOrders += 1
+      }
+    }
+    for (const item of orderItems ?? []) {
+      const order = orderById.get(item.order_id)
+      if (!order) continue
+      const point = getDailyPoint(localDayKey(new Date(order.created_at)))
       const quantity = Number(item.confirmed_quantity ?? item.quantity)
-      totals[item.service] += quantity
-      return totals
-    },
-    { wash: 0, iron: 0, wash_iron: 0 },
-  )
-  const dailyMetrics = new Map<string, DailyPoint>()
-  const getDailyPoint = (date: string) => {
-    const existing = dailyMetrics.get(date)
-    if (existing) return existing
-    const point: DailyPoint = {
-      date,
-      label: new Date(`${date}T12:00:00`).toLocaleDateString([], { month: 'short', day: 'numeric' }),
-      orders: 0,
-      revenue: 0,
-      customers: 0,
-      clothes: 0,
-      washClothes: 0,
-      ironClothes: 0,
-      washIronClothes: 0,
-      oneTimeOrders: 0,
-      subscriptionOrders: 0,
-      subscriptionPurchases: 0,
-      oneTimeRevenue: 0,
-      subscriptionRevenue: 0,
-      vendorPayouts: 0,
-      owedToVendors: 0,
+      if (item.service === 'wash') point.washClothes += quantity
+      if (item.service === 'iron') point.ironClothes += quantity
+      if (item.service === 'wash_iron') point.washIronClothes += quantity
     }
-    dailyMetrics.set(date, point)
-    return point
-  }
-  for (const order of allOrders) {
-    const point = getDailyPoint(localDayKey(new Date(order.created_at)))
-    point.orders += 1
-    point.clothes += itemCountByOrder.get(order.id) ?? 0
-    if (order.status !== 'cancelled') {
-      if (order.is_subscription_order) point.subscriptionOrders += 1
-      else point.oneTimeOrders += 1
+    for (const invoice of paidInvoices) {
+      const point = getDailyPoint(localDayKey(new Date(invoice.paid_at ?? invoice.created_at)))
+      const amount = Number(invoice.amount)
+      point.revenue += amount
+      if (orderById.get(invoice.order_id)?.is_subscription_order) point.subscriptionRevenue += amount
+      else point.oneTimeRevenue += amount
     }
-  }
-  for (const item of orderItems ?? []) {
-    const order = orderById.get(item.order_id)
-    if (!order) continue
-    const point = getDailyPoint(localDayKey(new Date(order.created_at)))
-    const quantity = Number(item.confirmed_quantity ?? item.quantity)
-    if (item.service === 'wash') point.washClothes += quantity
-    if (item.service === 'iron') point.ironClothes += quantity
-    if (item.service === 'wash_iron') point.washIronClothes += quantity
-  }
-  for (const invoice of paidInvoices) {
-    const point = getDailyPoint(localDayKey(new Date(invoice.paid_at ?? invoice.created_at)))
-    const amount = Number(invoice.amount)
-    point.revenue += amount
-    if (orderById.get(invoice.order_id)?.is_subscription_order) point.subscriptionRevenue += amount
-    else point.oneTimeRevenue += amount
-  }
-  for (const payment of planPayments) {
-    const point = getDailyPoint(localDayKey(new Date(payment.succeeded_at ?? payment.created_at)))
-    const amount = Number(payment.amount)
-    point.revenue += amount
-    point.subscriptionRevenue += amount
-    point.subscriptionPurchases += 1
-  }
-  for (const customer of customerGrowthRows ?? []) getDailyPoint(localDayKey(new Date(customer.created_at))).customers += 1
-  for (const payout of payoutRows ?? []) {
-    if (!payout.completed_at) continue
-    getDailyPoint(localDayKey(new Date(payout.completed_at))).vendorPayouts += Number(payout.amount)
-  }
-  for (const order of allOrders) {
-    const owedAmount = owedByOrder.get(order.id) ?? 0
-    if (owedAmount > 0) getDailyPoint(localDayKey(new Date(order.created_at))).owedToVendors += owedAmount
-  }
-  const trend = [...dailyMetrics.values()].sort((left, right) => left.date.localeCompare(right.date))
-  const hourlyMetrics = new Map<string, DailyPoint>()
-  const getHourlyPoint = (date: Date) => {
-    const key = hourKey(date)
-    const existing = hourlyMetrics.get(key)
-    if (existing) return existing
-    const point: DailyPoint = {
-      date: localDayKey(date),
-      label: hourLabel(date.getHours()),
-      orders: 0,
-      revenue: 0,
-      customers: 0,
-      clothes: 0,
-      washClothes: 0,
-      ironClothes: 0,
-      washIronClothes: 0,
-      oneTimeOrders: 0,
-      subscriptionOrders: 0,
-      subscriptionPurchases: 0,
-      oneTimeRevenue: 0,
-      subscriptionRevenue: 0,
-      vendorPayouts: 0,
-      owedToVendors: 0,
+    for (const payment of planPayments) {
+      const point = getDailyPoint(localDayKey(new Date(payment.succeeded_at ?? payment.created_at)))
+      const amount = Number(payment.amount)
+      point.revenue += amount
+      point.subscriptionRevenue += amount
+      point.subscriptionPurchases += 1
     }
-    hourlyMetrics.set(key, point)
-    return point
-  }
-  const localToday = new Date()
-  for (let hour = 0; hour <= localToday.getHours(); hour += 1)
-    getHourlyPoint(new Date(localToday.getFullYear(), localToday.getMonth(), localToday.getDate(), hour))
-  for (const order of allOrders) {
-    const createdAt = new Date(order.created_at)
-    if (localDayKey(createdAt) !== localDayKey(localToday)) continue
-    const point = getHourlyPoint(createdAt)
-    point.orders += 1
-    point.clothes += itemCountByOrder.get(order.id) ?? 0
-    if (order.status !== 'cancelled') {
-      if (order.is_subscription_order) point.subscriptionOrders += 1
-      else point.oneTimeOrders += 1
+    for (const customer of customerGrowthRows ?? []) getDailyPoint(localDayKey(new Date(customer.created_at))).customers += 1
+    for (const payout of payoutRows ?? []) {
+      if (!payout.completed_at) continue
+      getDailyPoint(localDayKey(new Date(payout.completed_at))).vendorPayouts += Number(payout.amount)
     }
-  }
-  for (const invoice of paidInvoices) {
-    const paidAt = new Date(invoice.paid_at ?? invoice.created_at)
-    if (localDayKey(paidAt) !== localDayKey(localToday)) continue
-    const point = getHourlyPoint(paidAt)
-    const amount = Number(invoice.amount)
-    point.revenue += amount
-    if (orderById.get(invoice.order_id)?.is_subscription_order) point.subscriptionRevenue += amount
-    else point.oneTimeRevenue += amount
-  }
-  for (const payment of planPayments) {
-    const succeededAt = new Date(payment.succeeded_at ?? payment.created_at)
-    if (localDayKey(succeededAt) !== localDayKey(localToday)) continue
-    const point = getHourlyPoint(succeededAt)
-    const amount = Number(payment.amount)
-    point.revenue += amount
-    point.subscriptionRevenue += amount
-    point.subscriptionPurchases += 1
-  }
-  for (const customer of customerGrowthRows ?? []) {
-    const createdAt = new Date(customer.created_at)
-    if (localDayKey(createdAt) === localDayKey(localToday)) getHourlyPoint(createdAt).customers += 1
-  }
-  const hourlyTrend = [...hourlyMetrics.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([, point]) => point)
-  const pipelineStatuses = [
-    ['Pending pickup', 'pending_pickup'],
-    ['Picked up', 'picked_up'],
-    ['At vendor', 'at_vendor'],
-    ['Awaiting review', 'invoiced'],
-    ['Paid', 'paid'],
-    ['Out for delivery', 'out_for_delivery'],
-    ['Delivered', 'delivered'],
-    ['Cancelled', 'cancelled'],
-  ] as const
-  const pipeline = await Promise.all(
-    pipelineStatuses.map(async ([label, status]) => {
-      const { count } = await supabase.from('orders').select('id', { count: 'exact', head: true }).eq('status', status)
-      return { label, status, count: count ?? 0 }
-    }),
-  )
-  const subscriberIdsByPlan = new Map<string, Set<string>>()
-  for (const subscription of subscriptions ?? []) {
-    const subscriberIds = subscriberIdsByPlan.get(subscription.plan_id) ?? new Set<string>()
-    subscriberIds.add(subscription.customer_id)
-    subscriberIdsByPlan.set(subscription.plan_id, subscriberIds)
-  }
-  const activeSubscriberIds = new Set((subscriptions ?? []).map((subscription) => subscription.customer_id))
-  const activity: Activity[] = allOrders
-    .slice(0, 5)
-    .map((order, index) => ({
+    for (const order of allOrders) {
+      const owedAmount = owedByOrder.get(order.id) ?? 0
+      if (owedAmount > 0) getDailyPoint(localDayKey(new Date(order.created_at))).owedToVendors += owedAmount
+    }
+    const trend = [...dailyMetrics.values()].sort((left, right) => left.date.localeCompare(right.date))
+    const hourlyMetrics = new Map<string, DailyPoint>()
+    const getHourlyPoint = (date: Date) => {
+      const key = hourKey(date)
+      const existing = hourlyMetrics.get(key)
+      if (existing) return existing
+      const point: DailyPoint = {
+        date: localDayKey(date),
+        label: hourLabel(date.getHours()),
+        orders: 0,
+        revenue: 0,
+        customers: 0,
+        clothes: 0,
+        washClothes: 0,
+        ironClothes: 0,
+        washIronClothes: 0,
+        oneTimeOrders: 0,
+        subscriptionOrders: 0,
+        subscriptionPurchases: 0,
+        oneTimeRevenue: 0,
+        subscriptionRevenue: 0,
+        vendorPayouts: 0,
+        owedToVendors: 0,
+      }
+      hourlyMetrics.set(key, point)
+      return point
+    }
+    const localToday = new Date()
+    for (let hour = 0; hour <= localToday.getHours(); hour += 1)
+      getHourlyPoint(new Date(localToday.getFullYear(), localToday.getMonth(), localToday.getDate(), hour))
+    for (const order of allOrders) {
+      const createdAt = new Date(order.created_at)
+      if (localDayKey(createdAt) !== localDayKey(localToday)) continue
+      const point = getHourlyPoint(createdAt)
+      point.orders += 1
+      point.clothes += itemCountByOrder.get(order.id) ?? 0
+      if (order.status !== 'cancelled') {
+        if (order.is_subscription_order) point.subscriptionOrders += 1
+        else point.oneTimeOrders += 1
+      }
+    }
+    for (const invoice of paidInvoices) {
+      const paidAt = new Date(invoice.paid_at ?? invoice.created_at)
+      if (localDayKey(paidAt) !== localDayKey(localToday)) continue
+      const point = getHourlyPoint(paidAt)
+      const amount = Number(invoice.amount)
+      point.revenue += amount
+      if (orderById.get(invoice.order_id)?.is_subscription_order) point.subscriptionRevenue += amount
+      else point.oneTimeRevenue += amount
+    }
+    for (const payment of planPayments) {
+      const succeededAt = new Date(payment.succeeded_at ?? payment.created_at)
+      if (localDayKey(succeededAt) !== localDayKey(localToday)) continue
+      const point = getHourlyPoint(succeededAt)
+      const amount = Number(payment.amount)
+      point.revenue += amount
+      point.subscriptionRevenue += amount
+      point.subscriptionPurchases += 1
+    }
+    for (const customer of customerGrowthRows ?? []) {
+      const createdAt = new Date(customer.created_at)
+      if (localDayKey(createdAt) === localDayKey(localToday)) getHourlyPoint(createdAt).customers += 1
+    }
+    const hourlyTrend = [...hourlyMetrics.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([, point]) => point)
+    const pipelineStatuses = [
+      ['Pending pickup', 'pending_pickup'],
+      ['Picked up', 'picked_up'],
+      ['At vendor', 'at_vendor'],
+      ['Awaiting review', 'invoiced'],
+      ['Paid', 'paid'],
+      ['Out for delivery', 'out_for_delivery'],
+      ['Delivered', 'delivered'],
+      ['Cancelled', 'cancelled'],
+    ] as const
+    const pipelineResults = await Promise.all(
+      pipelineStatuses.map(async ([label, status]) => {
+        const result = await supabase.from('orders').select('id', { count: 'exact', head: true }).eq('status', status)
+        return { label, status, count: result.count ?? 0, error: result.error }
+      }),
+    )
+    const subscriberIdsByPlan = new Map<string, Set<string>>()
+    for (const subscription of subscriptions) {
+      const subscriberIds = subscriberIdsByPlan.get(subscription.plan_id) ?? new Set<string>()
+      subscriberIds.add(subscription.customer_id)
+      subscriberIdsByPlan.set(subscription.plan_id, subscriberIds)
+    }
+    const activeSubscriberIds = new Set(subscriptions.map((subscription) => subscription.customer_id))
+    const activity: Activity[] = allOrders.slice(0, 5).map((order, index) => ({
       id: order.id,
       title: index === 0 ? 'New order received' : order.status === 'delivered' ? 'Order delivered' : 'Order updated',
       detail: `${order.id} - ${itemCountByOrder.get(order.id) ?? 0} clothes`,
       time: formatTime(order.created_at),
       tone: index % 3 === 0 ? 'cyan' : index % 3 === 1 ? 'pink' : 'green',
     }))
-  return {
+    return {
+      sectionErrors: {
+        chart: Boolean(customerGrowthResult.error),
+        pipeline: pipelineResults.some((result) => Boolean(result.error)),
+        plans: Boolean(plansResult.error),
+        recentVendors: Boolean(vendorRowsResult.error),
+        recentCustomers: Boolean(customerRowsResult.error),
+      },
       metrics: {
         totalOrders: allOrders.length,
         ordersToday: allOrders.filter((order) => localDayKey(new Date(order.created_at)) === today).length,
@@ -448,8 +494,8 @@ export async function loader({ request }: Route.LoaderArgs) {
         oneTimeRevenue: revenueByType.oneTime,
         oneTimeOrders: allOrders.filter((order) => !order.is_subscription_order && order.status !== 'cancelled').length,
       },
-      pipeline,
-      plans: (plans ?? []).map((plan) => ({
+      pipeline: pipelineResults.map(({ label, status, count }) => ({ label, status, count })),
+      plans: plans.map((plan) => ({
         id: plan.id,
         name: plan.name,
         type: plan.type,
@@ -458,8 +504,8 @@ export async function loader({ request }: Route.LoaderArgs) {
         subscribers: subscriberIdsByPlan.get(plan.id)?.size ?? 0,
         active: plan.active,
       })),
-      recentVendors: (vendorRows ?? []).map((vendor) => ({ id: vendor.id, name: vendor.business_name, status: vendor.status })),
-      recentCustomers: (customerRows ?? []).map((customer) => ({
+      recentVendors: vendorRows.map((vendor) => ({ id: vendor.id, name: vendor.business_name, status: vendor.status })),
+      recentCustomers: customerRows.map((customer) => ({
         id: customer.id,
         name: customer.name ?? 'Unnamed customer',
         email: customer.email,
@@ -599,6 +645,14 @@ function PipelineChart({ pipeline }: { pipeline: DashboardData['pipeline'] }) {
   )
 }
 
+function SectionLoadError({ section }: { section: string }) {
+  return (
+    <p role="alert" className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">
+      {section} data could not be loaded. Refresh the page to try again.
+    </p>
+  )
+}
+
 function OverviewSkeleton() {
   return (
     <div className="animate-pulse space-y-6" aria-label="Loading Admin overview" role="status">
@@ -660,7 +714,7 @@ export default function Home() {
 }
 
 function OverviewDashboard({ dashboard }: { dashboard: DashboardData }) {
-  const { metrics, pipeline, plans, recentVendors, recentCustomers, trend, hourlyTrend, activity } = dashboard
+  const { metrics, pipeline, plans, recentVendors, recentCustomers, trend, hourlyTrend, activity, sectionErrors } = dashboard
   const [overviewMode, setOverviewMode] = useState<DateMode>('all')
   const [overviewStart, setOverviewStart] = useState('')
   const [overviewEnd, setOverviewEnd] = useState('')
@@ -1024,22 +1078,26 @@ function OverviewDashboard({ dashboard }: { dashboard: DashboardData }) {
             </div>
           </div>
           <div className="mt-5">
-            {chartPoints.length > 0 ? (
+            {sectionErrors.chart ? (
+              <SectionLoadError section="Trend chart" />
+            ) : chartPoints.length > 0 ? (
               <TrendChart points={chartPoints} metric={chartMetric} />
             ) : (
               <p className="rounded-xl bg-slate-50 p-8 text-center text-sm text-slate-500">No data in this period.</p>
             )}
           </div>
-          <div className="mt-4 flex items-center justify-between rounded-lg bg-[#f8fcfc] px-3 py-2 text-xs">
-            <span className="text-slate-500">Total in period</span>
-            <strong className="text-slate-900">
-              {chartMetric === 'orders'
-                ? `${chartPoints.reduce((sum, point) => sum + point.orders, 0)} orders`
-                : chartMetric === 'revenue'
-                  ? money(chartPoints.reduce((sum, point) => sum + point.revenue, 0))
-                  : `${chartPoints.reduce((sum, point) => sum + point.customers, 0)} customers`}
-            </strong>
-          </div>
+          {!sectionErrors.chart && (
+            <div className="mt-4 flex items-center justify-between rounded-lg bg-[#f8fcfc] px-3 py-2 text-xs">
+              <span className="text-slate-500">Total in period</span>
+              <strong className="text-slate-900">
+                {chartMetric === 'orders'
+                  ? `${chartPoints.reduce((sum, point) => sum + point.orders, 0)} orders`
+                  : chartMetric === 'revenue'
+                    ? money(chartPoints.reduce((sum, point) => sum + point.revenue, 0))
+                    : `${chartPoints.reduce((sum, point) => sum + point.customers, 0)} customers`}
+              </strong>
+            </div>
+          )}
         </section>
         <section className="flex flex-col rounded-xl border border-[#e8eeee] bg-white p-5 shadow-[0_5px_18px_rgba(21,61,73,0.04)]">
           <div className="flex items-start justify-between">
@@ -1093,7 +1151,7 @@ function OverviewDashboard({ dashboard }: { dashboard: DashboardData }) {
             <h3 className="text-lg font-bold text-slate-900">Workload by status</h3>
             <BarChart3 size={18} className="text-[#00a7bd]" />
           </div>
-          <PipelineChart pipeline={pipeline} />
+          {sectionErrors.pipeline ? <SectionLoadError section="Workload" /> : <PipelineChart pipeline={pipeline} />}
         </section>
         <section className="rounded-xl border border-[#e8eeee] bg-white p-5 shadow-[0_5px_18px_rgba(21,61,73,0.04)]">
           <div className="mb-5 flex items-center justify-between">
@@ -1102,30 +1160,37 @@ function OverviewDashboard({ dashboard }: { dashboard: DashboardData }) {
               Manage
             </Link>
           </div>
-          <div className="space-y-3">
-            {plans.length === 0 ? (
-              <p className="text-sm text-slate-500">No plans configured.</p>
-            ) : (
-              [...plans]
-                .sort((left, right) => right.subscribers - left.subscribers)
-                .map((plan) => (
-                <div key={plan.id} className="flex items-center justify-between">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-slate-800">
-                      {plan.name} <span className="font-normal text-slate-400">{plan.type}</span>
-                    </p>
-                    <div className="group relative mt-1 h-1.5 w-32 rounded-full bg-slate-100">
-                      <div className="h-full rounded-full bg-[#00b7d4]" style={{ width: `${Math.min(plan.subscribers * 18 + 8, 100)}%` }} />
-                      <span className="pointer-events-none absolute -top-8 left-1/2 z-10 hidden -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-[10px] font-medium text-white shadow-lg group-hover:block">
-                        {plan.name}: {plan.subscribers} subscribers
-                      </span>
+          {sectionErrors.plans ? (
+            <SectionLoadError section="Plans" />
+          ) : (
+            <div className="space-y-3">
+              {plans.length === 0 ? (
+                <p className="text-sm text-slate-500">No plans configured.</p>
+              ) : (
+                [...plans]
+                  .sort((left, right) => right.subscribers - left.subscribers)
+                  .map((plan) => (
+                    <div key={plan.id} className="flex items-center justify-between">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-slate-800">
+                          {plan.name} <span className="font-normal text-slate-400">{plan.type}</span>
+                        </p>
+                        <div className="group relative mt-1 h-1.5 w-32 rounded-full bg-slate-100">
+                          <div
+                            className="h-full rounded-full bg-[#00b7d4]"
+                            style={{ width: `${Math.min(plan.subscribers * 18 + 8, 100)}%` }}
+                          />
+                          <span className="pointer-events-none absolute -top-8 left-1/2 z-10 hidden -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-[10px] font-medium text-white shadow-lg group-hover:block">
+                            {plan.name}: {plan.subscribers} subscribers
+                          </span>
+                        </div>
+                      </div>
+                      <strong className="text-sm text-slate-900">{plan.subscribers}</strong>
                     </div>
-                  </div>
-                  <strong className="text-sm text-slate-900">{plan.subscribers}</strong>
-                </div>
-                ))
-            )}
-          </div>
+                  ))
+              )}
+            </div>
+          )}
           <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3 text-sm">
             <span className="font-medium text-slate-600">Total</span>
             <strong className="text-slate-900">{metrics.activeSubscriptions.toLocaleString()}</strong>
@@ -1163,7 +1228,9 @@ function OverviewDashboard({ dashboard }: { dashboard: DashboardData }) {
             <Store size={18} className="text-brand-primary" />
           </div>
           <div className="space-y-3">
-            {recentVendors.length === 0 ? (
+            {sectionErrors.recentVendors ? (
+              <SectionLoadError section="Recent vendors" />
+            ) : recentVendors.length === 0 ? (
               <p className="text-sm text-slate-500">No vendors registered.</p>
             ) : (
               recentVendors.map((vendor) => (
@@ -1187,7 +1254,9 @@ function OverviewDashboard({ dashboard }: { dashboard: DashboardData }) {
             <UserRound size={18} className="text-brand-primary" />
           </div>
           <div className="space-y-3">
-            {recentCustomers.length === 0 ? (
+            {sectionErrors.recentCustomers ? (
+              <SectionLoadError section="Recent customers" />
+            ) : recentCustomers.length === 0 ? (
               <p className="text-sm text-slate-500">No customers registered.</p>
             ) : (
               recentCustomers.map((customer) => (
@@ -1197,7 +1266,9 @@ function OverviewDashboard({ dashboard }: { dashboard: DashboardData }) {
                   className="flex items-center justify-between gap-3 border-b border-slate-100 pb-3 last:border-0 last:pb-0"
                 >
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-slate-800 transition-colors hover:text-brand-primary">{customer.name}</p>
+                    <p className="truncate text-sm font-semibold text-slate-800 transition-colors hover:text-brand-primary">
+                      {customer.name}
+                    </p>
                     <p className="truncate text-xs text-slate-500">{customer.email ?? 'Email unavailable'}</p>
                   </div>
                   <span className="shrink-0 text-xs font-semibold text-slate-500">Customer</span>
