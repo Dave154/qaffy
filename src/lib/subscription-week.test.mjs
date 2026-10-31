@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   calculateSubscriptionAllowance,
+  calculateSubscriptionAllowanceThroughCurrentMonth,
   calculateSubscriptionUnitsApplied,
   calculateSubscriptionUnitsUsed,
   getAuthorizedSubscriptionBorrowUnits,
@@ -97,6 +98,27 @@ test('caps each plan month at four weekly credits even when it contains five Sun
 
   assert.equal(allowance.accruedUnits, 80)
   assert.equal(allowance.balance, 80)
+})
+
+test('allows Admin to use the remaining allowance through the current subscription month', () => {
+  const allowance = calculateSubscriptionAllowanceThroughCurrentMonth(
+    { weeklyLimit: 20, startDate: '2026-10-02', endDate: '2026-11-02', usedUnits: 30 },
+    new Date('2026-10-05T12:00:00.000Z'),
+  )
+
+  assert.equal(allowance.accruedUnits, 80)
+  assert.equal(allowance.usedUnits, 30)
+  assert.equal(allowance.unitsAvailableForConfirmation, 50)
+})
+
+test('does not borrow allowance from a future subscription month', () => {
+  const allowance = calculateSubscriptionAllowanceThroughCurrentMonth(
+    { weeklyLimit: 20, startDate: '2026-10-02', endDate: '2027-01-02', usedUnits: 0 },
+    new Date('2026-10-05T12:00:00.000Z'),
+  )
+
+  assert.equal(allowance.accruedUnits, 80)
+  assert.equal(allowance.unitsAvailableForConfirmation, 80)
 })
 
 test('grants the first weekly allowance immediately when the subscription activates', () => {
@@ -221,11 +243,49 @@ test('sums applied units only for the subscription and its legacy unlinked order
   ]
 
   assert.equal(
-    calculateSubscriptionUnitsApplied(orders, {
-      id: 'active-subscription',
-      startDate: '2026-10-01',
-      endDate: '2026-11-01',
-    }, new Date('2026-10-07T12:00:00.000Z')),
+    calculateSubscriptionUnitsApplied(
+      orders,
+      {
+        id: 'active-subscription',
+        startDate: '2026-10-01',
+        endDate: '2026-11-01',
+      },
+      new Date('2026-10-07T12:00:00.000Z'),
+    ),
     16,
+  )
+})
+
+test('attributes retroactively applied units to their allowance subscription across weeks', () => {
+  const orders = [
+    {
+      subscription_id: 'order-time-subscription',
+      subscription_allowance_subscription_id: 'active-subscription',
+      is_subscription_order: true,
+      status: 'delivered',
+      clothes_count_vendor: 2,
+      subscription_units_applied: 12,
+      subscription_units_applied_at: '2026-10-01T12:00:00.000Z',
+      created_at: '2026-09-30T12:00:00.000Z',
+    },
+    {
+      subscription_id: 'active-subscription',
+      subscription_allowance_subscription_id: 'order-time-subscription',
+      is_subscription_order: true,
+      status: 'delivered',
+      clothes_count_vendor: 2,
+      subscription_units_applied: 9,
+      subscription_units_applied_at: '2026-10-06T12:00:00.000Z',
+      created_at: '2026-10-05T12:00:00.000Z',
+    },
+  ]
+
+  assert.equal(
+    calculateSubscriptionUnitsApplied(
+      orders,
+      { id: 'active-subscription', startDate: '2026-10-01', endDate: '2026-11-01' },
+      new Date('2026-10-07T12:00:00.000Z'),
+    ),
+    12,
   )
 })

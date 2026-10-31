@@ -86,24 +86,20 @@ function getSundayMidnightLagos(calendarDate: string) {
   return new Date(Date.UTC(year, month - 1, day) - 60 * 60 * 1000)
 }
 
-function getAllowanceCredits(
-  startDate: string,
-  startAt: string | null,
-  endDate: string | null,
-  reference: Date,
-  weeklyLimit: number,
-) {
+function getAllowanceCredits(startDate: string, startAt: string | null, endDate: string | null, reference: Date, weeklyLimit: number) {
   const start = parseCalendarDate(startDate)
   const startAsUtc = Date.UTC(start.year, start.month - 1, start.day)
   const firstSundayOffset = (7 - new Date(startAsUtc).getUTCDay()) % 7
   let sunday = new Date(startAsUtc + firstSundayOffset * millisecondsPerDay)
   const activationTime = startAt ? new Date(startAt) : getSundayMidnightLagos(startDate)
-  const endCalendarDate = endDate ? formatCalendarDate(new Date(Date.UTC(
-    parseCalendarDate(endDate).year,
-    parseCalendarDate(endDate).month - 1,
-    parseCalendarDate(endDate).day,
-  ))) : null
-  const generationLimit = endCalendarDate ? new Date(`${endCalendarDate}T23:59:59.999+01:00`) : new Date(reference.getTime() + subscriptionWeekMilliseconds)
+  const endCalendarDate = endDate
+    ? formatCalendarDate(
+        new Date(Date.UTC(parseCalendarDate(endDate).year, parseCalendarDate(endDate).month - 1, parseCalendarDate(endDate).day)),
+      )
+    : null
+  const generationLimit = endCalendarDate
+    ? new Date(`${endCalendarDate}T23:59:59.999+01:00`)
+    : new Date(reference.getTime() + subscriptionWeekMilliseconds)
   let totalCreditLimit = Number.POSITIVE_INFINITY
   if (endCalendarDate) {
     let planMonths = 0
@@ -149,13 +145,7 @@ export function calculateSubscriptionAllowance(
 ): SubscriptionAllowance {
   const weeklyLimit = Math.max(0, Math.floor(input.weeklyLimit))
   const usedUnits = Math.max(0, Math.floor(input.usedUnits))
-  const { accruedUnits, nextCredit } = getAllowanceCredits(
-    input.startDate,
-    input.startAt ?? null,
-    input.endDate,
-    reference,
-    weeklyLimit,
-  )
+  const { accruedUnits, nextCredit } = getAllowanceCredits(input.startDate, input.startAt ?? null, input.endDate, reference, weeklyLimit)
   const balance = accruedUnits - usedUnits
   const nextWeekStart = new Date(getSubscriptionWeekStart(reference).getTime() + subscriptionWeekMilliseconds)
   const canBorrow = nextCredit !== null && nextCredit.getTime() <= nextWeekStart.getTime()
@@ -170,6 +160,42 @@ export function calculateSubscriptionAllowance(
   }
 }
 
+export function calculateSubscriptionAllowanceThroughCurrentMonth(
+  input: { weeklyLimit: number; startDate: string; startAt?: string | null; endDate: string | null; usedUnits: number },
+  reference = new Date(),
+) {
+  const localParts = getZonedDateTimeParts(reference)
+  const localDate = formatCalendarDate(new Date(Date.UTC(localParts.year, localParts.month - 1, localParts.day)))
+  const start = parseCalendarDate(input.startDate)
+  let planMonthIndex = Math.max(0, (localParts.year - start.year) * 12 + localParts.month - start.month)
+
+  while (planMonthIndex > 0 && addSubscriptionMonth(input.startDate, planMonthIndex) > localDate) {
+    planMonthIndex -= 1
+  }
+
+  const nextMonthStart = addSubscriptionMonth(input.startDate, planMonthIndex + 1)
+  const nextMonth = parseCalendarDate(nextMonthStart)
+  const monthEnd = formatCalendarDate(new Date(Date.UTC(nextMonth.year, nextMonth.month - 1, nextMonth.day - 1)))
+  const cappedEndDate = input.endDate && input.endDate < monthEnd ? input.endDate : monthEnd
+  const referenceAtEndOfAllowance = new Date(`${cappedEndDate}T23:59:59.999+01:00`)
+  const weeklyLimit = Math.max(0, Math.floor(input.weeklyLimit))
+  const usedUnits = Math.max(0, Math.floor(input.usedUnits))
+  const { accruedUnits } = getAllowanceCredits(
+    input.startDate,
+    input.startAt ?? null,
+    cappedEndDate,
+    referenceAtEndOfAllowance,
+    weeklyLimit,
+  )
+
+  return {
+    accruedUnits,
+    usedUnits,
+    balance: accruedUnits - usedUnits,
+    unitsAvailableForConfirmation: Math.max(0, accruedUnits - usedUnits),
+  }
+}
+
 export function getAuthorizedSubscriptionBorrowUnits(allowance: SubscriptionAllowance, consentedUnits: number) {
   const currentBalanceUnits = Math.max(0, allowance.balance)
   const remainingUpcomingAllowance = Math.max(0, allowance.unitsAvailableForConfirmation - currentBalanceUnits)
@@ -178,6 +204,7 @@ export function getAuthorizedSubscriptionBorrowUnits(allowance: SubscriptionAllo
 
 export type SubscriptionUsageOrder = {
   subscription_id?: string | null
+  subscription_allowance_subscription_id?: string | null
   is_subscription_order: boolean
   status: string
   clothes_count_vendor: number | null
@@ -208,6 +235,9 @@ export function calculateSubscriptionUnitsApplied(
         order.subscription_units_applied === null
       ) {
         return false
+      }
+      if (order.subscription_allowance_subscription_id) {
+        return order.subscription_allowance_subscription_id === subscription.id
       }
       if (order.subscription_id === subscription.id) return true
       if (order.subscription_id && order.subscription_units_applied_at) {

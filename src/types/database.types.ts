@@ -201,6 +201,7 @@ export interface Order {
   customer_id: string
   vendor_id: string | null
   subscription_id: string | null
+  subscription_allowance_subscription_id: string | null
   order_type: OrderType
   clothes_count_customer: number
   clothes_count_customer_units: number | null

@@ -37,6 +37,7 @@ export type PersistedOrderItem = {
   confirmed_quantity: number | null
   service: 'wash' | 'iron' | 'wash_iron'
   unit_price: number
+  subscription_units_snapshot: number | null
 }
 
 export type MismatchLine = {
@@ -417,6 +418,7 @@ function mapDatabaseOrder(
           service: item.service === 'wash_iron' ? 'Wash + Iron' : item.service === 'iron' ? 'Iron' : 'Wash',
           quantity: item.confirmed_quantity ?? item.quantity,
           unitPrice: Number(item.unit_price),
+          subscriptionUnits: item.subscription_units_snapshot === null ? undefined : Number(item.subscription_units_snapshot),
           vendorCountDifference: item.confirmed_quantity == null ? undefined : item.confirmed_quantity - item.quantity,
           vendorAdded: mismatchLine?.originalQuantity === 0 && mismatchLine.confirmedQuantity > 0,
         }

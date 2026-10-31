@@ -121,7 +121,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     orderIds.length > 0
       ? await serverSupabase
           .from('order_items')
-          .select('id, order_id, category_id, quantity, confirmed_quantity, service, unit_price')
+          .select('id, order_id, category_id, quantity, confirmed_quantity, service, unit_price, subscription_units_snapshot')
           .in('order_id', orderIds)
       : { data: [] }
   const categoryIds = [...new Set((orderItems ?? []).map((item) => item.category_id))]

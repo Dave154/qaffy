@@ -143,7 +143,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     supabase
       .from('orders')
       .select(
-        'id, public_order_number, status, clothes_count_customer, clothes_count_vendor, created_at, subscription_id, is_subscription_order, subscription_units_applied, subscription_units_applied_at',
+        'id, public_order_number, status, clothes_count_customer, clothes_count_vendor, created_at, subscription_id, subscription_allowance_subscription_id, is_subscription_order, subscription_units_applied, subscription_units_applied_at',
       )
       .eq('customer_id', customerId)
       .order('created_at', { ascending: false }),

@@ -615,7 +615,9 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
                       ) : (
                         <span className="min-w-0 flex-1 text-right font-semibold text-slate-900">
                           {subscription
-                            ? `${item.quantity * (item.subscriptionUnits ?? 1)} unit${item.quantity * (item.subscriptionUnits ?? 1) === 1 ? '' : 's'}`
+                            ? item.subscriptionUnits === undefined
+                              ? `${item.quantity} item${item.quantity === 1 ? '' : 's'}`
+                              : `${item.quantity * item.subscriptionUnits} unit${item.quantity * item.subscriptionUnits === 1 ? '' : 's'}`
                             : `₦${(item.quantity * item.unitPrice).toLocaleString()}`}
                         </span>
                       )}

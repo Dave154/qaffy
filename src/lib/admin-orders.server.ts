@@ -18,6 +18,7 @@ type AdminOrder = {
   clothes_count_vendor: number | null
   notes: string | null
   is_subscription_order: boolean
+  subscription_id: string | null
   customer: { id: string; name: string | null; qaffy_id: string | null; email: string | null; phone: string | null } | null
   location: { name: string } | null
   items: Array<{
@@ -37,7 +38,10 @@ type AdminOrder = {
   } | null
   mismatches: Array<{ id: string; details: unknown }>
 }
-type OrderRow = Omit<AdminOrder, 'created_at' | 'picked_up_date' | 'delivery_date' | 'customer' | 'location' | 'items' | 'invoice' | 'mismatches'> & {
+type OrderRow = Omit<
+  AdminOrder,
+  'created_at' | 'picked_up_date' | 'delivery_date' | 'customer' | 'location' | 'items' | 'invoice' | 'mismatches'
+> & {
   created_at: string | Date
   picked_up_date: string | Date | null
   delivery_date: string | Date | null
@@ -66,22 +70,22 @@ type OrdersData = {
 }
 
 type SortColumn =
-  | 'created'
-  | 'order'
-  | 'pickup'
-  | 'delivery'
-  | 'customer'
-  | 'qaffy_id'
-  | 'order_type'
-  | 'location'
-  | 'items'
-  | 'payment'
-  | 'status'
+  'created' | 'order' | 'pickup' | 'delivery' | 'customer' | 'qaffy_id' | 'order_type' | 'location' | 'items' | 'payment' | 'status'
 type SortRule = { column: SortColumn; direction: 'asc' | 'desc' }
 
 const PAGE_SIZE = 10
 const EXPORT_BATCH_SIZE = 500
-const ORDER_STATUSES = ['all', 'pending_pickup', 'picked_up', 'at_vendor', 'invoiced', 'paid', 'out_for_delivery', 'delivered', 'cancelled'] as const
+const ORDER_STATUSES = [
+  'all',
+  'pending_pickup',
+  'picked_up',
+  'at_vendor',
+  'invoiced',
+  'paid',
+  'out_for_delivery',
+  'delivered',
+  'cancelled',
+] as const
 const DATE_MODES = ['all', 'today', 'this_month', 'last_month', 'custom'] as const
 const DATE_TYPES = ['created', 'pickup', 'delivery'] as const
 const SORT_COLUMNS: SortColumn[] = [
@@ -144,9 +148,7 @@ function normalizeBreakdown(value: unknown): BillingBreakdown | null {
   const coveredUnits = Number(record.coveredUnits)
   const subscriberAmount = Number(record.subscriberAmount)
   const regularAmount = Number(record.regularAmount)
-  return [coveredUnits, subscriberAmount, regularAmount].every(Number.isFinite)
-    ? { coveredUnits, subscriberAmount, regularAmount }
-    : null
+  return [coveredUnits, subscriberAmount, regularAmount].every(Number.isFinite) ? { coveredUnits, subscriberAmount, regularAmount } : null
 }
 function normalizeOrder(row: OrderRow): AdminOrder {
   return {
@@ -214,8 +216,7 @@ export async function loadAdminOrders(request: Request) {
   const requestedStatus = params.get('status') ?? 'all'
   const statusFilter = ORDER_STATUSES.includes(requestedStatus as (typeof ORDER_STATUSES)[number]) ? requestedStatus : 'all'
   const requestedPayment = params.get('payment') ?? 'all'
-  const paymentFilter =
-    requestedPayment === 'paid' || requestedPayment === 'pending' ? requestedPayment : 'all'
+  const paymentFilter = requestedPayment === 'paid' || requestedPayment === 'pending' ? requestedPayment : 'all'
   const requestedDateMode = params.get('date') ?? 'all'
   const dateMode = DATE_MODES.includes(requestedDateMode as (typeof DATE_MODES)[number])
     ? (requestedDateMode as OrdersData['dateMode'])
@@ -322,11 +323,7 @@ export async function loadAdminOrders(request: Request) {
     )
     and ${dateRangeFilter}
   `
-  const orderQuery = (
-    limit: number,
-    offset: number,
-    includeDetails: boolean,
-  ) => sql<OrderRow[]>`
+  const orderQuery = (limit: number, offset: number, includeDetails: boolean) => sql<OrderRow[]>`
     select
       o.id,
       o.public_order_number,
@@ -344,6 +341,7 @@ export async function loadAdminOrders(request: Request) {
       o.clothes_count_vendor,
       o.notes,
       o.is_subscription_order,
+      o.subscription_id,
       case when customer.id is null then null else json_build_object(
         'id', customer.id, 'name', customer.name, 'qaffy_id', customer.qaffy_id, 'email', customer.email, 'phone', customer.phone
       ) end as customer,
@@ -380,20 +378,34 @@ export async function loadAdminOrders(request: Request) {
   const total = isCsvExport
     ? 0
     : Number(
-        (await sql<{ total: number }[]>`
+        (
+          await sql<{ total: number }[]>`
           select count(*)::int as total
           from orders o
           left join profiles customer on customer.id = o.customer_id
           left join pickup_locations location on location.id = o.pickup_location_id
           where ${filters}
-        `)[0]?.total ?? 0,
+        `
+        )[0]?.total ?? 0,
       )
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
   const page = Math.min(requestedPageNumber, pageCount)
 
   if (isCsvExport) {
     const encoder = new TextEncoder()
-    const headersRow = ['Order', 'Created', 'Pickup', 'Delivery', 'Customer', 'Qaffy ID', 'Order type', 'Location', 'Items', 'Payment', 'Status']
+    const headersRow = [
+      'Order',
+      'Created',
+      'Pickup',
+      'Delivery',
+      'Customer',
+      'Qaffy ID',
+      'Order type',
+      'Location',
+      'Items',
+      'Payment',
+      'Status',
+    ]
     let offset = 0
     let finished = false
     const stream = new ReadableStream<Uint8Array>({
@@ -420,7 +432,9 @@ export async function loadAdminOrders(request: Request) {
               Number(row.item_count),
               row.invoice?.status === 'paid' ? 'Paid' : 'Pending',
               statusLabels[row.status],
-            ].map(csvValue).join(','),
+            ]
+              .map(csvValue)
+              .join(','),
           )
           offset += batch.length
           controller.enqueue(encoder.encode(`${lines.join('\n')}\n`))
@@ -454,7 +468,7 @@ export async function loadAdminOrders(request: Request) {
         o.order_type, o.status,
         o.clothes_count_customer,
         (select coalesce(sum(oi_count.quantity), 0)::int from order_items oi_count where oi_count.order_id = o.id) as item_count,
-        o.clothes_count_vendor, o.notes, o.is_subscription_order,
+        o.clothes_count_vendor, o.notes, o.is_subscription_order, o.subscription_id,
         json_build_object('id', customer.id, 'name', customer.name, 'qaffy_id', customer.qaffy_id, 'email', customer.email, 'phone', customer.phone) as customer,
         case when location.id is null then null else json_build_object('name', location.name) end as location,
         coalesce((select json_agg(json_build_object(
