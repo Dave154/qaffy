@@ -1192,7 +1192,7 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
                         {offlinePaymentAmount === null
                           ? allowancePreviewPending
                             ? 'Calculating amount…'
-                            : 'Unavailable'
+                            : null
                           : money(offlinePaymentAmount)}
                       </p>
                       {applySubscriptionAllowance && allowancePreview && (
