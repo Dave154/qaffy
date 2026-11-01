@@ -88,18 +88,21 @@ function getSundayMidnightLagos(calendarDate: string) {
 
 function getAllowanceCredits(startDate: string, startAt: string | null, endDate: string | null, reference: Date, weeklyLimit: number) {
   const start = parseCalendarDate(startDate)
-  const startAsUtc = Date.UTC(start.year, start.month - 1, start.day)
-  const firstSundayOffset = (7 - new Date(startAsUtc).getUTCDay()) % 7
-  let sunday = new Date(startAsUtc + firstSundayOffset * millisecondsPerDay)
   const activationTime = startAt ? new Date(startAt) : getSundayMidnightLagos(startDate)
+  const activationParts = getZonedDateTimeParts(activationTime)
+  const activationDate = formatCalendarDate(new Date(Date.UTC(activationParts.year, activationParts.month - 1, activationParts.day)))
+  const scheduleStartDate = activationDate > startDate ? activationDate : startDate
+  const scheduleStart = parseCalendarDate(scheduleStartDate)
+  const scheduleStartAsUtc = Date.UTC(scheduleStart.year, scheduleStart.month - 1, scheduleStart.day)
+  const firstSundayOffset = (7 - new Date(scheduleStartAsUtc).getUTCDay()) % 7
+  let sunday = new Date(scheduleStartAsUtc + firstSundayOffset * millisecondsPerDay)
   const endCalendarDate = endDate
     ? formatCalendarDate(
         new Date(Date.UTC(parseCalendarDate(endDate).year, parseCalendarDate(endDate).month - 1, parseCalendarDate(endDate).day)),
       )
     : null
-  const generationLimit = endCalendarDate
-    ? new Date(`${endCalendarDate}T23:59:59.999+01:00`)
-    : new Date(reference.getTime() + subscriptionWeekMilliseconds)
+  const endTime = endCalendarDate ? new Date(`${endCalendarDate}T23:59:59.999+01:00`) : null
+  const generationLimit = endTime ?? new Date(reference.getTime() + subscriptionWeekMilliseconds)
   let totalCreditLimit = Number.POSITIVE_INFINITY
   if (endCalendarDate) {
     let planMonths = 0
@@ -108,10 +111,17 @@ function getAllowanceCredits(startDate: string, startAt: string | null, endDate:
   }
   const creditsByPlanMonth = new Map<number, number>()
   const scheduledCredits: Date[] = []
-  let planMonthIndex = 0
-  if (!endCalendarDate || startDate <= endCalendarDate) {
+  const scheduleMonthParts = parseCalendarDate(scheduleStartDate)
+  let planMonthIndex = Math.max(0, (scheduleMonthParts.year - start.year) * 12 + scheduleMonthParts.month - start.month)
+  while (planMonthIndex > 0 && addSubscriptionMonth(startDate, planMonthIndex) > scheduleStartDate) {
+    planMonthIndex -= 1
+  }
+  const activationIsWithinTerm =
+    (!endTime || activationTime.getTime() <= endTime.getTime()) &&
+    (!endCalendarDate || startDate <= endCalendarDate)
+  if (activationIsWithinTerm) {
     scheduledCredits.push(activationTime)
-    creditsByPlanMonth.set(0, 1)
+    creditsByPlanMonth.set(planMonthIndex, 1)
   }
   if (activationTime.getTime() >= getSundayMidnightLagos(formatCalendarDate(sunday)).getTime()) {
     sunday = new Date(sunday.getTime() + subscriptionWeekMilliseconds)

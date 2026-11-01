@@ -154,6 +154,23 @@ test('does not add the first allowance before the subscription activation time',
   assert.equal(allowance.nextCreditAt, '2026-10-04T10:00:00.000Z')
 })
 
+test('does not accrue backdated weekly credits before subscription creation', () => {
+  const allowance = calculateSubscriptionAllowance(
+    {
+      weeklyLimit: 20,
+      startDate: '2026-09-01',
+      startAt: '2026-10-30T12:00:00.000Z',
+      endDate: '2026-12-01',
+      usedUnits: 0,
+    },
+    new Date('2026-11-02T12:00:00.000Z'),
+  )
+
+  assert.equal(allowance.accruedUnits, 40)
+  assert.equal(allowance.balance, 40)
+  assert.equal(allowance.nextCreditAt, '2026-11-07T23:00:00.000Z')
+})
+
 test('permits borrowing from the next weekly credit and reports the resulting balance', () => {
   const allowance = calculateSubscriptionAllowance(
     { weeklyLimit: 20, startDate: '2026-10-02', endDate: '2026-11-02', usedUnits: 45 },
