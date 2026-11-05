@@ -14,8 +14,7 @@ import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { Await, Link, data, useLoaderData } from 'react-router'
 import type { Route } from './+types/Home'
 import { requireRole } from '../../../lib/auth.server'
-import { getRateValueFromItem } from '../../../lib/rate-card'
-import { successfulPlanPayments, sumSuccessfulPlanPayments } from '../../../lib/revenue-reporting'
+import { sql } from '../../../lib/db.server'
 
 type DailyPoint = {
   date: string
@@ -38,87 +37,39 @@ type DailyPoint = {
 type Activity = { id: string; title: string; detail: string; time: string; tone: 'cyan' | 'pink' | 'green' }
 type RecentVendor = { id: string; name: string; status: string }
 type RecentCustomer = { id: string; name: string; email: string | null }
-type DashboardData = {
-  sectionErrors: {
-    chart: boolean
-    pipeline: boolean
-    plans: boolean
-    recentVendors: boolean
-    recentCustomers: boolean
-  }
-  metrics: {
-    totalOrders: number
-    ordersToday: number
-    customers: number
-    vendors: number
-    logistics: number
-    activeSubscriptions: number
-    unpaidInvoices: number
-    unpaidAmount: number
-    revenue: number
-    clothes: number
-    washClothes: number
-    ironClothes: number
-    washIronClothes: number
-    subscriptionRevenue: number
-    oneTimeRevenue: number
-    oneTimeOrders: number
-  }
-  pipeline: Array<{ label: string; status: string; count: number }>
-  plans: Array<{ id: string; name: string; type: string; price: number; weeklyLimit: number; subscribers: number; active: boolean }>
-  recentVendors: RecentVendor[]
-  recentCustomers: RecentCustomer[]
+type DashboardMetrics = {
+  totalOrders: number
+  ordersToday: number
+  customers: number
+  vendors: number
+  logistics: number
+  activeSubscriptions: number
+  unpaidInvoices: number
+  unpaidAmount: number
+  revenue: number
+  clothes: number
+  washClothes: number
+  ironClothes: number
+  washIronClothes: number
+  subscriptionRevenue: number
+  oneTimeRevenue: number
+  oneTimeOrders: number
+}
+type OverviewCore = {
+  metrics: DashboardMetrics
   trend: DailyPoint[]
   hourlyTrend: DailyPoint[]
-  activity: Activity[]
 }
-
-const emptyData: DashboardData = {
-  sectionErrors: {
-    chart: false,
-    pipeline: false,
-    plans: false,
-    recentVendors: false,
-    recentCustomers: false,
-  },
-  metrics: {
-    totalOrders: 0,
-    ordersToday: 0,
-    customers: 0,
-    vendors: 0,
-    logistics: 0,
-    activeSubscriptions: 0,
-    unpaidInvoices: 0,
-    unpaidAmount: 0,
-    revenue: 0,
-    clothes: 0,
-    washClothes: 0,
-    ironClothes: 0,
-    washIronClothes: 0,
-    subscriptionRevenue: 0,
-    oneTimeRevenue: 0,
-    oneTimeOrders: 0,
-  },
-  pipeline: [],
-  plans: [],
-  recentVendors: [],
-  recentCustomers: [],
-  trend: [],
-  hourlyTrend: [],
-  activity: [],
+type OverviewPipeline = { pipeline: Array<{ label: string; status: string; count: number }> }
+type OverviewPlans = {
+  activeSubscriptions: number
+  plans: Array<{ id: string; name: string; type: string; price: number; weeklyLimit: number; subscribers: number; active: boolean }>
 }
-
 function money(value: number) {
   return `₦${value.toLocaleString()}`
 }
 function formatTime(value: string) {
   return new Date(value).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
-}
-function localDayKey(date: Date) {
-  return dateInput(date)
-}
-function hourKey(date: Date) {
-  return `${localDayKey(date)}T${String(date.getHours()).padStart(2, '0')}`
 }
 function hourLabel(hour: number) {
   return new Date(2000, 0, 1, hour).toLocaleTimeString('en-GB', { hour: 'numeric' })
@@ -152,370 +103,373 @@ function rangeForMode(mode: DateMode, start: string, end: string) {
       }
 }
 
+const pipelineStatuses = [
+  ['Pending pickup', 'pending_pickup'],
+  ['Picked up', 'picked_up'],
+  ['At vendor', 'at_vendor'],
+  ['Awaiting review', 'invoiced'],
+  ['Paid', 'paid'],
+  ['Out for delivery', 'out_for_delivery'],
+  ['Delivered', 'delivered'],
+  ['Cancelled', 'cancelled'],
+] as const
+
+function emptyDailyPoint(date: string, label: string): DailyPoint {
+  return {
+    date,
+    label,
+    orders: 0,
+    revenue: 0,
+    customers: 0,
+    clothes: 0,
+    washClothes: 0,
+    ironClothes: 0,
+    washIronClothes: 0,
+    oneTimeOrders: 0,
+    subscriptionOrders: 0,
+    subscriptionPurchases: 0,
+    oneTimeRevenue: 0,
+    subscriptionRevenue: 0,
+    vendorPayouts: 0,
+    owedToVendors: 0,
+  }
+}
+
+function afterSettled<TPrevious, TResult>(previous: Promise<TPrevious>, load: () => Promise<TResult>) {
+  return previous.then(load, load)
+}
+
 // eslint-disable-next-line react-refresh/only-export-components
 export async function loader({ request }: Route.LoaderArgs) {
   const auth = await requireRole(request, 'admin')
-  if (!auth) return data({ dashboardData: Promise.resolve(emptyData) }, { status: 200 })
+  if (!auth) throw new Response('Admin overview requires Supabase configuration.', { status: 503 })
   const { supabase, headers } = auth
-  const dashboardData = (async (): Promise<DashboardData> => {
-    const activeOnDate = new Date().toISOString().slice(0, 10)
-    const [
-      ordersResult,
-      customersResult,
-      vendorsResult,
-      logisticsResult,
-      invoicesResult,
-      subscriptionsResult,
-      orderItemsResult,
-      paymentRowsResult,
-      payoutRowsResult,
-      vendorRatesResult,
-      settlementsResult,
-      settlementOrdersResult,
-      settlementItemsResult,
-    ] = await Promise.all([
-      supabase
-        .from('orders')
-        .select('id, created_at, status, clothes_count_customer, clothes_count_vendor, vendor_id, is_subscription_order, customer_id')
-        .order('created_at', { ascending: false }),
-      supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('role', 'customer'),
-      supabase.from('vendors').select('id', { count: 'exact', head: true }).eq('status', 'approved'),
-      supabase.from('logistics_agents').select('id', { count: 'exact', head: true }).eq('status', 'approved'),
-      supabase.from('invoices').select('order_id, amount, status, created_at, paid_at').order('created_at', { ascending: false }),
-      supabase
-        .from('subscriptions')
-        .select('customer_id, plan_id')
-        .eq('status', 'active')
-        .or(`end_date.is.null,end_date.gte.${activeOnDate}`),
-      supabase.from('order_items').select('id, order_id, category_id, service, quantity, confirmed_quantity, unit_price'),
-      supabase
-        .from('payments')
-        .select('amount, status, plan_id, succeeded_at, created_at')
-        .eq('status', 'success')
-        .not('plan_id', 'is', null),
-      supabase
-        .from('vendor_settlement_transfers')
-        .select('amount, status, completed_at')
-        .eq('status', 'success')
-        .not('completed_at', 'is', null),
-      supabase.from('cloth_category_rates').select('category_id, vendor_wash_price, vendor_iron_price, vendor_wash_iron_price'),
-      supabase.from('vendor_settlements').select('id, status'),
-      supabase.from('vendor_settlement_orders').select('settlement_id, order_id'),
-      supabase.from('vendor_settlement_items').select('order_item_id, amount'),
-    ])
-    const cardQueryError = [
-      ordersResult.error,
-      customersResult.error,
-      vendorsResult.error,
-      logisticsResult.error,
-      invoicesResult.error,
-      subscriptionsResult.error,
-      orderItemsResult.error,
-      paymentRowsResult.error,
-      payoutRowsResult.error,
-      vendorRatesResult.error,
-      settlementsResult.error,
-      settlementOrdersResult.error,
-      settlementItemsResult.error,
-    ].find(Boolean)
-    if (cardQueryError) {
-      console.error('Admin overview card data could not be loaded:', cardQueryError)
-      throw new Error('Admin overview card data could not be loaded')
-    }
+  const activeOnDate = new Date().toISOString().slice(0, 10)
 
-    const [plansResult, vendorRowsResult, customerRowsResult, customerGrowthResult] = await Promise.all([
-      supabase.from('plans').select('id, name, type, price, weekly_limit, active').order('created_at', { ascending: true }),
-      supabase.from('vendors').select('id, business_name, status').order('created_at', { ascending: false }).limit(5),
-      supabase.from('profiles').select('id, name, email').eq('role', 'customer').order('created_at', { ascending: false }).limit(5),
-      supabase.from('profiles').select('created_at').eq('role', 'customer'),
+  const coreData = (async (): Promise<OverviewCore> => {
+    const [metricRows, trendRows, hourlyRows] = await Promise.all([
+      sql<
+        {
+          total_orders: string
+          orders_today: string
+          customers: string
+          vendors: string
+          logistics: string
+          active_subscriptions: string
+          unpaid_invoices: string
+          unpaid_amount: string
+          clothes: string
+        }[]
+      >`
+        select
+          (select count(*) from orders) as total_orders,
+          (select count(*) from orders where created_at::date = ${activeOnDate}::date) as orders_today,
+          (select count(*) from profiles where role = 'customer') as customers,
+          (select count(*) from vendors where status = 'approved') as vendors,
+          (select count(*) from logistics_agents where status = 'approved') as logistics,
+          (select count(distinct customer_id) from subscriptions
+            where status = 'active' and (end_date is null or end_date >= ${activeOnDate}::date)) as active_subscriptions,
+          (select count(*) from invoices where status = 'unpaid') as unpaid_invoices,
+          (select coalesce(sum(amount), 0) from invoices where status = 'unpaid') as unpaid_amount,
+          (select coalesce(sum(quantity), 0) from order_items) as clothes
+      `,
+      sql<
+        {
+          date: string
+          orders: string
+          one_time_orders: string
+          subscription_orders: string
+          clothes: string
+          wash_clothes: string
+          iron_clothes: string
+          wash_iron_clothes: string
+          revenue: string
+          one_time_revenue: string
+          subscription_revenue: string
+          subscription_purchases: string
+          customers: string
+          vendor_payouts: string
+          owed_to_vendors: string
+        }[]
+      >`
+        with
+        daily_orders as (
+          select created_at::date as day, count(*) as orders,
+            count(*) filter (where status <> 'cancelled' and not is_subscription_order) as one_time_orders,
+            count(*) filter (where status <> 'cancelled' and is_subscription_order) as subscription_orders
+          from orders group by created_at::date
+        ),
+        daily_items as (
+          select o.created_at::date as day, sum(i.quantity) as clothes,
+            sum(coalesce(i.confirmed_quantity, i.quantity)) filter (where i.service = 'wash') as wash_clothes,
+            sum(coalesce(i.confirmed_quantity, i.quantity)) filter (where i.service = 'iron') as iron_clothes,
+            sum(coalesce(i.confirmed_quantity, i.quantity)) filter (where i.service = 'wash_iron') as wash_iron_clothes
+          from orders o join order_items i on i.order_id = o.id
+          group by o.created_at::date
+        ),
+        daily_invoices as (
+          select coalesce(i.paid_at, i.created_at)::date as day, sum(i.amount) as revenue,
+            sum(i.amount) filter (where o.is_subscription_order) as subscription_revenue,
+            sum(i.amount) filter (where not o.is_subscription_order) as one_time_revenue
+          from invoices i join orders o on o.id = i.order_id
+          where i.status = 'paid'
+          group by coalesce(i.paid_at, i.created_at)::date
+        ),
+        daily_plan_payments as (
+          select coalesce(succeeded_at, created_at)::date as day, sum(amount) as revenue, count(*) as purchases
+          from payments
+          where status = 'success' and plan_id is not null
+          group by coalesce(succeeded_at, created_at)::date
+        ),
+        daily_customers as (
+          select created_at::date as day, count(*) as customers
+          from profiles where role = 'customer'
+          group by created_at::date
+        ),
+        daily_payouts as (
+          select completed_at::date as day, sum(amount) as vendor_payouts
+          from vendor_settlement_transfers
+          where status = 'success' and completed_at is not null
+          group by completed_at::date
+        ),
+        daily_owed as (
+          select o.created_at::date as day,
+            sum(coalesce(si.amount,
+              (case i.service
+                when 'wash' then coalesce(r.vendor_wash_price, 0)
+                when 'iron' then coalesce(r.vendor_iron_price, 0)
+                when 'wash_iron' then coalesce(r.vendor_wash_iron_price, 0)
+                else 0
+              end) * i.confirmed_quantity
+            )) as owed_to_vendors
+          from orders o
+          join order_items i on i.order_id = o.id and i.confirmed_quantity is not null
+          left join cloth_category_rates r on r.category_id = i.category_id
+          left join vendor_settlement_items si on si.order_item_id = i.id
+          where o.vendor_id is not null
+            and o.status <> 'cancelled'
+            and o.clothes_count_vendor is not null
+            and exists (select 1 from invoices inv where inv.order_id = o.id and inv.status = 'paid')
+            and not exists (
+              select 1
+              from vendor_settlement_orders so
+              join vendor_settlements vs on vs.id = so.settlement_id and vs.status = 'paid'
+              where so.order_id = o.id
+            )
+          group by o.created_at::date
+        ),
+        days as (
+          select day from daily_orders union select day from daily_items union
+          select day from daily_invoices union select day from daily_plan_payments union
+          select day from daily_customers union select day from daily_payouts union
+          select day from daily_owed
+        )
+        select to_char(days.day, 'YYYY-MM-DD') as date,
+          coalesce(daily_orders.orders, 0) as orders,
+          coalesce(daily_orders.one_time_orders, 0) as one_time_orders,
+          coalesce(daily_orders.subscription_orders, 0) as subscription_orders,
+          coalesce(daily_items.clothes, 0) as clothes,
+          coalesce(daily_items.wash_clothes, 0) as wash_clothes,
+          coalesce(daily_items.iron_clothes, 0) as iron_clothes,
+          coalesce(daily_items.wash_iron_clothes, 0) as wash_iron_clothes,
+          coalesce(daily_invoices.revenue, 0) + coalesce(daily_plan_payments.revenue, 0) as revenue,
+          coalesce(daily_invoices.one_time_revenue, 0) as one_time_revenue,
+          coalesce(daily_invoices.subscription_revenue, 0) + coalesce(daily_plan_payments.revenue, 0) as subscription_revenue,
+          coalesce(daily_plan_payments.purchases, 0) as subscription_purchases,
+          coalesce(daily_customers.customers, 0) as customers,
+          coalesce(daily_payouts.vendor_payouts, 0) as vendor_payouts,
+          coalesce(daily_owed.owed_to_vendors, 0) as owed_to_vendors
+        from days
+        left join daily_orders using (day)
+        left join daily_items using (day)
+        left join daily_invoices using (day)
+        left join daily_plan_payments using (day)
+        left join daily_customers using (day)
+        left join daily_payouts using (day)
+        left join daily_owed using (day)
+        order by days.day
+      `,
+      sql<{ hour: number; orders: string; revenue: string; customers: string }[]>`
+        with hourly as (
+          select extract(hour from created_at)::int as hour, count(*) as orders, 0::numeric as revenue, 0::bigint as customers
+          from orders where created_at::date = ${activeOnDate}::date group by extract(hour from created_at)
+          union all
+          select extract(hour from coalesce(i.paid_at, i.created_at))::int, 0, sum(i.amount), 0
+          from invoices i where i.status = 'paid'
+            and coalesce(i.paid_at, i.created_at)::date = ${activeOnDate}::date
+          group by extract(hour from coalesce(i.paid_at, i.created_at))
+          union all
+          select extract(hour from coalesce(succeeded_at, created_at))::int, 0, sum(amount), 0
+          from payments where status = 'success' and plan_id is not null
+            and coalesce(succeeded_at, created_at)::date = ${activeOnDate}::date
+          group by extract(hour from coalesce(succeeded_at, created_at))
+          union all
+          select extract(hour from created_at)::int, 0, 0, count(*)
+          from profiles where role = 'customer' and created_at::date = ${activeOnDate}::date
+          group by extract(hour from created_at)
+        )
+        select hour, sum(orders) as orders, sum(revenue) as revenue, sum(customers) as customers
+        from hourly group by hour order by hour
+      `,
     ])
-
-    const orders = ordersResult.data ?? []
-    const customers = customersResult.count ?? 0
-    const vendors = vendorsResult.count ?? 0
-    const logistics = logisticsResult.count ?? 0
-    const invoices = invoicesResult.data ?? []
-    const subscriptions = subscriptionsResult.data ?? []
-    const orderItems = orderItemsResult.data ?? []
-    const paymentRows = paymentRowsResult.data ?? []
-    const payoutRows = payoutRowsResult.data ?? []
-    const vendorRates = vendorRatesResult.data ?? []
-    const settlements = settlementsResult.data ?? []
-    const settlementOrders = settlementOrdersResult.data ?? []
-    const settlementItems = settlementItemsResult.data ?? []
-    const plans = plansResult.data ?? []
-    const vendorRows = vendorRowsResult.data ?? []
-    const customerRows = customerRowsResult.data ?? []
-    const customerGrowthRows = customerGrowthResult.data ?? []
-    const allOrders = orders
-    const allInvoices = invoices
-    const planPayments = successfulPlanPayments(paymentRows)
-    const planPaymentRevenue = sumSuccessfulPlanPayments(planPayments)
-    const today = localDayKey(new Date())
-    const paidInvoices = allInvoices.filter((invoice) => invoice.status === 'paid')
-    const orderById = new Map(allOrders.map((order) => [order.id, order]))
-    const paidInvoiceOrderIds = new Set(paidInvoices.map((invoice) => invoice.order_id))
-    const orderItemsByOrder = new Map<string, typeof orderItems>()
-    const itemCountByOrder = new Map<string, number>()
-    for (const item of orderItems) {
-      const items = orderItemsByOrder.get(item.order_id) ?? []
-      items.push(item)
-      orderItemsByOrder.set(item.order_id, items)
-      itemCountByOrder.set(item.order_id, (itemCountByOrder.get(item.order_id) ?? 0) + Number(item.quantity))
-    }
-    const paidSettlementIds = new Set(settlements.filter((settlement) => settlement.status === 'paid').map((settlement) => settlement.id))
-    const settledOrderIds = new Set(
-      settlementOrders.filter((membership) => paidSettlementIds.has(membership.settlement_id)).map((membership) => membership.order_id),
-    )
-    const vendorRateByCategory = new Map(vendorRates.map((rate) => [rate.category_id, rate]))
-    const settlementAmountByItem = new Map(settlementItems.map((item) => [item.order_item_id, Number(item.amount ?? 0)]))
-    const owedByOrder = new Map<string, number>()
-    for (const order of allOrders) {
-      if (
-        !order.vendor_id ||
-        order.status === 'cancelled' ||
-        order.clothes_count_vendor === null ||
-        !paidInvoiceOrderIds.has(order.id) ||
-        settledOrderIds.has(order.id)
-      ) {
-        continue
-      }
-      for (const item of orderItemsByOrder.get(order.id) ?? []) {
-        if (item.confirmed_quantity === null) continue
-        const snapshotAmount = settlementAmountByItem.get(item.id)
-        const amount =
-          snapshotAmount ??
-          getRateValueFromItem(item, vendorRateByCategory.get(item.category_id), 'vendor') * Number(item.confirmed_quantity)
-        owedByOrder.set(order.id, (owedByOrder.get(order.id) ?? 0) + amount)
-      }
-    }
-    const revenueByType = paidInvoices.reduce(
-      (totals, invoice) => {
-        if (orderById.get(invoice.order_id)?.is_subscription_order) totals.subscription += Number(invoice.amount)
-        else totals.oneTime += Number(invoice.amount)
-        return totals
-      },
-      { subscription: 0, oneTime: 0 },
-    )
-    revenueByType.subscription += planPaymentRevenue
-    const clothesByService = orderItems.reduce(
-      (totals, item) => {
-        const quantity = Number(item.confirmed_quantity ?? item.quantity)
-        totals[item.service] += quantity
-        return totals
-      },
-      { wash: 0, iron: 0, wash_iron: 0 },
-    )
-    const dailyMetrics = new Map<string, DailyPoint>()
-    const getDailyPoint = (date: string) => {
-      const existing = dailyMetrics.get(date)
-      if (existing) return existing
-      const point: DailyPoint = {
-        date,
-        label: new Date(`${date}T12:00:00`).toLocaleDateString([], { month: 'short', day: 'numeric' }),
-        orders: 0,
-        revenue: 0,
-        customers: 0,
-        clothes: 0,
-        washClothes: 0,
-        ironClothes: 0,
-        washIronClothes: 0,
-        oneTimeOrders: 0,
-        subscriptionOrders: 0,
-        subscriptionPurchases: 0,
-        oneTimeRevenue: 0,
-        subscriptionRevenue: 0,
-        vendorPayouts: 0,
-        owedToVendors: 0,
-      }
-      dailyMetrics.set(date, point)
-      return point
-    }
-    for (const order of allOrders) {
-      const point = getDailyPoint(localDayKey(new Date(order.created_at)))
-      point.orders += 1
-      point.clothes += itemCountByOrder.get(order.id) ?? 0
-      if (order.status !== 'cancelled') {
-        if (order.is_subscription_order) point.subscriptionOrders += 1
-        else point.oneTimeOrders += 1
-      }
-    }
-    for (const item of orderItems ?? []) {
-      const order = orderById.get(item.order_id)
-      if (!order) continue
-      const point = getDailyPoint(localDayKey(new Date(order.created_at)))
-      const quantity = Number(item.confirmed_quantity ?? item.quantity)
-      if (item.service === 'wash') point.washClothes += quantity
-      if (item.service === 'iron') point.ironClothes += quantity
-      if (item.service === 'wash_iron') point.washIronClothes += quantity
-    }
-    for (const invoice of paidInvoices) {
-      const point = getDailyPoint(localDayKey(new Date(invoice.paid_at ?? invoice.created_at)))
-      const amount = Number(invoice.amount)
-      point.revenue += amount
-      if (orderById.get(invoice.order_id)?.is_subscription_order) point.subscriptionRevenue += amount
-      else point.oneTimeRevenue += amount
-    }
-    for (const payment of planPayments) {
-      const point = getDailyPoint(localDayKey(new Date(payment.succeeded_at ?? payment.created_at)))
-      const amount = Number(payment.amount)
-      point.revenue += amount
-      point.subscriptionRevenue += amount
-      point.subscriptionPurchases += 1
-    }
-    for (const customer of customerGrowthRows ?? []) getDailyPoint(localDayKey(new Date(customer.created_at))).customers += 1
-    for (const payout of payoutRows ?? []) {
-      if (!payout.completed_at) continue
-      getDailyPoint(localDayKey(new Date(payout.completed_at))).vendorPayouts += Number(payout.amount)
-    }
-    for (const order of allOrders) {
-      const owedAmount = owedByOrder.get(order.id) ?? 0
-      if (owedAmount > 0) getDailyPoint(localDayKey(new Date(order.created_at))).owedToVendors += owedAmount
-    }
-    const trend = [...dailyMetrics.values()].sort((left, right) => left.date.localeCompare(right.date))
-    const hourlyMetrics = new Map<string, DailyPoint>()
-    const getHourlyPoint = (date: Date) => {
-      const key = hourKey(date)
-      const existing = hourlyMetrics.get(key)
-      if (existing) return existing
-      const point: DailyPoint = {
-        date: localDayKey(date),
-        label: hourLabel(date.getHours()),
-        orders: 0,
-        revenue: 0,
-        customers: 0,
-        clothes: 0,
-        washClothes: 0,
-        ironClothes: 0,
-        washIronClothes: 0,
-        oneTimeOrders: 0,
-        subscriptionOrders: 0,
-        subscriptionPurchases: 0,
-        oneTimeRevenue: 0,
-        subscriptionRevenue: 0,
-        vendorPayouts: 0,
-        owedToVendors: 0,
-      }
-      hourlyMetrics.set(key, point)
-      return point
-    }
-    const localToday = new Date()
-    for (let hour = 0; hour <= localToday.getHours(); hour += 1)
-      getHourlyPoint(new Date(localToday.getFullYear(), localToday.getMonth(), localToday.getDate(), hour))
-    for (const order of allOrders) {
-      const createdAt = new Date(order.created_at)
-      if (localDayKey(createdAt) !== localDayKey(localToday)) continue
-      const point = getHourlyPoint(createdAt)
-      point.orders += 1
-      point.clothes += itemCountByOrder.get(order.id) ?? 0
-      if (order.status !== 'cancelled') {
-        if (order.is_subscription_order) point.subscriptionOrders += 1
-        else point.oneTimeOrders += 1
-      }
-    }
-    for (const invoice of paidInvoices) {
-      const paidAt = new Date(invoice.paid_at ?? invoice.created_at)
-      if (localDayKey(paidAt) !== localDayKey(localToday)) continue
-      const point = getHourlyPoint(paidAt)
-      const amount = Number(invoice.amount)
-      point.revenue += amount
-      if (orderById.get(invoice.order_id)?.is_subscription_order) point.subscriptionRevenue += amount
-      else point.oneTimeRevenue += amount
-    }
-    for (const payment of planPayments) {
-      const succeededAt = new Date(payment.succeeded_at ?? payment.created_at)
-      if (localDayKey(succeededAt) !== localDayKey(localToday)) continue
-      const point = getHourlyPoint(succeededAt)
-      const amount = Number(payment.amount)
-      point.revenue += amount
-      point.subscriptionRevenue += amount
-      point.subscriptionPurchases += 1
-    }
-    for (const customer of customerGrowthRows ?? []) {
-      const createdAt = new Date(customer.created_at)
-      if (localDayKey(createdAt) === localDayKey(localToday)) getHourlyPoint(createdAt).customers += 1
-    }
-    const hourlyTrend = [...hourlyMetrics.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([, point]) => point)
-    const pipelineStatuses = [
-      ['Pending pickup', 'pending_pickup'],
-      ['Picked up', 'picked_up'],
-      ['At vendor', 'at_vendor'],
-      ['Awaiting review', 'invoiced'],
-      ['Paid', 'paid'],
-      ['Out for delivery', 'out_for_delivery'],
-      ['Delivered', 'delivered'],
-      ['Cancelled', 'cancelled'],
-    ] as const
-    const pipelineResults = await Promise.all(
-      pipelineStatuses.map(async ([label, status]) => {
-        const result = await supabase.from('orders').select('id', { count: 'exact', head: true }).eq('status', status)
-        return { label, status, count: result.count ?? 0, error: result.error }
-      }),
-    )
-    const subscriberIdsByPlan = new Map<string, Set<string>>()
-    for (const subscription of subscriptions) {
-      const subscriberIds = subscriberIdsByPlan.get(subscription.plan_id) ?? new Set<string>()
-      subscriberIds.add(subscription.customer_id)
-      subscriberIdsByPlan.set(subscription.plan_id, subscriberIds)
-    }
-    const activeSubscriberIds = new Set(subscriptions.map((subscription) => subscription.customer_id))
-    const activity: Activity[] = allOrders.slice(0, 5).map((order, index) => ({
-      id: order.id,
-      title: index === 0 ? 'New order received' : order.status === 'delivered' ? 'Order delivered' : 'Order updated',
-      detail: `${order.id} - ${itemCountByOrder.get(order.id) ?? 0} clothes`,
-      time: formatTime(order.created_at),
-      tone: index % 3 === 0 ? 'cyan' : index % 3 === 1 ? 'pink' : 'green',
+    const [metricsRow] = metricRows
+    const toNumber = (value: string | number | null) => Number(value ?? 0)
+    const trend = trendRows.map((row) => ({
+      ...emptyDailyPoint(row.date, new Date(`${row.date}T12:00:00`).toLocaleDateString([], { month: 'short', day: 'numeric' })),
+      orders: toNumber(row.orders),
+      oneTimeOrders: toNumber(row.one_time_orders),
+      subscriptionOrders: toNumber(row.subscription_orders),
+      clothes: toNumber(row.clothes),
+      washClothes: toNumber(row.wash_clothes),
+      ironClothes: toNumber(row.iron_clothes),
+      washIronClothes: toNumber(row.wash_iron_clothes),
+      revenue: toNumber(row.revenue),
+      oneTimeRevenue: toNumber(row.one_time_revenue),
+      subscriptionRevenue: toNumber(row.subscription_revenue),
+      subscriptionPurchases: toNumber(row.subscription_purchases),
+      customers: toNumber(row.customers),
+      vendorPayouts: toNumber(row.vendor_payouts),
+      owedToVendors: toNumber(row.owed_to_vendors),
     }))
+    const today = new Date()
+    const todayKey = activeOnDate
+    const hourlyByHour = new Map(hourlyRows.map((row) => [row.hour, row]))
+    const hourlyTrend = Array.from({ length: today.getHours() + 1 }, (_, hour) => {
+      const row = hourlyByHour.get(hour)
+      return {
+        ...emptyDailyPoint(todayKey, hourLabel(hour)),
+        orders: toNumber(row?.orders ?? 0),
+        revenue: toNumber(row?.revenue ?? 0),
+        customers: toNumber(row?.customers ?? 0),
+      }
+    })
     return {
-      sectionErrors: {
-        chart: Boolean(customerGrowthResult.error),
-        pipeline: pipelineResults.some((result) => Boolean(result.error)),
-        plans: Boolean(plansResult.error),
-        recentVendors: Boolean(vendorRowsResult.error),
-        recentCustomers: Boolean(customerRowsResult.error),
-      },
       metrics: {
-        totalOrders: allOrders.length,
-        ordersToday: allOrders.filter((order) => localDayKey(new Date(order.created_at)) === today).length,
-        customers: customers ?? 0,
-        vendors: vendors ?? 0,
-        logistics: logistics ?? 0,
-        activeSubscriptions: activeSubscriberIds.size,
-        unpaidInvoices: allInvoices.filter((invoice) => invoice.status === 'unpaid').length,
-        unpaidAmount: allInvoices
-          .filter((invoice) => invoice.status === 'unpaid')
-          .reduce((sum, invoice) => sum + Number(invoice.amount), 0),
-        revenue: paidInvoices.reduce((sum, invoice) => sum + Number(invoice.amount), 0) + planPaymentRevenue,
-        clothes: (orderItems ?? []).reduce((sum, item) => sum + Number(item.quantity), 0),
-        washClothes: clothesByService.wash,
-        ironClothes: clothesByService.iron,
-        washIronClothes: clothesByService.wash_iron,
-        subscriptionRevenue: revenueByType.subscription,
-        oneTimeRevenue: revenueByType.oneTime,
-        oneTimeOrders: allOrders.filter((order) => !order.is_subscription_order && order.status !== 'cancelled').length,
+        totalOrders: toNumber(metricsRow.total_orders),
+        ordersToday: toNumber(metricsRow.orders_today),
+        customers: toNumber(metricsRow.customers),
+        vendors: toNumber(metricsRow.vendors),
+        logistics: toNumber(metricsRow.logistics),
+        activeSubscriptions: toNumber(metricsRow.active_subscriptions),
+        unpaidInvoices: toNumber(metricsRow.unpaid_invoices),
+        unpaidAmount: toNumber(metricsRow.unpaid_amount),
+        revenue: trend.reduce((sum, point) => sum + point.revenue, 0),
+        clothes: toNumber(metricsRow.clothes),
+        washClothes: trend.reduce((sum, point) => sum + point.washClothes, 0),
+        ironClothes: trend.reduce((sum, point) => sum + point.ironClothes, 0),
+        washIronClothes: trend.reduce((sum, point) => sum + point.washIronClothes, 0),
+        subscriptionRevenue: trend.reduce((sum, point) => sum + point.subscriptionRevenue, 0),
+        oneTimeRevenue: trend.reduce((sum, point) => sum + point.oneTimeRevenue, 0),
+        oneTimeOrders: trend.reduce((sum, point) => sum + point.oneTimeOrders, 0),
       },
-      pipeline: pipelineResults.map(({ label, status, count }) => ({ label, status, count })),
-      plans: plans.map((plan) => ({
+      trend,
+      hourlyTrend,
+    }
+  })().catch((error) => {
+    console.error('Admin overview summary and chart data could not be loaded:', error)
+    throw error
+  })
+
+  const pipelineData = afterSettled(coreData, async (): Promise<OverviewPipeline> => {
+    const counts = await sql<{ status: string; count: string }[]>`
+      select status, count(*) as count from orders group by status
+    `
+    const countByStatus = new Map(counts.map((row) => [row.status, Number(row.count)]))
+    return { pipeline: pipelineStatuses.map(([label, status]) => ({ label, status, count: countByStatus.get(status) ?? 0 })) }
+  }).catch((error) => {
+    console.error('Admin overview workload data could not be loaded:', error)
+    throw error
+  })
+
+  const plansData = afterSettled(pipelineData, async (): Promise<OverviewPlans> => {
+    const [plansResult, subscriberCounts] = await Promise.all([
+      supabase.from('plans').select('id, name, type, price, weekly_limit, active').order('created_at', { ascending: true }),
+      sql<{ plan_id: string | null; subscribers: string }[]>`
+        select plan_id, count(distinct customer_id) as subscribers
+        from subscriptions
+        where status = 'active' and (end_date is null or end_date >= ${activeOnDate}::date)
+        group by grouping sets ((plan_id), ())
+      `,
+    ])
+    if (plansResult.error) throw plansResult.error
+    const activeSubscriptions = Number(subscriberCounts.find((row) => row.plan_id === null)?.subscribers ?? 0)
+    const subscribersByPlan = new Map(
+      subscriberCounts.filter((row) => row.plan_id !== null).map((row) => [row.plan_id, Number(row.subscribers)]),
+    )
+    return {
+      activeSubscriptions,
+      plans: (plansResult.data ?? []).map((plan) => ({
         id: plan.id,
         name: plan.name,
         type: plan.type,
         price: Number(plan.price),
         weeklyLimit: plan.weekly_limit,
-        subscribers: subscriberIdsByPlan.get(plan.id)?.size ?? 0,
+        subscribers: subscribersByPlan.get(plan.id) ?? 0,
         active: plan.active,
       })),
-      recentVendors: vendorRows.map((vendor) => ({ id: vendor.id, name: vendor.business_name, status: vendor.status })),
-      recentCustomers: customerRows.map((customer) => ({
+    }
+  }).catch((error) => {
+    console.error('Admin overview plan data could not be loaded:', error)
+    throw error
+  })
+
+  const vendorsData = afterSettled(plansData, async () => {
+    const { data: vendors, error } = await supabase
+      .from('vendors')
+      .select('id, business_name, status')
+      .order('created_at', { ascending: false })
+      .limit(5)
+    if (error) throw error
+    return { recentVendors: (vendors ?? []).map((vendor) => ({ id: vendor.id, name: vendor.business_name, status: vendor.status })) }
+  }).catch((error) => {
+    console.error('Admin overview recent vendor data could not be loaded:', error)
+    throw error
+  })
+
+  const customersData = afterSettled(plansData, async () => {
+    const { data: customers, error } = await supabase
+      .from('profiles')
+      .select('id, name, email')
+      .eq('role', 'customer')
+      .order('created_at', { ascending: false })
+      .limit(5)
+    if (error) throw error
+    return {
+      recentCustomers: (customers ?? []).map((customer) => ({
         id: customer.id,
         name: customer.name ?? 'Unnamed customer',
         email: customer.email,
       })),
-      trend,
-      hourlyTrend,
-      activity,
     }
-  })()
-  return data({ dashboardData }, { headers, status: 200 })
+  }).catch((error) => {
+    console.error('Admin overview recent customer data could not be loaded:', error)
+    throw error
+  })
+
+  const activityData = afterSettled(plansData, async () => {
+    const latestOrders = await sql<{ id: string; status: string; created_at: Date | string; clothes: string }[]>`
+      select o.id, o.status, o.created_at, coalesce(items.clothes, 0) as clothes
+      from orders o
+      left join lateral (
+        select sum(quantity) as clothes from order_items where order_id = o.id
+      ) items on true
+      order by o.created_at desc
+      limit 5
+    `
+    const activity: Activity[] = latestOrders.map((order, index) => ({
+      id: order.id,
+      title: index === 0 ? 'New order received' : order.status === 'delivered' ? 'Order delivered' : 'Order updated',
+      detail: `${order.id} - ${Number(order.clothes)} clothes`,
+      time: formatTime(new Date(order.created_at).toISOString()),
+      tone: index % 3 === 0 ? 'cyan' : index % 3 === 1 ? 'pink' : 'green',
+    }))
+    return { activity }
+  }).catch((error) => {
+    console.error('Admin overview recent activity could not be loaded:', error)
+    throw error
+  })
+
+  return data({ coreData, pipelineData, plansData, vendorsData, customersData, activityData }, { headers, status: 200 })
 }
 
 function TrendChart({ points, metric }: { points: DailyPoint[]; metric: ChartMetric }) {
@@ -612,7 +566,7 @@ function TrendChart({ points, metric }: { points: DailyPoint[]; metric: ChartMet
   )
 }
 
-function PipelineChart({ pipeline }: { pipeline: DashboardData['pipeline'] }) {
+function PipelineChart({ pipeline }: { pipeline: OverviewPipeline['pipeline'] }) {
   const visible = pipeline.filter((item) => item.count > 0)
   const total = Math.max(
     pipeline.reduce((sum, item) => sum + item.count, 0),
@@ -651,6 +605,10 @@ function SectionLoadError({ section }: { section: string }) {
       {section} data could not be loaded. Refresh the page to try again.
     </p>
   )
+}
+
+function SectionLoading() {
+  return <div className="h-20 animate-pulse rounded-lg bg-slate-100" aria-label="Loading section" role="status" />
 }
 
 function OverviewSkeleton() {
@@ -696,25 +654,61 @@ function OverviewSkeleton() {
 }
 
 export default function Home() {
-  const { dashboardData } = useLoaderData<typeof loader>()
+  const { coreData, pipelineData, plansData, vendorsData, customersData, activityData } = useLoaderData<typeof loader>()
   return (
-    <Suspense fallback={<OverviewSkeleton />}>
-      <Await
-        resolve={dashboardData}
-        errorElement={
-          <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-800">
-            Overview data could not be loaded. Refresh the page to try again.
-          </div>
-        }
-      >
-        {(dashboard) => <OverviewDashboard dashboard={dashboard} />}
-      </Await>
-    </Suspense>
+    <OverviewDashboard
+      coreData={coreData}
+      pipelineData={pipelineData}
+      plansData={plansData}
+      vendorsData={vendorsData}
+      customersData={customersData}
+      activityData={activityData}
+    />
   )
 }
 
-function OverviewDashboard({ dashboard }: { dashboard: DashboardData }) {
-  const { metrics, pipeline, plans, recentVendors, recentCustomers, trend, hourlyTrend, activity, sectionErrors } = dashboard
+function OverviewDashboard({
+  coreData,
+  pipelineData,
+  plansData,
+  vendorsData,
+  customersData,
+  activityData,
+}: {
+  coreData: Promise<OverviewCore>
+  pipelineData: Promise<OverviewPipeline>
+  plansData: Promise<OverviewPlans>
+  vendorsData: Promise<{ recentVendors: RecentVendor[] }>
+  customersData: Promise<{ recentCustomers: RecentCustomer[] }>
+  activityData: Promise<{ activity: Activity[] }>
+}) {
+  return (
+    <div className="space-y-6">
+      <Suspense fallback={<OverviewSkeleton />}>
+        <Await
+          resolve={coreData}
+          errorElement={
+            <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-800">
+              Summary and chart data could not be loaded. Refresh the page to try again.
+            </div>
+          }
+        >
+          {(core) => <OverviewCoreDashboard core={core} />}
+        </Await>
+      </Suspense>
+      <OverviewSupportingDashboard
+        pipelineData={pipelineData}
+        plansData={plansData}
+        vendorsData={vendorsData}
+        customersData={customersData}
+        activityData={activityData}
+      />
+    </div>
+  )
+}
+
+function OverviewCoreDashboard({ core }: { core: OverviewCore }) {
+  const { metrics, trend, hourlyTrend } = core
   const [overviewMode, setOverviewMode] = useState<DateMode>('all')
   const [overviewStart, setOverviewStart] = useState('')
   const [overviewEnd, setOverviewEnd] = useState('')
@@ -1078,26 +1072,22 @@ function OverviewDashboard({ dashboard }: { dashboard: DashboardData }) {
             </div>
           </div>
           <div className="mt-5">
-            {sectionErrors.chart ? (
-              <SectionLoadError section="Trend chart" />
-            ) : chartPoints.length > 0 ? (
+            {chartPoints.length > 0 ? (
               <TrendChart points={chartPoints} metric={chartMetric} />
             ) : (
               <p className="rounded-xl bg-slate-50 p-8 text-center text-sm text-slate-500">No data in this period.</p>
             )}
           </div>
-          {!sectionErrors.chart && (
-            <div className="mt-4 flex items-center justify-between rounded-lg bg-[#f8fcfc] px-3 py-2 text-xs">
-              <span className="text-slate-500">Total in period</span>
-              <strong className="text-slate-900">
-                {chartMetric === 'orders'
-                  ? `${chartPoints.reduce((sum, point) => sum + point.orders, 0)} orders`
-                  : chartMetric === 'revenue'
-                    ? money(chartPoints.reduce((sum, point) => sum + point.revenue, 0))
-                    : `${chartPoints.reduce((sum, point) => sum + point.customers, 0)} customers`}
-              </strong>
-            </div>
-          )}
+          <div className="mt-4 flex items-center justify-between rounded-lg bg-[#f8fcfc] px-3 py-2 text-xs">
+            <span className="text-slate-500">Total in period</span>
+            <strong className="text-slate-900">
+              {chartMetric === 'orders'
+                ? `${chartPoints.reduce((sum, point) => sum + point.orders, 0)} orders`
+                : chartMetric === 'revenue'
+                  ? money(chartPoints.reduce((sum, point) => sum + point.revenue, 0))
+                  : `${chartPoints.reduce((sum, point) => sum + point.customers, 0)} customers`}
+            </strong>
+          </div>
         </section>
         <section className="flex flex-col rounded-xl border border-[#e8eeee] bg-white p-5 shadow-[0_5px_18px_rgba(21,61,73,0.04)]">
           <div className="flex items-start justify-between">
@@ -1145,13 +1135,36 @@ function OverviewDashboard({ dashboard }: { dashboard: DashboardData }) {
           </div>
         </section>
       </div>
+    </div>
+  )
+}
+
+function OverviewSupportingDashboard({
+  pipelineData,
+  plansData,
+  vendorsData,
+  customersData,
+  activityData,
+}: {
+  pipelineData: Promise<OverviewPipeline>
+  plansData: Promise<OverviewPlans>
+  vendorsData: Promise<{ recentVendors: RecentVendor[] }>
+  customersData: Promise<{ recentCustomers: RecentCustomer[] }>
+  activityData: Promise<{ activity: Activity[] }>
+}) {
+  return (
+    <div className="space-y-6">
       <div className="grid gap-5 xl:grid-cols-[1fr_1fr_1fr]">
         <section className="rounded-xl border border-[#e8eeee] bg-white p-5 shadow-[0_5px_18px_rgba(21,61,73,0.04)]">
           <div className="mb-5 flex items-center justify-between">
             <h3 className="text-lg font-bold text-slate-900">Workload by status</h3>
             <BarChart3 size={18} className="text-[#00a7bd]" />
           </div>
-          {sectionErrors.pipeline ? <SectionLoadError section="Workload" /> : <PipelineChart pipeline={pipeline} />}
+          <Suspense fallback={<SectionLoading />}>
+            <Await resolve={pipelineData} errorElement={<SectionLoadError section="Workload" />}>
+              {({ pipeline }) => <PipelineChart pipeline={pipeline} />}
+            </Await>
+          </Suspense>
         </section>
         <section className="rounded-xl border border-[#e8eeee] bg-white p-5 shadow-[0_5px_18px_rgba(21,61,73,0.04)]">
           <div className="mb-5 flex items-center justify-between">
@@ -1160,65 +1173,75 @@ function OverviewDashboard({ dashboard }: { dashboard: DashboardData }) {
               Manage
             </Link>
           </div>
-          {sectionErrors.plans ? (
-            <SectionLoadError section="Plans" />
-          ) : (
-            <div className="space-y-3">
-              {plans.length === 0 ? (
-                <p className="text-sm text-slate-500">No plans configured.</p>
-              ) : (
-                [...plans]
-                  .sort((left, right) => right.subscribers - left.subscribers)
-                  .map((plan) => (
-                    <div key={plan.id} className="flex items-center justify-between">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold text-slate-800">
-                          {plan.name} <span className="font-normal text-slate-400">{plan.type}</span>
-                        </p>
-                        <div className="group relative mt-1 h-1.5 w-32 rounded-full bg-slate-100">
-                          <div
-                            className="h-full rounded-full bg-[#00b7d4]"
-                            style={{ width: `${Math.min(plan.subscribers * 18 + 8, 100)}%` }}
-                          />
-                          <span className="pointer-events-none absolute -top-8 left-1/2 z-10 hidden -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-[10px] font-medium text-white shadow-lg group-hover:block">
-                            {plan.name}: {plan.subscribers} subscribers
-                          </span>
-                        </div>
-                      </div>
-                      <strong className="text-sm text-slate-900">{plan.subscribers}</strong>
-                    </div>
-                  ))
+          <Suspense fallback={<SectionLoading />}>
+            <Await resolve={plansData} errorElement={<SectionLoadError section="Plans" />}>
+              {({ plans, activeSubscriptions }) => (
+                <div>
+                  <div className="space-y-3">
+                    {plans.length === 0 ? (
+                      <p className="text-sm text-slate-500">No plans configured.</p>
+                    ) : (
+                      [...plans]
+                        .sort((left, right) => right.subscribers - left.subscribers)
+                        .map((plan) => (
+                          <div key={plan.id} className="flex items-center justify-between">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-semibold text-slate-800">
+                                {plan.name} <span className="font-normal text-slate-400">{plan.type}</span>
+                              </p>
+                              <div className="group relative mt-1 h-1.5 w-32 rounded-full bg-slate-100">
+                                <div
+                                  className="h-full rounded-full bg-[#00b7d4]"
+                                  style={{ width: `${Math.min(plan.subscribers * 18 + 8, 100)}%` }}
+                                />
+                                <span className="pointer-events-none absolute -top-8 left-1/2 z-10 hidden -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-[10px] font-medium text-white shadow-lg group-hover:block">
+                                  {plan.name}: {plan.subscribers} subscribers
+                                </span>
+                              </div>
+                            </div>
+                            <strong className="text-sm text-slate-900">{plan.subscribers}</strong>
+                          </div>
+                        ))
+                    )}
+                  </div>
+                  <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3 text-sm">
+                    <span className="font-medium text-slate-600">Total</span>
+                    <strong className="text-slate-900">{activeSubscriptions.toLocaleString()}</strong>
+                  </div>
+                </div>
               )}
-            </div>
-          )}
-          <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3 text-sm">
-            <span className="font-medium text-slate-600">Total</span>
-            <strong className="text-slate-900">{metrics.activeSubscriptions.toLocaleString()}</strong>
-          </div>
+            </Await>
+          </Suspense>
         </section>
         <section className="rounded-xl border border-[#e8eeee] bg-white p-5 shadow-[0_5px_18px_rgba(21,61,73,0.04)]">
           <div className="mb-5 flex items-center justify-between">
             <h3 className="text-lg font-bold text-slate-900">Recent updates</h3>
             <Clock3 size={18} className="text-slate-400" />
           </div>
-          <div className="space-y-3">
-            {activity.length === 0 ? (
-              <p className="text-sm text-slate-500">No recent activity.</p>
-            ) : (
-              activity.map((item) => (
-                <div key={item.id} className="flex gap-3">
-                  <span
-                    className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${item.tone === 'cyan' ? 'bg-[#00b7d4]' : item.tone === 'pink' ? 'bg-[#ff6077]' : 'bg-[#64c4ae]'}`}
-                  />
-                  <div className="min-w-0">
-                    <p className="truncate text-xs font-semibold text-slate-800">{item.title}</p>
-                    <p className="truncate text-[11px] text-slate-500">{item.detail}</p>
-                    <p className="mt-0.5 text-[10px] text-slate-400">{item.time}</p>
-                  </div>
+          <Suspense fallback={<SectionLoading />}>
+            <Await resolve={activityData} errorElement={<SectionLoadError section="Recent activity" />}>
+              {({ activity }) => (
+                <div className="space-y-3">
+                  {activity.length === 0 ? (
+                    <p className="text-sm text-slate-500">No recent activity.</p>
+                  ) : (
+                    activity.map((item) => (
+                      <div key={item.id} className="flex gap-3">
+                        <span
+                          className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${item.tone === 'cyan' ? 'bg-[#00b7d4]' : item.tone === 'pink' ? 'bg-[#ff6077]' : 'bg-[#64c4ae]'}`}
+                        />
+                        <div className="min-w-0">
+                          <p className="truncate text-xs font-semibold text-slate-800">{item.title}</p>
+                          <p className="truncate text-[11px] text-slate-500">{item.detail}</p>
+                          <p className="mt-0.5 text-[10px] text-slate-400">{item.time}</p>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
-              ))
-            )}
-          </div>
+              )}
+            </Await>
+          </Suspense>
         </section>
       </div>
       <div className="grid gap-5 xl:grid-cols-2">
@@ -1227,55 +1250,65 @@ function OverviewDashboard({ dashboard }: { dashboard: DashboardData }) {
             <h3 className="text-lg font-bold text-slate-900">Recent vendors</h3>
             <Store size={18} className="text-brand-primary" />
           </div>
-          <div className="space-y-3">
-            {sectionErrors.recentVendors ? (
-              <SectionLoadError section="Recent vendors" />
-            ) : recentVendors.length === 0 ? (
-              <p className="text-sm text-slate-500">No vendors registered.</p>
-            ) : (
-              recentVendors.map((vendor) => (
-                <Link
-                  key={vendor.id}
-                  to={`/admin/partners/vendor/${vendor.id}`}
-                  className="flex items-center justify-between gap-3 border-b border-slate-100 pb-3 last:border-0 last:pb-0"
-                >
-                  <p className="truncate text-sm font-semibold text-slate-800 transition-colors hover:text-brand-primary">{vendor.name}</p>
-                  <span className="shrink-0 rounded-full bg-brand-soft px-2 py-1 text-[10px] font-semibold capitalize text-brand-primary">
-                    {vendor.status}
-                  </span>
-                </Link>
-              ))
-            )}
-          </div>
+          <Suspense fallback={<SectionLoading />}>
+            <Await resolve={vendorsData} errorElement={<SectionLoadError section="Recent vendors" />}>
+              {({ recentVendors }) => (
+                <div className="space-y-3">
+                  {recentVendors.length === 0 ? (
+                    <p className="text-sm text-slate-500">No vendors registered.</p>
+                  ) : (
+                    recentVendors.map((vendor) => (
+                      <Link
+                        key={vendor.id}
+                        to={`/admin/partners/vendor/${vendor.id}`}
+                        className="flex items-center justify-between gap-3 border-b border-slate-100 pb-3 last:border-0 last:pb-0"
+                      >
+                        <p className="truncate text-sm font-semibold text-slate-800 transition-colors hover:text-brand-primary">
+                          {vendor.name}
+                        </p>
+                        <span className="shrink-0 rounded-full bg-brand-soft px-2 py-1 text-[10px] font-semibold capitalize text-brand-primary">
+                          {vendor.status}
+                        </span>
+                      </Link>
+                    ))
+                  )}
+                </div>
+              )}
+            </Await>
+          </Suspense>
         </section>
         <section className="rounded-xl border border-[#e8eeee] bg-white p-5 shadow-[0_5px_18px_rgba(21,61,73,0.04)]">
           <div className="mb-5 flex items-center justify-between">
             <h3 className="text-lg font-bold text-slate-900">Recent customers</h3>
             <UserRound size={18} className="text-brand-primary" />
           </div>
-          <div className="space-y-3">
-            {sectionErrors.recentCustomers ? (
-              <SectionLoadError section="Recent customers" />
-            ) : recentCustomers.length === 0 ? (
-              <p className="text-sm text-slate-500">No customers registered.</p>
-            ) : (
-              recentCustomers.map((customer) => (
-                <Link
-                  key={customer.id}
-                  to={`/admin/users/${customer.id}`}
-                  className="flex items-center justify-between gap-3 border-b border-slate-100 pb-3 last:border-0 last:pb-0"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-slate-800 transition-colors hover:text-brand-primary">
-                      {customer.name}
-                    </p>
-                    <p className="truncate text-xs text-slate-500">{customer.email ?? 'Email unavailable'}</p>
-                  </div>
-                  <span className="shrink-0 text-xs font-semibold text-slate-500">Customer</span>
-                </Link>
-              ))
-            )}
-          </div>
+          <Suspense fallback={<SectionLoading />}>
+            <Await resolve={customersData} errorElement={<SectionLoadError section="Recent customers" />}>
+              {({ recentCustomers }) => (
+                <div className="space-y-3">
+                  {recentCustomers.length === 0 ? (
+                    <p className="text-sm text-slate-500">No customers registered.</p>
+                  ) : (
+                    recentCustomers.map((customer) => (
+                      <Link
+                        key={customer.id}
+                        to={`/admin/users/${customer.id}`}
+                        className="flex items-center justify-between gap-3 border-b border-slate-100 pb-3 last:border-0 last:pb-0"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-slate-800 transition-colors hover:text-brand-primary">
+                            {customer.name}
+                          </p>
+                          <p className="truncate text-xs text-slate-500">{customer.email ?? 'Email unavailable'}</p>
+                        </div>
+                        <span className="shrink-0 text-xs font-semibold text-slate-500">Customer</span>
+                      </Link>
+                    ))
+                  )}
+                </div>
+              )}
+            </Await>
+          </Suspense>
         </section>
       </div>
     </div>
