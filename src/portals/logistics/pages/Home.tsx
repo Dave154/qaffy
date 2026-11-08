@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { waitUntil } from '@vercel/functions'
 import type { Route } from './+types/Home'
 import { sql } from '../../../lib/db.server'
-import { requireRole } from '../../../lib/auth.server'
+import { requireLogisticsOtpRole, requireRole } from '../../../lib/auth.server'
 import { isSupabaseServerConfigured } from '../../../lib/supabase.server'
 import CopyableOrderId from '../../../components/CopyableOrderId'
 import { sendCustomerNotification } from '../../../lib/notifications.server'
@@ -11,25 +11,65 @@ import { toast } from '../../../lib/toast'
 
 // eslint-disable-next-line react-refresh/only-export-components
 export async function action({ request }: Route.ActionArgs) {
+  const requestStartedAt = performance.now()
+  let authTiming = { claimsMs: 0, roleCheckMs: 0, totalMs: 0 }
+  let authHeaders: Headers | undefined
   let agentProfileId: string | null = null
   let agentName = 'Logistics agent'
-  if (isSupabaseServerConfigured) {
+  const formData = await request.formData()
+  const orderId = String(formData.get('orderId') ?? '')
+  const otp = String(formData.get('otp') ?? '')
+    .replace(/\D/g, '')
+    .slice(-4)
+  const intent = String(formData.get('intent') ?? 'pickup')
+
+  if (isSupabaseServerConfigured && intent === 'search') {
+    const auth = await requireLogisticsOtpRole(request)
+    if (!auth) return data({ ok: false, message: 'Logistics access is unavailable.' }, { status: 503 })
+    agentProfileId = auth.profile.id
+    agentName = auth.profile.name ?? agentName
+    authTiming = auth.timing
+    authHeaders = auth.headers
+  } else if (isSupabaseServerConfigured) {
     const auth = await requireRole(request, 'logistics')
     if (!auth) return data({ ok: false, message: 'Logistics access is unavailable.' }, { status: 503 })
     agentProfileId = auth.profile.id
     agentName = auth.profile.name ?? agentName
   }
 
-  const formData = await request.formData()
-  const orderId = String(formData.get('orderId') ?? '')
-  const otp = String(formData.get('otp') ?? '')
-    .replace(/\D/g, '') 
-    .slice(-4)
-  const intent = String(formData.get('intent') ?? 'pickup')
-
   if (intent === 'search') {
-    if (otp.length !== 4) return data({ ok: false, intent, otp, message: 'Enter all four digits.' }, { status: 400 })
+    if (otp.length !== 4) {
+      return data({ ok: false, intent, otp, message: 'Enter all four digits.' }, { status: 400, headers: authHeaders })
+    }
     try {
+      const activeStartedAt = performance.now()
+      const activeLookup = sql`
+        select
+          'active'::text as kind,
+          o.id as order_id,
+          o.public_order_number,
+          coalesce(customer.name, 'Customer') as customer_name,
+          customer.qaffy_id as customer_uid,
+          location.name as pickup_location_name,
+          case when o.status = 'pending_pickup' then 'pickup' else 'delivery' end as handoff_type,
+          null::timestamptz as confirmed_at,
+          null::text as agent_name
+        from orders o
+        left join profiles customer on customer.id = o.customer_id
+        left join pickup_locations location on location.id = o.pickup_location_id
+        where (
+          o.status = 'pending_pickup'
+          and right(regexp_replace(coalesce(o.pickup_otp, ''), '[^0-9]', '', 'g'), 4) = ${otp}
+        ) or (
+          o.status = 'out_for_delivery'
+          and exists (select 1 from invoices i where i.order_id = o.id and i.status = 'paid')
+          and right(regexp_replace(coalesce(o.delivery_otp, ''), '[^0-9]', '', 'g'), 4) = ${otp}
+        )
+      `.then(
+        (matches) => ({ ok: true as const, matches, durationMs: performance.now() - activeStartedAt }),
+        (error: unknown) => ({ ok: false as const, error, durationMs: performance.now() - activeStartedAt }),
+      )
+      const usedStartedAt = performance.now()
       const usedLookup = sql`
         select
           'used'::text as kind,
@@ -52,50 +92,62 @@ export async function action({ request }: Route.ActionArgs) {
           and used.expires_at > now()
         order by confirmed_at desc nulls first
       `.then(
-        (matches) => ({ ok: true as const, matches }),
-        (error: unknown) => ({ ok: false as const, error }),
+        (matches) => ({ ok: true as const, matches, durationMs: performance.now() - usedStartedAt }),
+        (error: unknown) => ({ ok: false as const, error, durationMs: performance.now() - usedStartedAt }),
       )
       try {
         waitUntil(
           usedLookup.then((result) => {
-            if (!result.ok) console.error('Background used OTP lookup failed:', result.error)
+            if (!result.ok) {
+              console.error('Background used OTP lookup failed:', result.error)
+              return
+            }
+            console.info('[logistics-otp] used lookup completed', { usedLookupMs: result.durationMs })
           }),
         )
       } catch (error) {
         console.error('Background used OTP lookup scheduling is unavailable:', error)
       }
 
-      const activeMatches = await sql`
-          select
-            'active'::text as kind,
-            o.id as order_id,
-            o.public_order_number,
-            coalesce(customer.name, 'Customer') as customer_name,
-            customer.qaffy_id as customer_uid,
-            location.name as pickup_location_name,
-            case when o.status = 'pending_pickup' then 'pickup' else 'delivery' end as handoff_type,
-            null::timestamptz as confirmed_at,
-            null::text as agent_name
-          from orders o
-          left join profiles customer on customer.id = o.customer_id
-          left join pickup_locations location on location.id = o.pickup_location_id
-          where (
-            o.status = 'pending_pickup'
-            and right(regexp_replace(coalesce(o.pickup_otp, ''), '[^0-9]', '', 'g'), 4) = ${otp}
-          ) or (
-            o.status = 'out_for_delivery'
-            and exists (select 1 from invoices i where i.order_id = o.id and i.status = 'paid')
-            and right(regexp_replace(coalesce(o.delivery_otp, ''), '[^0-9]', '', 'g'), 4) = ${otp}
-          )
-      `
-      if (activeMatches.length > 0) return data({ ok: true, intent, otp, matches: activeMatches })
+      const activeResult = await activeLookup
+      if (!activeResult.ok) throw activeResult.error
+      if (activeResult.matches.length > 0) {
+        const timing = {
+          authMs: authTiming.totalMs,
+          authClaimsMs: authTiming.claimsMs,
+          authRoleCheckMs: authTiming.roleCheckMs,
+          activeLookupMs: activeResult.durationMs,
+          usedLookupMs: null,
+          serverTotalMs: performance.now() - requestStartedAt,
+          result: 'active' as const,
+        }
+        console.info('[logistics-otp] search timing', {
+          ...timing,
+        })
+        return data({ ok: true, intent, otp, matches: activeResult.matches, timing }, { headers: authHeaders })
+      }
 
       const usedResult = await usedLookup
       if (!usedResult.ok) throw usedResult.error
-      return data({ ok: true, intent, otp, matches: usedResult.matches })
+      const timing = {
+        authMs: authTiming.totalMs,
+        authClaimsMs: authTiming.claimsMs,
+        authRoleCheckMs: authTiming.roleCheckMs,
+        activeLookupMs: activeResult.durationMs,
+        usedLookupMs: usedResult.durationMs,
+        serverTotalMs: performance.now() - requestStartedAt,
+        result: usedResult.matches.length > 0 ? ('used' as const) : ('none' as const),
+      }
+      console.info('[logistics-otp] search timing', {
+        ...timing,
+      })
+      return data({ ok: true, intent, otp, matches: usedResult.matches, timing }, { headers: authHeaders })
     } catch (error) {
       console.error('Logistics OTP lookup failed:', error)
-      return data({ ok: false, intent, otp, message: 'OTP search failed. Please try again.' }, { status: 500 })
+      return data(
+        { ok: false, intent, otp, message: 'OTP search failed. Please try again.' },
+        { status: 500, headers: authHeaders },
+      )
     }
   }
 
@@ -432,6 +484,40 @@ export default function Home() {
     lookupFetcher.data.otp === enteredOtp
       ? lookupFetcher.data
       : null
+  const pendingLookupTiming = useRef<{ otp: string; startedAt: number | null } | null>(null)
+  useEffect(() => {
+    const pending = pendingLookupTiming.current
+    if (lookupFetcher.state !== 'idle') {
+      if (pending && pending.startedAt === null) pending.startedAt = performance.now()
+      return
+    }
+
+    const response = lookupFetcher.data
+    if (
+      !pending ||
+      pending.startedAt === null ||
+      !response ||
+      !('intent' in response) ||
+      response.intent !== 'search' ||
+      !('otp' in response) ||
+      response.otp !== pending.otp
+    ) {
+      return
+    }
+
+    console.info('[logistics-otp] browser round trip', {
+      durationMs: performance.now() - pending.startedAt,
+      result: 'ok' in response && response.ok && 'matches' in response
+        ? response.matches.some((match) => match.kind === 'active')
+          ? 'active'
+          : response.matches.length > 0
+            ? 'used'
+            : 'none'
+        : 'error',
+      serverTiming: 'timing' in response ? response.timing : undefined,
+    })
+    pendingLookupTiming.current = null
+  }, [lookupFetcher.data, lookupFetcher.state])
   const lookupMatches = lookupResponse?.ok && 'matches' in lookupResponse ? lookupResponse.matches : []
   const activeMatches = lookupMatches.filter((match) => match.kind === 'active')
   const usedMatches = lookupMatches.filter((match) => match.kind === 'used')
@@ -480,6 +566,7 @@ export default function Home() {
 
   const searchOtp = (code: string) => {
     if (code.length !== 4) return
+    pendingLookupTiming.current = { otp: code, startedAt: null }
     lookupFetcher.submit({ intent: 'search', otp: code }, { method: 'post' })
   }
 
