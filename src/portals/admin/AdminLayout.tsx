@@ -19,11 +19,12 @@ import {
   X,
 } from 'lucide-react'
 import { useState } from 'react'
-import { data, NavLink, Outlet, useLoaderData, useLocation, useNavigate, type ShouldRevalidateFunctionArgs } from 'react-router'
+import { data, NavLink, Outlet, useLoaderData, useLocation, useNavigate, useNavigation, type ShouldRevalidateFunctionArgs } from 'react-router'
 import type { Route } from './+types/AdminLayout'
 import QaffyLogo from '../../components/QaffyLogo'
 import { requireRole } from '../../lib/auth.server'
 import { supabase } from '../../lib/supabase.client'
+import { AdminRouteSkeleton } from '../../components/admin/AdminPageSkeleton'
 
 // eslint-disable-next-line react-refresh/only-export-components
 export async function loader({ request }: Route.LoaderArgs) {
@@ -31,6 +32,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   return data({ profile: auth?.profile ?? null }, { headers: auth?.headers, status: 200 })
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function shouldRevalidate({ currentUrl, nextUrl, formMethod, defaultShouldRevalidate }: ShouldRevalidateFunctionArgs) {
   const ordersSearchChanged =
     !formMethod &&
@@ -70,10 +72,18 @@ const navItems = [
   },
 ]
 
+function matchesAdminRoute(pathname: string, route: string, end = false) {
+  return end ? pathname === route : pathname === route || pathname.startsWith(`${route}/`)
+}
+
 export default function AdminLayout() {
   useLoaderData<typeof loader>()
   const location = useLocation()
   const navigate = useNavigate()
+  const navigation = useNavigation()
+  const targetPath = navigation.location?.pathname ?? location.pathname
+  const isNavigatingToAdminPage =
+    navigation.state === 'loading' && targetPath.startsWith('/admin') && targetPath !== location.pathname
   const [isCollapsed, setIsCollapsed] = useState(false)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [openNav, setOpenNav] = useState<string | null>(
@@ -86,31 +96,31 @@ export default function AdminLayout() {
         : null,
   )
   const pageTitle =
-    location.pathname === '/admin'
+    targetPath === '/admin'
       ? 'Overview'
-      : location.pathname.includes('/orders')
+      : targetPath.includes('/orders')
         ? 'Orders'
-        : location.pathname.includes('/finance')
+        : targetPath.includes('/finance')
           ? 'Finance'
-          : location.pathname.includes('/partners')
+          : targetPath.includes('/partners')
             ? 'Partners'
-            : location.pathname.includes('/logistics')
+            : targetPath.includes('/logistics')
               ? 'Logistics'
-              : location.pathname.includes('/vendors')
+              : targetPath.includes('/vendors')
                 ? 'Vendors'
-                : location.pathname.includes('/categories')
+                : targetPath.includes('/categories')
                   ? 'Categories'
-                  : location.pathname.includes('/pickup-locations')
+                  : targetPath.includes('/pickup-locations')
                     ? 'Pickup locations'
-                    : location.pathname.includes('/mismatches')
+                    : targetPath.includes('/mismatches')
                       ? 'Mismatches'
-                      : location.pathname.includes('/users')
+                      : targetPath.includes('/users')
                         ? 'Users'
-                        : location.pathname.includes('/plans')
+                        : targetPath.includes('/plans')
                           ? 'Plans'
-                          : location.pathname.includes('/reward')
+                          : targetPath.includes('/reward')
                             ? 'Reward'
-                            : location.pathname.includes('/settings') || location.pathname.includes('/admins')
+                            : targetPath.includes('/settings') || targetPath.includes('/admins')
                               ? 'Settings'
                               : 'Admin'
   const handleLogout = async () => {
@@ -153,7 +163,7 @@ export default function AdminLayout() {
                     type="button"
                     onClick={() => setOpenNav((open) => (open === item.label ? null : item.label))}
                     aria-expanded={openNav === item.label}
-                    className={`group relative flex h-11 w-full items-center rounded-xl text-sm font-medium transition ${isCollapsed ? 'justify-center px-0' : 'gap-3 px-4'} ${(item.label === 'Partners' && location.pathname.startsWith('/admin/partners')) || (item.label === 'Settings' && (location.pathname.startsWith('/admin/settings') || location.pathname.startsWith('/admin/categories') || location.pathname.startsWith('/admin/pickup-locations') || location.pathname.startsWith('/admin/admins'))) ? 'bg-brand-soft text-brand-primary' : 'text-[#121212] hover:bg-brand-soft hover:text-brand-primary'}`}
+                    className={`group relative flex h-11 w-full items-center rounded-xl text-sm font-medium transition ${isCollapsed ? 'justify-center px-0' : 'gap-3 px-4'} ${(item.label === 'Partners' && targetPath.startsWith('/admin/partners')) || (item.label === 'Settings' && (targetPath.startsWith('/admin/settings') || targetPath.startsWith('/admin/categories') || targetPath.startsWith('/admin/pickup-locations') || targetPath.startsWith('/admin/admins'))) ? 'bg-brand-soft text-brand-primary' : 'text-[#121212] hover:bg-brand-soft hover:text-brand-primary'}`}
                   >
                     <item.icon size={17} strokeWidth={1.8} aria-hidden="true" />
                     <span className={isCollapsed ? 'sr-only' : ''}>{item.label}</span>
@@ -178,9 +188,7 @@ export default function AdminLayout() {
                     to={item.to}
                     end={item.end}
                     prefetch="intent"
-                    className={({ isActive }) =>
-                      `group relative flex h-11 items-center rounded-xl text-sm font-medium transition ${isCollapsed ? 'justify-center px-0' : 'gap-3 px-4'} ${isActive ? 'bg-brand-soft text-brand-primary' : 'text-[#121212] hover:bg-brand-soft hover:text-brand-primary'}`
-                    }
+                    className={`group relative flex h-11 items-center rounded-xl text-sm font-medium transition ${isCollapsed ? 'justify-center px-0' : 'gap-3 px-4'} ${matchesAdminRoute(targetPath, item.to, item.end) ? 'bg-brand-soft text-brand-primary' : 'text-[#121212] hover:bg-brand-soft hover:text-brand-primary'}`}
                   >
                     <item.icon size={17} strokeWidth={1.8} aria-hidden="true" />
                     <span className={isCollapsed ? 'sr-only' : ''}>{item.label}</span>
@@ -204,9 +212,7 @@ export default function AdminLayout() {
                           <NavLink
                             key={child.to}
                             to={child.to}
-                            className={({ isActive }) =>
-                              `flex min-h-9 items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition ${isActive ? 'bg-brand-soft text-brand-primary' : 'text-slate-500 hover:bg-brand-soft hover:text-brand-primary'}`
-                            }
+                            className={`flex min-h-9 items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition ${matchesAdminRoute(targetPath, child.to) ? 'bg-brand-soft text-brand-primary' : 'text-slate-500 hover:bg-brand-soft hover:text-brand-primary'}`}
                           >
                             <ChevronRight size={13} strokeWidth={2} aria-hidden="true" />
                             {child.label}
@@ -304,7 +310,7 @@ export default function AdminLayout() {
                         type="button"
                         onClick={() => setOpenNav((open) => (open === item.label ? null : item.label))}
                         aria-expanded={openNav === item.label}
-                        className={`group flex h-11 w-full items-center rounded-xl px-4 text-sm font-medium transition ${openNav === item.label || (item.label === 'Partners' && location.pathname.startsWith('/admin/partners')) || (item.label === 'Settings' && (location.pathname.startsWith('/admin/settings') || location.pathname.startsWith('/admin/categories') || location.pathname.startsWith('/admin/pickup-locations') || location.pathname.startsWith('/admin/admins'))) ? 'bg-brand-soft text-brand-primary' : 'text-[#121212] hover:bg-brand-soft hover:text-brand-primary'}`}
+                        className={`group flex h-11 w-full items-center rounded-xl px-4 text-sm font-medium transition ${openNav === item.label || (item.label === 'Partners' && targetPath.startsWith('/admin/partners')) || (item.label === 'Settings' && (targetPath.startsWith('/admin/settings') || targetPath.startsWith('/admin/categories') || targetPath.startsWith('/admin/pickup-locations') || targetPath.startsWith('/admin/admins'))) ? 'bg-brand-soft text-brand-primary' : 'text-[#121212] hover:bg-brand-soft hover:text-brand-primary'}`}
                       >
                         <item.icon size={17} strokeWidth={1.8} aria-hidden="true" className="shrink-0" />
                         <span className="ml-3">{item.label}</span>
@@ -325,9 +331,7 @@ export default function AdminLayout() {
                                 to={child.to}
                                 prefetch="intent"
                                 onClick={closeMobileMenu}
-                                className={({ isActive }) =>
-                                  `flex min-h-9 items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition ${isActive ? 'bg-brand-soft text-brand-primary' : 'text-slate-500 hover:bg-brand-soft hover:text-brand-primary'}`
-                                }
+                                className={`flex min-h-9 items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition ${matchesAdminRoute(targetPath, child.to) ? 'bg-brand-soft text-brand-primary' : 'text-slate-500 hover:bg-brand-soft hover:text-brand-primary'}`}
                               >
                                 <ChevronRight size={13} strokeWidth={2} aria-hidden="true" />
                                 {child.label}
@@ -343,9 +347,7 @@ export default function AdminLayout() {
                       end={item.end}
                       prefetch="intent"
                       onClick={closeMobileMenu}
-                      className={({ isActive }) =>
-                        `group flex h-11 items-center rounded-xl px-4 text-sm font-medium transition ${isActive ? 'bg-brand-soft text-brand-primary' : 'text-[#121212] hover:bg-brand-soft hover:text-brand-primary'}`
-                      }
+                      className={`group flex h-11 items-center rounded-xl px-4 text-sm font-medium transition ${matchesAdminRoute(targetPath, item.to, item.end) ? 'bg-brand-soft text-brand-primary' : 'text-[#121212] hover:bg-brand-soft hover:text-brand-primary'}`}
                     >
                       <item.icon size={17} strokeWidth={1.8} aria-hidden="true" className="shrink-0" />
                       <span className="ml-3">{item.label}</span>
@@ -385,7 +387,7 @@ export default function AdminLayout() {
               <Bell size={16} />
             </button>
           </div>
-          <Outlet />
+          {isNavigatingToAdminPage ? <AdminRouteSkeleton pathname={targetPath} /> : <Outlet />}
         </div>
       </main>
     </div>

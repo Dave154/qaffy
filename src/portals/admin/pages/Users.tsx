@@ -1,10 +1,13 @@
 import { ChevronLeft, ChevronRight, LoaderCircle, Search, SlidersHorizontal, UserRound, X } from 'lucide-react'
-import { Form, Link, useLoaderData, useLocation, useNavigate, useNavigation } from 'react-router'
+import { Await, data, Form, Link, useLoaderData, useLocation, useNavigate, useNavigation } from 'react-router'
 import { useState } from 'react'
+import { Suspense } from 'react'
 import type { Route } from './+types/Users'
 import { MultiSortManager, SortColumnHeader, type MultiSortRule } from '../../../components/admin/MultiSortControls'
+import { AdminPageLoadError, AdminTablePageSkeleton } from '../../../components/admin/AdminPageSkeleton'
+import { requireRole } from '../../../lib/auth.server'
 import { toast } from '../../../lib/toast'
-import { loadUsers } from '../../../lib/admin-users.server'
+import { loadUsers, type UsersData as ServerUsersData } from '../../../lib/admin-users.server'
 
 type CustomerOrder = {
   id: string
@@ -29,21 +32,7 @@ type Customer = {
   activePlan: string | null
   orders: CustomerOrder[]
 }
-type UsersData = {
-  customers: Customer[]
-  page: number
-  pageSize: number
-  total: number
-  query: string
-  roleFilter: string
-  subscriptionFilter: string
-  subscriptionPlans: Array<{ id: string; name: string; type: string }>
-  activeSubscribers: number
-  dateMode: 'all' | 'today' | 'this_month' | 'last_month' | 'custom'
-  sortRules: UserSortRule[]
-  startDate: string
-  endDate: string
-}
+type UsersData = ServerUsersData
 type UserSortColumn =
   'name' | 'qaffy_id' | 'role' | 'email' | 'phone' | 'orders' | 'total_paid' | 'wallet' | 'plan' | 'joined' | 'last_order'
 type UserSortRule = MultiSortRule<UserSortColumn>
@@ -71,7 +60,12 @@ const inputDate = (value: Date) =>
 
 // eslint-disable-next-line react-refresh/only-export-components
 export async function loader({ request }: Route.LoaderArgs) {
-  return loadUsers(request)
+  const auth = await requireRole(request, 'admin')
+  const usersData = loadUsers(request, auth).then((result) => {
+    if (result instanceof Response) throw new Error('Users loader returned an unexpected response.')
+    return result.data
+  })
+  return data({ usersData }, { headers: auth?.headers })
 }
 
 function CopyValue({ value, label }: { value: string | null; label: string }) {
@@ -338,6 +332,17 @@ function UserFilterDrawer({
 }
 
 export default function Users() {
+  const { usersData } = useLoaderData<typeof loader>()
+  return (
+    <Suspense fallback={<AdminTablePageSkeleton columns={11} />}>
+      <Await resolve={usersData} errorElement={<AdminPageLoadError page="Users" />}>
+        {(pageData) => <UsersPage pageData={pageData} />}
+      </Await>
+    </Suspense>
+  )
+}
+
+function UsersPage({ pageData }: { pageData: UsersData }) {
   const {
     customers,
     page,
@@ -352,7 +357,7 @@ export default function Users() {
     sortRules,
     startDate,
     endDate,
-  } = useLoaderData<typeof loader>()
+  } = pageData
   const location = useLocation()
   const navigate = useNavigate()
   const navigation = useNavigation()
@@ -491,7 +496,7 @@ export default function Users() {
             </div>
           </div>
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <Form method="get" className="relative w-full lg:max-w-md">
+            <Form method="get" className="relative w-full lg:min-w-0 lg:flex-1">
               <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input type="hidden" name="role" value={roleFilter} />
               <input type="hidden" name="subscription" value={subscriptionFilter} />
@@ -508,14 +513,14 @@ export default function Users() {
                 className="h-10 w-full rounded-lg border border-slate-200 pl-9 pr-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
               />
             </Form>
-            <div className="flex items-center gap-2 self-end lg:self-auto">
+            <div className="flex flex-wrap items-center justify-end gap-2 self-end lg:shrink-0 lg:flex-nowrap lg:self-auto">
               <MultiSortManager columns={sortableColumns} rules={sortRules} onApply={applySortRules} />
               <button
                 type="button"
                 onClick={openFilterDrawer}
                 aria-label="Open user filters"
                 title="Filter users"
-                className="relative flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 text-slate-600 hover:border-brand-primary hover:text-brand-primary"
+                className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-slate-200 text-slate-600 hover:border-brand-primary hover:text-brand-primary"
               >
                 <SlidersHorizontal className="h-4 w-4" />
                 {(roleFilter !== 'all' || subscriptionFilter !== 'all' || dateMode !== 'all') && (
@@ -532,7 +537,7 @@ export default function Users() {
                 }}
                 disabled={total === 0 || navigation.state !== 'idle'}
                 title={navigation.state !== 'idle' ? 'Wait for the current filters to finish applying.' : `Export all ${total} filtered customers`}
-                className="h-10 rounded-full bg-brand-primary px-5 text-sm font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex h-10 shrink-0 items-center justify-center whitespace-nowrap rounded-full bg-brand-primary px-5 text-sm font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Export CSV
               </button>

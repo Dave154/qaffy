@@ -13,6 +13,7 @@ import {
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { Await, Link, data, useLoaderData } from 'react-router'
 import type { Route } from './+types/Home'
+import { AdminDashboardSkeleton } from '../../../components/admin/AdminPageSkeleton'
 import { requireRole } from '../../../lib/auth.server'
 import { sql } from '../../../lib/db.server'
 
@@ -611,48 +612,6 @@ function SectionLoading() {
   return <div className="h-20 animate-pulse rounded-lg bg-slate-100" aria-label="Loading section" role="status" />
 }
 
-function OverviewSkeleton() {
-  return (
-    <div className="animate-pulse space-y-6" aria-label="Loading Admin overview" role="status">
-      <section>
-        <div className="mb-3 flex items-center justify-between">
-          <div className="h-5 w-24 rounded bg-slate-200" />
-          <div className="h-9 w-32 rounded-lg bg-slate-200" />
-        </div>
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {Array.from({ length: 8 }, (_, index) => (
-            <div key={index} className="rounded-xl border border-slate-100 bg-white p-4 shadow-sm">
-              <div className="h-3 w-28 rounded bg-slate-200" />
-              <div className="mt-4 h-7 w-32 rounded bg-slate-200" />
-              <div className="mt-3 h-3 w-20 rounded bg-slate-100" />
-            </div>
-          ))}
-        </div>
-      </section>
-      <div className="grid gap-5 xl:grid-cols-2">
-        {Array.from({ length: 2 }, (_, index) => (
-          <section key={index} className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
-            <div className="h-5 w-36 rounded bg-slate-200" />
-            <div className="mt-5 h-56 rounded-xl bg-slate-100" />
-          </section>
-        ))}
-      </div>
-      <div className="grid gap-5 xl:grid-cols-2">
-        {Array.from({ length: 4 }, (_, index) => (
-          <section key={index} className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
-            <div className="h-5 w-40 rounded bg-slate-200" />
-            <div className="mt-5 space-y-4">
-              {Array.from({ length: 4 }, (_, row) => (
-                <div key={row} className="h-10 rounded-lg bg-slate-100" />
-              ))}
-            </div>
-          </section>
-        ))}
-      </div>
-    </div>
-  )
-}
-
 export default function Home() {
   const { coreData, pipelineData, plansData, vendorsData, customersData, activityData } = useLoaderData<typeof loader>()
   return (
@@ -684,7 +643,7 @@ function OverviewDashboard({
 }) {
   return (
     <div className="space-y-6">
-      <Suspense fallback={<OverviewSkeleton />}>
+      <Suspense fallback={<AdminDashboardSkeleton label="Loading Admin overview" />}>
         <Await
           resolve={coreData}
           errorElement={

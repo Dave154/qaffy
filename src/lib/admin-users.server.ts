@@ -25,7 +25,7 @@ type UserProfileRow = {
   active_plan: string | null
   orders: CustomerOrder[]
 }
-type UsersData = {
+export type UsersData = {
   customers: Array<{
     id: string
     qaffyId: string | null
@@ -107,8 +107,8 @@ function parseSortRules(value: string | null): SortRule[] {
   return rules
 }
 
-export async function loadUsers(request: Request) {
-  const auth = await requireRole(request, 'admin')
+export async function loadUsers(request: Request, authOverride?: Awaited<ReturnType<typeof requireRole>>) {
+  const auth = authOverride === undefined ? await requireRole(request, 'admin') : authOverride
   if (!auth) {
     return data<UsersData>(
       {

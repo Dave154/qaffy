@@ -1,5 +1,6 @@
 import {
   data,
+  Await,
   Form,
   Link,
   useFetcher,
@@ -11,12 +12,13 @@ import {
   useSearchParams,
   type ShouldRevalidateFunctionArgs,
 } from 'react-router'
-import { useEffect, useRef, useState } from 'react'
+import { Suspense, useEffect, useRef, useState } from 'react'
 import { waitUntil } from '@vercel/functions'
 import type postgres from 'postgres'
 import { ChevronLeft, ChevronRight, LoaderCircle, RefreshCw, SlidersHorizontal, X } from 'lucide-react'
 import type { Route } from './+types/Orders'
 import { MultiSortManager, SortColumnHeader } from '../../../components/admin/MultiSortControls'
+import { AdminPageLoadError, AdminTablePageSkeleton } from '../../../components/admin/AdminPageSkeleton'
 import { requireRole } from '../../../lib/auth.server'
 import { getInitialReceivedCounts } from '../../../lib/order-counts'
 import { sql } from '../../../lib/db.server'
@@ -24,7 +26,7 @@ import { toast } from '../../../lib/toast'
 import { isReadyForDispatch, isReadyForFinalDelivery } from '../../../lib/orderLifecycle'
 import { sendCustomerNotification } from '../../../lib/notifications.server'
 import { issueReferralRewards, sendReferralRewardNotifications } from '../../../lib/wallet.server'
-import { loadAdminOrders } from '../../../lib/admin-orders.server'
+import { loadAdminOrders, type OrdersData } from '../../../lib/admin-orders.server'
 import { calculateSubscriptionBilling } from '../../../lib/subscription-billing'
 import {
   calculateSubscriptionAllowance,
@@ -826,7 +828,12 @@ function scheduleAdminOrderNotification(notification: Promise<unknown>) {
 
 // eslint-disable-next-line react-refresh/only-export-components
 export async function loader({ request }: Route.LoaderArgs) {
-  return loadAdminOrders(request)
+  const auth = await requireRole(request, 'admin')
+  const ordersData = loadAdminOrders(request, auth).then((result) => {
+    if (result instanceof Response) throw new Error('Orders loader returned an unexpected response.')
+    return result.data
+  })
+  return data({ ordersData }, { headers: auth?.headers })
 }
 
 function searchWithoutOrderId(url: URL) {
@@ -1628,6 +1635,17 @@ function OrderFilterDrawer({
 }
 
 export default function Orders() {
+  const { ordersData } = useLoaderData<typeof loader>()
+  return (
+    <Suspense fallback={<AdminTablePageSkeleton columns={12} />}>
+      <Await resolve={ordersData} errorElement={<AdminPageLoadError page="Orders" />}>
+        {(pageData) => <OrdersPage pageData={pageData} />}
+      </Await>
+    </Suspense>
+  )
+}
+
+function OrdersPage({ pageData }: { pageData: OrdersData }) {
   const {
     orders,
     selectedOrder: loadedSelectedOrder,
@@ -1642,7 +1660,7 @@ export default function Orders() {
     dateMode,
     startDate,
     endDate,
-  } = useLoaderData<typeof loader>()
+  } = pageData
   const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
   const navigation = useNavigation()
@@ -1817,7 +1835,7 @@ export default function Orders() {
       <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="flex flex-col gap-3 border-b border-slate-200 p-4">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <Form method="get" className="w-full lg:max-w-lg">
+            <Form method="get" className="w-full lg:min-w-0 lg:flex-1">
               <input type="hidden" name="status" value={statusFilter} />
               <input type="hidden" name="payment" value={paymentFilter} />
               <input type="hidden" name="dateType" value={dateType} />
@@ -1834,14 +1852,14 @@ export default function Orders() {
                 className="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm outline-none focus:border-brand-primary"
               />
             </Form>
-            <div className="flex items-center gap-2 self-end lg:self-auto">
+            <div className="flex flex-wrap items-center justify-end gap-2 self-end lg:shrink-0 lg:flex-nowrap lg:self-auto">
               <MultiSortManager columns={sortableColumns} rules={sortRules} onApply={applySortRules} />
               <button
                 type="button"
                 onClick={openFilterDrawer}
                 aria-label="Open order filters"
                 title="Filter orders"
-                className="relative flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 text-slate-600 hover:border-brand-primary hover:text-brand-primary"
+                className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-slate-200 text-slate-600 hover:border-brand-primary hover:text-brand-primary"
               >
                 <SlidersHorizontal className="h-4 w-4" />
                 {(statusFilter !== 'all' || paymentFilter !== 'all' || dateMode !== 'all' || dateType !== 'created') && (
@@ -1854,7 +1872,7 @@ export default function Orders() {
                 disabled={revalidator.state !== 'idle'}
                 aria-label="Refresh orders"
                 title="Refresh orders"
-                className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 text-slate-600 transition hover:border-brand-primary hover:text-brand-primary disabled:cursor-wait disabled:opacity-50"
+                className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-slate-200 text-slate-600 transition hover:border-brand-primary hover:text-brand-primary disabled:cursor-wait disabled:opacity-50"
               >
                 <RefreshCw className={`h-4 w-4 ${revalidator.state !== 'idle' ? 'animate-spin' : ''}`} />
               </button>
@@ -1870,7 +1888,7 @@ export default function Orders() {
                 title={
                   navigation.state !== 'idle' ? 'Wait for the current filters to finish applying.' : `Export all ${total} filtered orders`
                 }
-                className="h-10 rounded-full bg-brand-primary px-5 text-sm font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex h-10 shrink-0 items-center justify-center whitespace-nowrap rounded-full bg-brand-primary px-5 text-sm font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Export CSV
               </button>

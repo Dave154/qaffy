@@ -4,24 +4,34 @@ import { useNavigation } from 'react-router'
 type RouteLoadingScreenProps = {
   isLoading?: boolean
   watchNavigation?: boolean
+  maxDurationMs?: number
 }
 
-export default function RouteLoadingScreen({ isLoading = false, watchNavigation = true }: RouteLoadingScreenProps) {
+export default function RouteLoadingScreen({
+  isLoading = false,
+  watchNavigation = true,
+  maxDurationMs,
+}: RouteLoadingScreenProps) {
   const navigation = useNavigation()
   const isNavigating = isLoading || (watchNavigation && navigation.state !== 'idle')
   const [isVisible, setIsVisible] = useState(false)
 
   useEffect(() => {
+    let showTimer: number | undefined
     let hideTimer: number | undefined
     if (isNavigating) {
-      setIsVisible(true)
-    } else if (isVisible) {
+      showTimer = window.setTimeout(() => setIsVisible(true), 0)
+      if (maxDurationMs !== undefined) {
+        hideTimer = window.setTimeout(() => setIsVisible(false), maxDurationMs)
+      }
+    } else {
       hideTimer = window.setTimeout(() => setIsVisible(false), 250)
     }
     return () => {
+      if (showTimer) window.clearTimeout(showTimer)
       if (hideTimer) window.clearTimeout(hideTimer)
     }
-  }, [isNavigating, isVisible])
+  }, [isNavigating, maxDurationMs])
 
   if (!isVisible) return null
 

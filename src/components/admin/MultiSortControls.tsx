@@ -61,7 +61,7 @@ export function MultiSortManager<T extends string>({
         aria-expanded={isOpen}
         aria-haspopup="dialog"
         onClick={open}
-        className="inline-flex h-6 items-center justify-center gap-2 rounded-xs px-2 text-slate-900 transition-colors hover:bg-brand-primary/5"
+        className="inline-flex h-10 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-slate-200 px-3 text-slate-700 transition-colors hover:border-brand-primary hover:bg-brand-primary/5 hover:text-brand-primary"
       >
         <List size={13} strokeWidth={2} className="text-brand-primary" />
         <span className="text-sm">

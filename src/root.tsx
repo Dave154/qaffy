@@ -79,11 +79,18 @@ export default function App() {
   const isAdminTableUpdate =
     (location.pathname === '/admin/users' && navigation.location?.pathname === '/admin/users') ||
     (location.pathname === '/admin/orders' && navigation.location?.pathname === '/admin/orders')
+  const isAdminRouteTransition =
+    navigation.state !== 'idle' &&
+    navigation.location?.pathname.startsWith('/admin') &&
+    navigation.location.pathname !== location.pathname
 
   return (
     <>
       <Outlet />
-      <RouteLoadingScreen watchNavigation={!isAdminTableUpdate} />
+      <RouteLoadingScreen
+        watchNavigation={!isAdminTableUpdate}
+        maxDurationMs={isAdminRouteTransition ? 650 : undefined}
+      />
     </>
   )
 }

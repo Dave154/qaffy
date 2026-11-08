@@ -1,18 +1,17 @@
 import { ArrowRight, Banknote, CheckCircle2, CircleDollarSign, Eye, Loader2, MoreVertical, Plus, RefreshCw, TrendingUp, X } from 'lucide-react'
 import { createPortal } from 'react-dom'
-import { data, useFetcher, useLoaderData, useRevalidator } from 'react-router'
+import { data, useFetcher, useLoaderData, useRevalidator, type ShouldRevalidateFunctionArgs } from 'react-router'
 import { useEffect, useRef, useState } from 'react'
 import type { Route } from './+types/Finance'
 import { requireRole } from '../../../lib/auth.server'
 import { sql } from '../../../lib/db.server'
 import { toast } from '../../../lib/toast'
-import { buildSettlementVendorPreviews, getRateValueFromItem } from '../../../lib/rate-card'
+import { buildSettlementVendorPreviews } from '../../../lib/rate-card'
 import type { SettlementCandidateItem, SettlementCandidateOrder } from '../../../lib/rate-card'
 import { reconcileSettlement, releaseSettlement } from '../../../lib/payouts.server'
 import { createBulkSettlements } from '../../../lib/settlements.server'
 import { releaseCreatedSettlements, summarizeSettlementPayouts } from '../../../lib/settlement-payouts'
 import AdminSideDrawer from '../../../components/AdminSideDrawer'
-import { sumSuccessfulPlanPayments } from '../../../lib/revenue-reporting'
 import { supabase } from '../../../lib/supabase.client'
 
 type SettlementRow = {
@@ -24,12 +23,12 @@ type SettlementRow = {
   amountDue: number
   status: 'pending' | 'paid'
   createdAt: string
+  orderCount: number
   payoutAccountReady: boolean
   eligibleForPayout: boolean
   transferStatus: 'queued' | 'processing' | 'success' | 'failed' | 'reversed' | 'rejected' | null
   transferFailureReason: string | null
   transferReference: string | null
-  orders: Array<{ id: string; publicOrderNumber: string; status: string; confirmedItems: number; invoicePaid: boolean }>
 }
 
 type VendorSummary = {
@@ -40,32 +39,6 @@ type VendorSummary = {
   totalCollected: number
   totalVendorPayout: number
   vendorPayout: number
-}
-
-type FinanceData = {
-  summary: {
-    totalCollected: number
-    subscriptionRevenue: number
-    totalVendorPayout: number
-    platformProfit: number
-    pendingSettlements: number
-    pendingAmount: number
-    paidSettlements: number
-    paystackBalance: number | null
-    paystackBalanceError: string | null
-    totalOwedToVendors: number
-    withdrawalTotal: number
-  }
-  vendors: VendorSummary[]
-  settlements: SettlementRow[]
-}
-
-type SettlementItemSnapshot = {
-  settlement_id: string
-  order_item_id: string
-  confirmed_quantity: number
-  vendor_unit_price: number
-  amount: number
 }
 
 function money(value: number) {
@@ -92,6 +65,7 @@ async function fetchPaystackBalance(secretKey: string) {
   try {
     const response = await fetch('https://api.paystack.co/balance', {
       method: 'GET',
+      signal: AbortSignal.timeout(5000),
       headers: { Authorization: `Bearer ${secretKey}`, 'Content-Type': 'application/json' },
     })
     if (!response.ok) {
@@ -110,8 +84,8 @@ async function fetchPaystackBalance(secretKey: string) {
 // eslint-disable-next-line react-refresh/only-export-components
 export async function loader({ request }: Route.LoaderArgs) {
   const auth = await requireRole(request, 'admin')
-  if (!auth)
-    return data<FinanceData>(
+  if (!auth) {
+    return data(
       {
         summary: {
           totalCollected: 0,
@@ -121,8 +95,6 @@ export async function loader({ request }: Route.LoaderArgs) {
           pendingSettlements: 0,
           pendingAmount: 0,
           paidSettlements: 0,
-          paystackBalance: null,
-          paystackBalanceError: 'Paystack balance unavailable.',
           totalOwedToVendors: 0,
           withdrawalTotal: 0,
         },
@@ -131,211 +103,173 @@ export async function loader({ request }: Route.LoaderArgs) {
       },
       { status: 200 },
     )
+  }
 
-  const { supabase, headers } = auth
-  const [paystackBalance, [{ amount: withdrawalTotal = 0 } = { amount: 0 }]] = await Promise.all([
-    fetchPaystackBalance(process.env.PAYSTACK_SECRET_KEY ?? ''),
-    sql`select coalesce(sum(amount), 0) as amount from admin_finance_transactions where transaction_type = 'profit_withdrawal'`,
+  const { headers } = auth
+  const [reportRows, settlementRows] = await Promise.all([
+    sql<{ report: { summary: Record<string, number>; vendors: Array<Record<string, string | number>> } }[]>`
+      with item_payouts as (
+        select item.order_id,
+          sum(case
+            when snapshot.order_item_id is not null then snapshot.amount
+            else coalesce(case item.service::text
+              when 'wash' then rates.vendor_wash_price
+              when 'iron' then rates.vendor_iron_price
+              else rates.vendor_wash_iron_price
+            end, 0) * item.confirmed_quantity
+          end) as amount
+        from order_items item
+        left join vendor_settlement_items snapshot on snapshot.order_item_id = item.id
+        left join cloth_category_rates rates on rates.category_id = item.category_id
+        where item.confirmed_quantity is not null
+        group by item.order_id
+      ),
+      paid_orders as (
+        select order_row.id, order_row.vendor_id, invoice.amount as invoice_amount,
+          coalesce(item_payouts.amount, 0) as payout_amount,
+          exists (
+            select 1 from vendor_settlement_orders membership
+            join vendor_settlements paid_settlement on paid_settlement.id = membership.settlement_id
+            where membership.order_id = order_row.id and paid_settlement.status = 'paid'
+          ) as already_paid
+        from orders order_row
+        join invoices invoice on invoice.order_id = order_row.id and invoice.status = 'paid'
+        left join item_payouts on item_payouts.order_id = order_row.id
+        where order_row.vendor_id is not null
+          and order_row.status <> 'cancelled'
+          and order_row.clothes_count_vendor is not null
+      ),
+      vendor_totals as (
+        select vendor_id,
+          count(*) filter (where not already_paid)::int as outstanding_order_count,
+          coalesce(sum(invoice_amount) filter (where not already_paid), 0) as outstanding_collected,
+          coalesce(sum(invoice_amount), 0) as total_collected,
+          coalesce(sum(payout_amount), 0) as total_vendor_payout,
+          coalesce(sum(payout_amount) filter (where not already_paid), 0) as vendor_payout
+        from paid_orders
+        group by vendor_id
+      ),
+      vendor_rows as (
+        select vendor.id as vendor_id, coalesce(vendor.business_name, 'Vendor') as vendor_name,
+          coalesce(totals.outstanding_order_count, 0) as outstanding_order_count,
+          coalesce(totals.outstanding_collected, 0) as outstanding_collected,
+          coalesce(totals.total_collected, 0) as total_collected,
+          coalesce(totals.total_vendor_payout, 0) as total_vendor_payout,
+          coalesce(totals.vendor_payout, 0) as vendor_payout
+        from vendors vendor
+        left join vendor_totals totals on totals.vendor_id = vendor.id
+        where vendor.status = 'approved'
+        union all
+        select totals.vendor_id, 'Vendor', totals.outstanding_order_count, totals.outstanding_collected,
+          totals.total_collected, totals.total_vendor_payout, totals.vendor_payout
+        from vendor_totals totals
+        where not exists (
+          select 1 from vendors approved_vendor
+          where approved_vendor.id = totals.vendor_id and approved_vendor.status = 'approved'
+        )
+      ),
+      finance_summary as (
+        select
+          (select coalesce(sum(amount), 0) from invoices where status = 'paid')
+            + (select coalesce(sum(amount), 0) from payments where status = 'success' and plan_id is not null) as total_collected,
+          (select coalesce(sum(amount), 0) from payments where status = 'success' and plan_id is not null) as subscription_revenue,
+          coalesce((select sum(total_vendor_payout) from vendor_totals), 0) as total_vendor_payout,
+          (select coalesce(sum(amount), 0) from invoices where status = 'paid')
+            + (select coalesce(sum(amount), 0) from payments where status = 'success' and plan_id is not null)
+            - (select coalesce(sum(amount), 0) from vendor_settlement_transfers where status = 'success' and completed_at is not null) as platform_profit,
+          (select count(*) from vendor_settlements settlement
+            where settlement.status = 'pending'
+              and exists (select 1 from vendor_settlement_orders membership where membership.settlement_id = settlement.id)
+              and not exists (
+                select 1 from vendor_settlement_orders membership
+                left join invoices invoice on invoice.order_id = membership.order_id
+                where membership.settlement_id = settlement.id and invoice.status is distinct from 'paid'
+              )
+          ) as pending_settlements,
+          (select coalesce(sum(settlement.amount_due), 0) from vendor_settlements settlement
+            where settlement.status = 'pending'
+              and exists (select 1 from vendor_settlement_orders membership where membership.settlement_id = settlement.id)
+              and not exists (
+                select 1 from vendor_settlement_orders membership
+                left join invoices invoice on invoice.order_id = membership.order_id
+                where membership.settlement_id = settlement.id and invoice.status is distinct from 'paid'
+              )
+          ) as pending_amount,
+          (select count(*) from vendor_settlements where status = 'paid') as paid_settlements,
+          coalesce((select sum(vendor_payout) from vendor_totals), 0) as total_owed_to_vendors,
+          (select coalesce(sum(amount), 0) from admin_finance_transactions where transaction_type = 'profit_withdrawal') as withdrawal_total
+      )
+      select jsonb_build_object(
+        'summary', (select to_jsonb(finance_summary) from finance_summary),
+        'vendors', coalesce((select jsonb_agg(to_jsonb(vendor_rows) order by vendor_name) from vendor_rows), '[]'::jsonb)
+      ) as report
+    `,
+    sql`
+      select settlement.id, settlement.vendor_id,
+        coalesce(vendor.business_name, 'Vendor') as vendor_name,
+        settlement.period_start, settlement.period_end, settlement.amount_due,
+        settlement.status, settlement.created_at,
+        (vendor.payout_account_status = 'verified' and vendor.payout_recipient_code is not null) as payout_account_ready,
+        count(membership.order_id)::int as order_count,
+        count(membership.order_id) filter (where invoice.status = 'paid')::int as paid_order_count,
+        transfer.status as transfer_status,
+        transfer.failure_reason as transfer_failure_reason,
+        transfer.paystack_reference as transfer_reference
+      from vendor_settlements settlement
+      left join vendors vendor on vendor.id = settlement.vendor_id
+      left join vendor_settlement_orders membership on membership.settlement_id = settlement.id
+      left join invoices invoice on invoice.order_id = membership.order_id
+      left join vendor_settlement_transfers transfer on transfer.settlement_id = settlement.id
+      group by settlement.id, vendor.id, transfer.id
+      order by settlement.created_at desc
+    `,
   ])
-  const [
-    { data: vendors },
-    { data: orders },
-    { data: orderItems },
-    { data: rates },
-    { data: invoices },
-    { data: settlements },
-    { data: settlementOrders },
-    { data: settlementItems },
-    { data: settlementTransfers, error: settlementTransferError },
-    { data: planPayments },
-  ] = await Promise.all([
-    supabase
-      .from('vendors')
-      .select('id, profile_id, business_name, status, payout_account_status, payout_recipient_code')
-      .eq('status', 'approved')
-      .order('created_at', { ascending: false }),
-    supabase
-      .from('orders')
-      .select('id, vendor_id, status, clothes_count_vendor, created_at')
-      .not('vendor_id', 'is', null)
-      .order('created_at', { ascending: false }),
-    supabase.from('order_items').select('id, order_id, category_id, quantity, confirmed_quantity, service, unit_price'),
-    supabase.from('cloth_category_rates').select('category_id, vendor_wash_price, vendor_iron_price, vendor_wash_iron_price'),
-    supabase.from('invoices').select('id, order_id, amount, status, created_at'),
-    supabase
-      .from('vendor_settlements')
-      .select('id, vendor_id, period_start, period_end, amount_due, status, created_at')
-      .order('created_at', { ascending: false }),
-    supabase.from('vendor_settlement_orders').select('settlement_id, order_id'),
-    supabase.from('vendor_settlement_items').select('settlement_id, order_item_id, confirmed_quantity, vendor_unit_price, amount'),
-    supabase
-      .from('vendor_settlement_transfers')
-      .select('settlement_id, amount, status, failure_reason, paystack_reference, completed_at')
-      .order('created_at', { ascending: false }),
-    supabase
-      .from('payments')
-      .select('amount, status, plan_id, succeeded_at')
-      .eq('status', 'success')
-      .not('plan_id', 'is', null),
-  ])
-  if (settlementTransferError) throw settlementTransferError
-  const linkedOrderIds = (settlementOrders ?? []).map((record) => record.order_id)
-  const { data: linkedOrders } = linkedOrderIds.length
-    ? await supabase.from('orders').select('id, public_order_number, status, clothes_count_vendor').in('id', linkedOrderIds)
-    : { data: [] as Array<{ id: string; public_order_number: string | null; status: string; clothes_count_vendor: number | null }> }
+  const report = reportRows[0]?.report
+  if (!report) throw new Error('Finance report could not be calculated.')
 
-  const rateByCategory = new Map((rates ?? []).map((rate) => [rate.category_id, rate]))
-  const invoiceByOrder = new Map((invoices ?? []).map((invoice) => [invoice.order_id, invoice]))
-  const settlementItemByOrderItem = new Map(((settlementItems ?? []) as SettlementItemSnapshot[]).map((item) => [item.order_item_id, item]))
-  const payoutByOrder = new Map<string, number>()
-  for (const item of orderItems ?? []) {
-    if (item.confirmed_quantity === null || item.confirmed_quantity === undefined) continue
-    const snapshot = settlementItemByOrderItem.get(item.id)
-    if (snapshot) {
-      payoutByOrder.set(item.order_id, (payoutByOrder.get(item.order_id) ?? 0) + Number(snapshot.amount ?? 0))
-      continue
-    }
-    const unitPrice = getRateValueFromItem(item, rateByCategory.get(item.category_id), 'vendor')
-    payoutByOrder.set(item.order_id, (payoutByOrder.get(item.order_id) ?? 0) + unitPrice * Number(item.confirmed_quantity))
-  }
-
-  const vendorById = new Map((vendors ?? []).map((vendor) => [vendor.id, vendor.business_name || 'Vendor']))
-  const vendorPayoutReadyById = new Map(
-    (vendors ?? []).map((vendor) => [vendor.id, vendor.payout_account_status === 'verified' && Boolean(vendor.payout_recipient_code)]),
-  )
-  const transferBySettlement = new Map((settlementTransfers ?? []).map((transfer) => [transfer.settlement_id, transfer]))
-  const linkedOrderById = new Map((linkedOrders ?? []).map((order) => [order.id, order]))
-  const settlementOrdersBySettlement = new Map<string, string[]>()
-  const settledOrderIds = new Set<string>()
-  for (const record of settlementOrders ?? []) {
-    const existing = settlementOrdersBySettlement.get(record.settlement_id) ?? []
-    existing.push(record.order_id)
-    settlementOrdersBySettlement.set(record.settlement_id, existing)
-  }
-  for (const settlement of settlements ?? []) {
-    if (settlement.status === 'paid') {
-      for (const orderId of settlementOrdersBySettlement.get(settlement.id) ?? []) settledOrderIds.add(orderId)
-    }
-  }
-
-  const summaryMap = new Map<
-    string,
-    {
-      vendorId: string
-      vendorName: string
-      outstandingOrderCount: number
-      outstandingCollected: number
-      totalCollected: number
-      totalVendorPayout: number
-      vendorPayout: number
-    }
-  >()
-  for (const vendor of vendors ?? []) {
-    summaryMap.set(vendor.id, {
-      vendorId: vendor.id,
-      vendorName: vendor.business_name || 'Vendor',
-      outstandingOrderCount: 0,
-      outstandingCollected: 0,
-      totalCollected: 0,
-      totalVendorPayout: 0,
-      vendorPayout: 0,
-    })
-  }
-  for (const order of orders ?? []) {
-    const vendorId = order.vendor_id
-    if (!vendorId || order.status === 'cancelled' || order.clothes_count_vendor === null) continue
-    const invoice = invoiceByOrder.get(order.id)
-    if (invoice?.status !== 'paid') continue
-    const vendorName = vendorById.get(vendorId) ?? 'Vendor'
-    const current = summaryMap.get(vendorId) ?? {
-      vendorId,
-      vendorName,
-      outstandingOrderCount: 0,
-      outstandingCollected: 0,
-      totalCollected: 0,
-      totalVendorPayout: 0,
-      vendorPayout: 0,
-    }
-    current.totalCollected += Number(invoice.amount ?? 0)
-    const orderPayout = payoutByOrder.get(order.id) ?? 0
-    current.totalVendorPayout += orderPayout
-    if (!settledOrderIds.has(order.id)) {
-      current.outstandingOrderCount += 1
-      current.outstandingCollected += Number(invoice.amount ?? 0)
-      current.vendorPayout += orderPayout
-    }
-    summaryMap.set(vendorId, current)
-  }
-
-  const vendorSummaries: VendorSummary[] = [...summaryMap.values()].map((vendor) => ({
-    vendorId: vendor.vendorId,
-    vendorName: vendor.vendorName,
-    outstandingOrderCount: vendor.outstandingOrderCount,
-    outstandingCollected: vendor.outstandingCollected,
-    totalCollected: vendor.totalCollected,
-    totalVendorPayout: vendor.totalVendorPayout,
-    vendorPayout: vendor.vendorPayout,
+  const numberValue = (value: string | number | null | undefined) => Number(value ?? 0)
+  const vendorSummaries: VendorSummary[] = report.vendors.map((vendor) => ({
+    vendorId: String(vendor.vendor_id),
+    vendorName: String(vendor.vendor_name),
+    outstandingOrderCount: numberValue(vendor.outstanding_order_count),
+    outstandingCollected: numberValue(vendor.outstanding_collected),
+    totalCollected: numberValue(vendor.total_collected),
+    totalVendorPayout: numberValue(vendor.total_vendor_payout),
+    vendorPayout: numberValue(vendor.vendor_payout),
   }))
-  const settlementRows: SettlementRow[] = (settlements ?? []).map((settlement) => {
-    const orderIds = settlementOrdersBySettlement.get(settlement.id) ?? []
-    return {
-      id: settlement.id,
-      vendorId: settlement.vendor_id,
-      vendorName: vendorById.get(settlement.vendor_id) ?? 'Vendor',
-      periodStart: settlement.period_start,
-      periodEnd: settlement.period_end,
-      amountDue: Number(settlement.amount_due ?? 0),
-      status: settlement.status,
-      createdAt: settlement.created_at,
-      payoutAccountReady: vendorPayoutReadyById.get(settlement.vendor_id) ?? false,
-      eligibleForPayout: orderIds.length > 0 && orderIds.every((orderId) => invoiceByOrder.get(orderId)?.status === 'paid'),
-      transferStatus: (transferBySettlement.get(settlement.id)?.status as SettlementRow['transferStatus']) ?? null,
-      transferFailureReason: transferBySettlement.get(settlement.id)?.failure_reason ?? null,
-      transferReference: transferBySettlement.get(settlement.id)?.paystack_reference ?? null,
-      orders: orderIds.map((orderId) => {
-        const order = linkedOrderById.get(orderId)
-        return {
-          id: orderId,
-          publicOrderNumber: order?.public_order_number ?? orderId,
-          status: order?.status ?? 'unknown',
-          confirmedItems: Number(order?.clothes_count_vendor ?? 0),
-          invoicePaid: invoiceByOrder.get(orderId)?.status === 'paid',
-        }
-      }),
-    }
-  })
-  const eligiblePendingSettlements = (settlements ?? []).filter((settlement) => {
-    if (settlement.status !== 'pending') return false
-    const orderIds = settlementOrdersBySettlement.get(settlement.id) ?? []
-    return orderIds.length > 0 && orderIds.every((orderId) => invoiceByOrder.get(orderId)?.status === 'paid')
-  })
-  const subscriptionRevenue = sumSuccessfulPlanPayments(planPayments ?? [])
-  const totalCollected =
-    (invoices ?? []).filter((invoice) => invoice.status === 'paid').reduce((sum, invoice) => sum + Number(invoice.amount ?? 0), 0) +
-    subscriptionRevenue
-  const totalVendorPayout = vendorSummaries.reduce((sum, vendor) => sum + vendor.totalVendorPayout, 0)
-  const completedVendorPayouts = (settlementTransfers ?? [])
-    .filter((transfer) => transfer.status === 'success' && transfer.completed_at)
-    .reduce((sum, transfer) => sum + Number(transfer.amount ?? 0), 0)
-  const totalOwedToVendors = vendorSummaries.reduce((sum, vendor) => sum + vendor.vendorPayout, 0)
+  const mappedSettlementRows: SettlementRow[] = settlementRows.map((settlement) => ({
+    id: settlement.id,
+    vendorId: settlement.vendor_id,
+    vendorName: settlement.vendor_name,
+    periodStart: settlement.period_start,
+    periodEnd: settlement.period_end,
+    amountDue: numberValue(settlement.amount_due),
+    status: settlement.status,
+    createdAt: settlement.created_at,
+    orderCount: numberValue(settlement.order_count),
+    payoutAccountReady: Boolean(settlement.payout_account_ready),
+    eligibleForPayout:
+      numberValue(settlement.order_count) > 0 && numberValue(settlement.order_count) === numberValue(settlement.paid_order_count),
+    transferStatus: settlement.transfer_status,
+    transferFailureReason: settlement.transfer_failure_reason,
+    transferReference: settlement.transfer_reference,
+  }))
 
   return data(
     {
       summary: {
-        totalCollected,
-        subscriptionRevenue,
-        totalVendorPayout,
-        platformProfit: totalCollected - completedVendorPayouts,
-        pendingSettlements: eligiblePendingSettlements.length,
-        pendingAmount: eligiblePendingSettlements.reduce((sum, settlement) => sum + Number(settlement.amount_due ?? 0), 0),
-        paidSettlements: (settlements ?? []).filter((settlement) => settlement.status === 'paid').length,
-        paystackBalance: paystackBalance.amount,
-        paystackBalanceError: paystackBalance.error,
-        totalOwedToVendors,
-        withdrawalTotal: Number(withdrawalTotal),
+        totalCollected: numberValue(report.summary.total_collected),
+        subscriptionRevenue: numberValue(report.summary.subscription_revenue),
+        totalVendorPayout: numberValue(report.summary.total_vendor_payout),
+        platformProfit: numberValue(report.summary.platform_profit),
+        pendingSettlements: numberValue(report.summary.pending_settlements),
+        pendingAmount: numberValue(report.summary.pending_amount),
+        paidSettlements: numberValue(report.summary.paid_settlements),
+        totalOwedToVendors: numberValue(report.summary.total_owed_to_vendors),
+        withdrawalTotal: numberValue(report.summary.withdrawal_total),
       },
       vendors: vendorSummaries,
-      settlements: settlementRows,
+      settlements: mappedSettlementRows,
     },
     { headers, status: 200 },
   )
@@ -355,6 +289,57 @@ export async function action({ request }: Route.ActionArgs) {
   const formData = await request.formData()
   const intent = String(formData.get('intent') ?? '')
   const { supabase, headers } = auth
+
+  if (intent === 'load-paystack-balance') {
+    return data(await fetchPaystackBalance(process.env.PAYSTACK_SECRET_KEY ?? ''), { headers, status: 200 })
+  }
+
+  if (intent === 'load-settlement-orders') {
+    const settlementId = String(formData.get('settlementId') ?? '').trim()
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(settlementId)) {
+      return data({ intent, error: 'A valid settlement is required.', settlementId }, { headers, status: 400 })
+    }
+    let orders
+    try {
+      orders = await sql<
+        Array<{
+          id: string
+          public_order_number: string | null
+          status: string
+          clothes_count_vendor: number | null
+          invoice_status: string | null
+        }>
+      >`
+        select order_row.id, order_row.public_order_number, order_row.status,
+          order_row.clothes_count_vendor, invoice.status as invoice_status
+        from vendor_settlement_orders membership
+        join orders order_row on order_row.id = membership.order_id
+        left join invoices invoice on invoice.order_id = order_row.id
+        where membership.settlement_id = ${settlementId}
+        order by order_row.created_at desc
+      `
+    } catch (error) {
+      console.error('Admin Finance settlement details query failed:', error)
+      return data(
+        { intent, settlementId, error: 'Settlement details could not be loaded.' },
+        { headers, status: 500 },
+      )
+    }
+    return data(
+      {
+        intent,
+        settlementId,
+        orders: orders.map((order) => ({
+          id: order.id,
+          publicOrderNumber: order.public_order_number ?? order.id,
+          status: order.status,
+          confirmedItems: Number(order.clothes_count_vendor ?? 0),
+          invoicePaid: order.invoice_status === 'paid',
+        })),
+      },
+      { headers, status: 200 },
+    )
+  }
 
   if (intent === 'release-settlement' || intent === 'reconcile-settlement') {
     const settlementId = String(formData.get('settlementId') ?? '').trim()
@@ -520,6 +505,14 @@ export async function action({ request }: Route.ActionArgs) {
   return data({ error: 'Unsupported finance action.' }, { headers, status: 400 })
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
+export function shouldRevalidate({ formMethod, actionResult, defaultShouldRevalidate }: ShouldRevalidateFunctionArgs) {
+  const actionIntent =
+    actionResult && typeof actionResult === 'object' && 'intent' in actionResult ? String(actionResult.intent) : ''
+  const readOnlyFinanceAction = actionIntent === 'load-paystack-balance' || actionIntent === 'load-settlement-orders'
+  return formMethod?.toUpperCase() === 'POST' && readOnlyFinanceAction ? false : defaultShouldRevalidate
+}
+
 export default function Finance() {
   const { summary, vendors, settlements } = useLoaderData<typeof loader>()
   const revalidator = useRevalidator()
@@ -528,6 +521,8 @@ export default function Finance() {
   const fetcher = useFetcher<typeof action>()
   const settlementFetcher = useFetcher<typeof action>()
   const previewFetcher = useFetcher<typeof action>()
+  const paystackFetcher = useFetcher<typeof action>()
+  const settlementDetailsFetcher = useFetcher<typeof action>()
   const [startDate, setStartDate] = useState(new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10))
   const [endDate, setEndDate] = useState(new Date().toISOString().slice(0, 10))
   const [selectedVendorIds, setSelectedVendorIds] = useState<string[]>([])
@@ -541,6 +536,37 @@ export default function Finance() {
   const [isCreateDrawerOpen, setIsCreateDrawerOpen] = useState(false)
   const handledPayoutResponse = useRef<unknown>(null)
   const handledCreationResponse = useRef<unknown>(null)
+
+  const loadPaystackBalance = paystackFetcher.submit
+  useEffect(() => {
+    loadPaystackBalance({ intent: 'load-paystack-balance' }, { method: 'post' })
+  }, [loadPaystackBalance])
+
+  const openSettlementDetails = (settlement: SettlementRow) => {
+    setSelectedSettlement(settlement)
+    settlementDetailsFetcher.submit(
+      { intent: 'load-settlement-orders', settlementId: settlement.id },
+      { method: 'post' },
+    )
+  }
+  const paystackBalance =
+    paystackFetcher.data && 'amount' in paystackFetcher.data
+      ? paystackFetcher.data
+      : null
+  const selectedSettlementOrders =
+    settlementDetailsFetcher.data &&
+    'orders' in settlementDetailsFetcher.data &&
+    'settlementId' in settlementDetailsFetcher.data &&
+    settlementDetailsFetcher.data.settlementId === selectedSettlement?.id
+      ? settlementDetailsFetcher.data.orders
+      : null
+  const selectedSettlementDetailsError =
+    settlementDetailsFetcher.data &&
+    'error' in settlementDetailsFetcher.data &&
+    'settlementId' in settlementDetailsFetcher.data &&
+    settlementDetailsFetcher.data.settlementId === selectedSettlement?.id
+      ? String(settlementDetailsFetcher.data.error)
+      : null
 
   const dateRangeIsValid = Boolean(startDate && endDate && new Date(startDate) <= new Date(endDate))
   const previewData =
@@ -612,12 +638,13 @@ export default function Finance() {
     return () => {
       void supabaseClient.removeChannel(channel)
     }
-  }, [revalidator.revalidate])
+  }, [revalidator])
 
+  const submitSettlementPreview = previewFetcher.submit
   useEffect(() => {
     if (!isCreateDrawerOpen || !startDate || !endDate || !dateRangeIsValid) return
-    previewFetcher.submit({ intent: 'preview-bulk-settlement', periodStart: startDate, periodEnd: endDate }, { method: 'post' })
-  }, [isCreateDrawerOpen, startDate, endDate, dateRangeIsValid])
+    submitSettlementPreview({ intent: 'preview-bulk-settlement', periodStart: startDate, periodEnd: endDate }, { method: 'post' })
+  }, [isCreateDrawerOpen, startDate, endDate, dateRangeIsValid, submitSettlementPreview])
 
   useEffect(() => {
     if (fetcher.state !== 'idle' || !fetcher.data || fetcher.data === handledPayoutResponse.current) return
@@ -690,13 +717,23 @@ export default function Finance() {
           <p className="truncate text-[10px] font-semibold capitalize tracking-[0.14em] text-slate-500">Paystack balance</p>
           <div className="mt-3 flex min-w-0 items-end justify-between gap-2">
             <p className="min-w-0 truncate text-2xl font-bold text-slate-900 sm:text-3xl">
-              {summary.paystackBalance === null ? 'Unavailable' : money(summary.paystackBalance)}
+              {paystackBalance ? (
+                paystackBalance.amount === null ? (
+                  'Unavailable'
+                ) : (
+                  money(paystackBalance.amount)
+                )
+              ) : (
+                <span className="inline-flex h-9 items-center" role="status" aria-label="Loading Paystack balance">
+                  <Loader2 size={22} className="animate-spin text-brand-primary" aria-hidden="true" />
+                </span>
+              )}
             </p>
             <CircleDollarSign size={18} className="shrink-0 text-brand-primary" />
           </div>
-          {summary.paystackBalanceError && (
-            <p className="mt-2 truncate text-[11px] text-amber-700" title={summary.paystackBalanceError}>
-              {summary.paystackBalanceError}
+          {paystackBalance?.error && (
+            <p className="mt-2 truncate text-[11px] text-amber-700" title={paystackBalance.error}>
+              {paystackBalance.error}
             </p>
           )}
         </div>
@@ -992,11 +1029,11 @@ export default function Finance() {
                       key={settlement.id}
                       tabIndex={0}
                       aria-label={`View settlement details for ${settlement.vendorName}`}
-                      onClick={() => setSelectedSettlement(settlement)}
+                      onClick={() => openSettlementDetails(settlement)}
                       onKeyDown={(event) => {
                         if (event.key === 'Enter' || event.key === ' ') {
                           event.preventDefault()
-                          setSelectedSettlement(settlement)
+                          openSettlementDetails(settlement)
                         }
                       }}
                       className="cursor-pointer border-b border-slate-100 outline-none transition-colors hover:bg-slate-50 focus-visible:bg-slate-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-primary last:border-0"
@@ -1131,7 +1168,7 @@ export default function Finance() {
                 type="button"
                 role="menuitem"
                 onClick={() => {
-                  setSelectedSettlement(openSettlementMenu.settlement)
+                  openSettlementDetails(openSettlementMenu.settlement)
                   setOpenSettlementMenu(null)
                 }}
                 className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-50"
@@ -1204,7 +1241,7 @@ export default function Finance() {
               <div className="py-3 sm:px-4">
                 <p className="text-[10px] font-semibold capitalize tracking-[0.12em] text-slate-500">Linked orders</p>
                 <p className="mt-1 text-sm font-semibold text-slate-900">
-                  {selectedSettlement.orders.length} order{selectedSettlement.orders.length === 1 ? '' : 's'}
+                  {selectedSettlement.orderCount} order{selectedSettlement.orderCount === 1 ? '' : 's'}
                 </p>
               </div>
               <div className="py-3 sm:pl-4">
@@ -1220,7 +1257,7 @@ export default function Finance() {
               <div className="mb-3 flex items-center justify-between gap-3">
                 <h3 className="text-sm font-bold text-slate-900">Linked orders</h3>
                 <span className="text-xs text-slate-500">
-                  {selectedSettlement.orders.length} order{selectedSettlement.orders.length === 1 ? '' : 's'}
+                  {selectedSettlement.orderCount} order{selectedSettlement.orderCount === 1 ? '' : 's'}
                 </span>
               </div>
               {selectedSettlement.transferFailureReason && (
@@ -1233,13 +1270,21 @@ export default function Finance() {
                   Transfer reference: {selectedSettlement.transferReference}
                 </p>
               )}
-              {selectedSettlement.orders.length === 0 ? (
+              {selectedSettlementDetailsError ? (
+                <p className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700" role="alert">
+                  {selectedSettlementDetailsError}
+                </p>
+              ) : selectedSettlementOrders === null ? (
+                <p className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500" aria-live="polite">
+                  Loading linked orders...
+                </p>
+              ) : selectedSettlementOrders.length === 0 ? (
                 <p className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
                   No linked orders were found for this settlement.
                 </p>
               ) : (
                 <div className="divide-y divide-slate-100 rounded-xl border border-slate-200">
-                  {selectedSettlement.orders.map((order) => (
+                  {selectedSettlementOrders.map((order) => (
                     <div key={order.id} className="flex items-center justify-between gap-4 p-4">
                       <div>
                         <p className="font-semibold text-slate-900">{order.publicOrderNumber}</p>

@@ -51,7 +51,7 @@ type OrderRow = Omit<
   invoice: AdminOrder['invoice']
   mismatches: AdminOrder['mismatches']
 }
-type OrdersData = {
+export type OrdersData = {
   orders: AdminOrder[]
   selectedOrder: AdminOrder | null
   page: number
@@ -184,8 +184,8 @@ function parseSortRules(value: string | null): SortRule[] {
   return rules
 }
 
-export async function loadAdminOrders(request: Request) {
-  const auth = await requireRole(request, 'admin')
+export async function loadAdminOrders(request: Request, authOverride?: Awaited<ReturnType<typeof requireRole>>) {
+  const auth = authOverride === undefined ? await requireRole(request, 'admin') : authOverride
   const url = new URL(request.url)
   const params = url.searchParams
   if (!auth) {
