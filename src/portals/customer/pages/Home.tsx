@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { data, useFetcher, useSearchParams } from 'react-router'
+import { data, useFetcher, useRevalidator, useSearchParams } from 'react-router'
 import type { Route } from './+types/Home'
 import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
 import {
@@ -29,6 +29,18 @@ import BubblyBackground from '../../../components/BubblyBackground'
 import PlanEndingBanner, { shouldShowPlanEndingBanner } from '../../../components/PlanEndingBanner'
 import MismatchBanner from '../../../components/MismatchBanner'
 import { toast } from '../../../lib/toast'
+import {
+  CustomerBalanceSkeleton,
+  CustomerInlineSkeleton,
+  CustomerOrderListSkeleton,
+} from '../../../components/customer/CustomerDataSkeleton'
+import { loader as customerLayoutLoader } from '../CustomerLayout'
+
+// eslint-disable-next-line react-refresh/only-export-components
+export async function loader(args: Route.LoaderArgs): Promise<Awaited<ReturnType<typeof customerLayoutLoader>> | null> {
+  if (new URL(args.request.url).searchParams.get('customerData') !== '1') return null
+  return customerLayoutLoader(args)
+}
 
 // eslint-disable-next-line react-refresh/only-export-components
 export async function action({ request }: Route.ActionArgs) {
@@ -99,8 +111,11 @@ export default function Home() {
     subscription,
     subscriptionEndDate,
     pendingTopUp,
+    isDataLoading,
+    dataLoadError,
   } = useCustomerStore()
   const [searchParams, setSearchParams] = useSearchParams()
+  const revalidator = useRevalidator()
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false)
   const [isTopUpModalOpen, setIsTopUpModalOpen] = useState(() => searchParams.get('topup') === '1')
   const [pushSetupVisible, setPushSetupVisible] = useState(false)
@@ -227,6 +242,15 @@ export default function Home() {
         </div>
       </div>
 
+      {dataLoadError && (
+        <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+          <span>{dataLoadError}</span>{' '}
+          <button type="button" onClick={() => revalidator.revalidate()} className="font-semibold underline">
+            Retry
+          </button>
+        </p>
+      )}
+
       {hasMismatchBanner ? (
         <MismatchBanner orders={orders} />
       ) : hasPlanEndingBanner && subscription ? (
@@ -274,14 +298,22 @@ export default function Home() {
         )
       )}
 
-      <section className="relative rounded-2xl overflow-hidden border border-[#e7e7e7] bg-[#f8f8f8] p-5 sm:p-6">
+      <section aria-busy={isDataLoading} className="relative rounded-2xl overflow-hidden border border-[#e7e7e7] bg-[#f8f8f8] p-5 sm:p-6">
         <div className="relative">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-slate-500">
-                {subscription ? 'Subscription' : 'Available balance'}
-              </p>
-              {subscription ? (
+              {isDataLoading ? (
+                <CustomerInlineSkeleton className="w-32" />
+              ) : (
+                <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-slate-500">
+                  {subscription ? 'Subscription' : 'Available balance'}
+                </p>
+              )}
+              {isDataLoading ? (
+                <CustomerBalanceSkeleton />
+              ) : dataLoadError ? (
+                <p className="mt-3 text-sm font-medium text-slate-500">Balance unavailable</p>
+              ) : subscription ? (
                 <>
                   <p className="mt-3 text-3xl font-semibold capitalize tracking-tight text-slate-900 sm:text-4xl">
                     {subscription.name} {subscription.billingPeriod}
@@ -319,7 +351,7 @@ export default function Home() {
             </span>
           </div>
 
-          {subscriptionBalance < 0 && (
+          {!isDataLoading && subscriptionBalance < 0 && (
             <p className="mt-2 text-sm font-medium text-brand-primary">
               Subscription debt: ₦{Math.abs(subscriptionBalance).toLocaleString()}
             </p>
@@ -327,7 +359,14 @@ export default function Home() {
 
           <div className="mt-6 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-slate-500">
             <span>
-              Active orders <strong className="ml-1 text-slate-800">{activeOrderCount}</strong>
+              Active orders{' '}
+              {isDataLoading ? (
+                <CustomerInlineSkeleton className="ml-1 w-6" />
+              ) : dataLoadError ? (
+                <span className="ml-1 font-medium text-slate-400">Unavailable</span>
+              ) : (
+                <strong className="ml-1 text-slate-800">{activeOrderCount}</strong>
+              )}
             </span>
           </div>
 
@@ -335,6 +374,8 @@ export default function Home() {
             <button
               type="button"
               onClick={() => setIsTopUpModalOpen(true)}
+              disabled={isDataLoading || Boolean(dataLoadError)}
+              title={isDataLoading ? 'Loading account details' : undefined}
               className="flex-1 rounded-lg bg-brand-primary px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-primary-hover"
             >
               Top up
@@ -342,6 +383,8 @@ export default function Home() {
             <button
               type="button"
               onClick={() => setIsOrderModalOpen(true)}
+              disabled={isDataLoading || Boolean(dataLoadError)}
+              title={isDataLoading ? 'Loading account details' : undefined}
               className="flex-1 rounded-lg border border-brand-primary bg-white px-4 py-2.5 text-sm font-semibold text-brand-primary transition hover:bg-brand-soft"
             >
               New order
@@ -350,7 +393,7 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="rounded-2xl border border-[#e7e7e7] bg-white p-3 sm:p-5">
+      <section aria-busy={isDataLoading} className="rounded-2xl border border-[#e7e7e7] bg-white p-3 sm:p-5">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div className="min-w-0">
             <h3 className="text-lg font-bold text-slate-900">Recent orders</h3>
@@ -361,113 +404,121 @@ export default function Home() {
           </Link>
         </div>
 
-        <div className="space-y-3">
-          {recentOrders.slice(0, 2).map((order) => {
-            const isCancelling = cancelFetcher.state !== 'idle' && cancelFetcher.formData?.get('orderId') === order.id
-            return (
-              <article key={order.id} className="border-b border-[#eeeeee] bg-white p-4 last:border-b-0">
-                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="min-w-0 flex-1 sm:pr-4">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="text-lg font-semibold text-slate-900">
-                        <CopyableOrderId id={order.publicOrderNumber} />
-                      </p>
-                      <span
-                        className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold ${order.statusTone}`}
-                      >
-                        <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" aria-hidden="true" />
-                        <span>{order.status}</span>
-                      </span>
-                    </div>
-                    <p className="mt-2 text-sm font-medium text-slate-700">{order.title}</p>
-                    <p className="mt-1 text-xs text-slate-500">{order.date}</p>
-                    {order.mismatch && (
-                      <div className="mt-3 min-w-0 overflow-hidden rounded-xl border border-amber-200 bg-amber-50 p-3 text-left">
-                        <p className="text-xs font-semibold text-amber-800">
-                          Count update: {order.mismatch.direction === 'over' ? 'extra items confirmed' : 'fewer items confirmed'}
+        {isDataLoading ? (
+          <CustomerOrderListSkeleton />
+        ) : dataLoadError ? (
+          <p role="status" className="rounded-2xl bg-slate-50 p-6 text-center text-sm text-slate-500">
+            Recent orders are unavailable.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {recentOrders.slice(0, 2).map((order) => {
+              const isCancelling = cancelFetcher.state !== 'idle' && cancelFetcher.formData?.get('orderId') === order.id
+              return (
+                <article key={order.id} className="border-b border-[#eeeeee] bg-white p-4 last:border-b-0">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0 flex-1 sm:pr-4">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-lg font-semibold text-slate-900">
+                          <CopyableOrderId id={order.publicOrderNumber} />
                         </p>
-                        <p className="mt-1 min-w-0 truncate text-xs text-amber-700" title={order.mismatch.detail}>
-                          {order.mismatch.detail}
-                        </p>
+                        <span
+                          className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold ${order.statusTone}`}
+                        >
+                          <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" aria-hidden="true" />
+                          <span>{order.status}</span>
+                        </span>
                       </div>
-                    )}
-                  </div>
-
-                  <div className="shrink-0 sm:ml-2">
-                    {order.paymentStatus === 'Pending' && order.total > 0 ? (
-                      <DeliveryOtpPaywall
-                        amount={order.total}
-                        walletBalance={balance}
-                        invoiceId={invoices.find((invoice) => invoice.orderId === order.id && invoice.status === 'Awaiting payment')?.id}
-                        onClick={() => setIsTopUpModalOpen(true)}
-                      />
-                    ) : order.paymentStatus === 'Paid' && order.status !== 'Delivered' && !order.deliveryOtp ? (
-                      <DeliveryOtpStatus />
-                    ) : getVisibleOtp(order) ? (
-                      <div className="flex items-start gap-3 sm:flex-col sm:items-end">
-                        <div className="min-w-0">
-                          <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-brand-primary">
-                            {getVisibleOtpLabel(order)}
+                      <p className="mt-2 text-sm font-medium text-slate-700">{order.title}</p>
+                      <p className="mt-1 text-xs text-slate-500">{order.date}</p>
+                      {order.mismatch && (
+                        <div className="mt-3 min-w-0 overflow-hidden rounded-xl border border-amber-200 bg-amber-50 p-3 text-left">
+                          <p className="text-xs font-semibold text-amber-800">
+                            Count update: {order.mismatch.direction === 'over' ? 'extra items confirmed' : 'fewer items confirmed'}
                           </p>
-                          <div className="mt-2">
-                            <ProtectedOtp value={getVisibleOtp(order)} digitClassName="h-10 w-10 text-base" />
+                          <p className="mt-1 min-w-0 truncate text-xs text-amber-700" title={order.mismatch.detail}>
+                            {order.mismatch.detail}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="shrink-0 sm:ml-2">
+                      {order.paymentStatus === 'Pending' && order.total > 0 ? (
+                        <DeliveryOtpPaywall
+                          amount={order.total}
+                          walletBalance={balance}
+                          invoiceId={invoices.find((invoice) => invoice.orderId === order.id && invoice.status === 'Awaiting payment')?.id}
+                          onClick={() => setIsTopUpModalOpen(true)}
+                        />
+                      ) : order.paymentStatus === 'Paid' && order.status !== 'Delivered' && !order.deliveryOtp ? (
+                        <DeliveryOtpStatus />
+                      ) : getVisibleOtp(order) ? (
+                        <div className="flex items-start gap-3 sm:flex-col sm:items-end">
+                          <div className="min-w-0">
+                            <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-brand-primary">
+                              {getVisibleOtpLabel(order)}
+                            </p>
+                            <div className="mt-2">
+                              <ProtectedOtp value={getVisibleOtp(order)} digitClassName="h-10 w-10 text-base" />
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ) : (
-                      <div className="text-left sm:text-right">
-                        <p className="max-w-40 text-sm font-bold text-slate-900">{getAmountLabel(order)}</p>
-                        <p className="mt-1 text-xs text-slate-500">{order.items} clothes</p>
-                      </div>
-                    )}
+                      ) : (
+                        <div className="text-left sm:text-right">
+                          <p className="max-w-40 text-sm font-bold text-slate-900">{getAmountLabel(order)}</p>
+                          <p className="mt-1 text-xs text-slate-500">{order.items} clothes</p>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
 
-                <div className="mt-4 flex flex-col gap-3 border-t border-slate-200 pt-3 sm:flex-row sm:items-center sm:justify-between">
-                  <p className="text-sm text-slate-600">{order.pickup}</p>
-                  <div className="flex flex-wrap items-center gap-2">
-                    {order.status === 'Awaiting pickup' && (
-                      <cancelFetcher.Form
-                        method="post"
-                        action="/orders"
-                        onSubmit={(event) => {
-                          if (!window.confirm('Are you sure you want to cancel this order?')) event.preventDefault()
-                        }}
-                      >
-                        <input type="hidden" name="intent" value="cancel-order" />
-                        <input type="hidden" name="orderId" value={order.id} />
-                        <button
-                          type="submit"
-                          disabled={cancelFetcher.state !== 'idle'}
-                          className="rounded-lg border border-rose-200 bg-white px-3.5 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                  <div className="mt-4 flex flex-col gap-3 border-t border-slate-200 pt-3 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-sm text-slate-600">{order.pickup}</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {order.status === 'Awaiting pickup' && (
+                        <cancelFetcher.Form
+                          method="post"
+                          action="/orders"
+                          onSubmit={(event) => {
+                            if (!window.confirm('Are you sure you want to cancel this order?')) event.preventDefault()
+                          }}
                         >
-                          {cancelFetcher.state !== 'idle' && cancelFetcher.formData?.get('orderId') === order.id
-                            ? 'Cancelling…'
-                            : 'Cancel order'}
-                        </button>
-                      </cancelFetcher.Form>
-                    )}
-                    <Link
-                      to={`/orders?order=${encodeURIComponent(order.publicOrderNumber)}&returnTo=${encodeURIComponent('/')}`}
-                      prefetch="intent"
-                      aria-disabled={isCancelling}
-                      tabIndex={isCancelling ? -1 : undefined}
-                      onClick={(event) => {
-                        if (isCancelling) event.preventDefault()
-                      }}
-                      className={`rounded-lg border border-brand-border bg-white px-3.5 py-2 text-center text-sm font-semibold text-brand-primary hover:bg-brand-soft ${
-                        isCancelling ? 'pointer-events-none cursor-not-allowed opacity-50' : ''
-                      }`}
-                    >
-                      View order
-                    </Link>
+                          <input type="hidden" name="intent" value="cancel-order" />
+                          <input type="hidden" name="orderId" value={order.id} />
+                          <button
+                            type="submit"
+                            disabled={cancelFetcher.state !== 'idle'}
+                            className="rounded-lg border border-rose-200 bg-white px-3.5 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                          >
+                            {cancelFetcher.state !== 'idle' && cancelFetcher.formData?.get('orderId') === order.id
+                              ? 'Cancelling…'
+                              : 'Cancel order'}
+                          </button>
+                        </cancelFetcher.Form>
+                      )}
+                      <Link
+                        to={`/orders?order=${encodeURIComponent(order.publicOrderNumber)}&returnTo=${encodeURIComponent('/')}`}
+                        prefetch="intent"
+                        aria-disabled={isCancelling}
+                        tabIndex={isCancelling ? -1 : undefined}
+                        onClick={(event) => {
+                          if (isCancelling) event.preventDefault()
+                        }}
+                        className={`rounded-lg border border-brand-border bg-white px-3.5 py-2 text-center text-sm font-semibold text-brand-primary hover:bg-brand-soft ${
+                          isCancelling ? 'pointer-events-none cursor-not-allowed opacity-50' : ''
+                        }`}
+                      >
+                        View order
+                      </Link>
+                    </div>
                   </div>
-                </div>
-              </article>
-            )
-          })}
-          {orders.length === 0 && <p className="rounded-2xl bg-slate-50 p-6 text-center text-sm text-slate-500">No recent orders yet.</p>}
-        </div>
+                </article>
+              )
+            })}
+            {orders.length === 0 && <p className="rounded-2xl bg-slate-50 p-6 text-center text-sm text-slate-500">No recent orders yet.</p>}
+          </div>
+        )}
       </section>
 
       {referralCode && (

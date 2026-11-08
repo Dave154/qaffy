@@ -1,6 +1,17 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
-import { data, Form, NavLink, Outlet, redirect, useLoaderData, useLocation, useNavigate, useRevalidator } from 'react-router'
-import type { Route } from './+types/CustomerLayout'
+import {
+  data,
+  Form,
+  NavLink,
+  Outlet,
+  redirect,
+  useFetcher,
+  useLoaderData,
+  useLocation,
+  useNavigate,
+  useRevalidator,
+  type LoaderFunctionArgs,
+} from 'react-router'
 import {
   Home,
   LayoutGrid,
@@ -28,6 +39,7 @@ import { useCustomerStore } from './customer-store-hook'
 import type { Invoice, Order, Payment, Plan, Subscription, Wallet, WalletTransaction } from '../../types/database.types'
 import { ensurePushSubscription, savePushSubscription } from '../../lib/push.client'
 import { calculateSubscriptionAllowance, calculateSubscriptionUnitsApplied } from '../../lib/subscription-week'
+import { CustomerInlineSkeleton } from '../../components/customer/CustomerDataSkeleton'
 
 const navItems = [
   { to: '/', label: 'Overview', icon: Home, end: true },
@@ -55,8 +67,7 @@ function getServerNetworkStatus() {
   return true
 }
 
-// eslint-disable-next-line react-refresh/only-export-components
-export async function loader({ request }: Route.LoaderArgs) {
+async function loadCustomerLayoutData(request: Request) {
   if (!isSupabaseServerConfigured) return null
 
   const { supabase: serverSupabase, headers } = getSupabaseServerClient(request)
@@ -76,220 +87,222 @@ export async function loader({ request }: Route.LoaderArgs) {
     throw redirect('/login', { headers })
   }
 
-  const campaignCheckTime = new Date().toISOString()
-  const { data: activeReferralCampaign, error: referralCampaignError } = await serverSupabase
-    .from('referral_campaigns')
-    .select('referrer_reward_value, referred_reward_value, minimum_order_amount')
-    .eq('status', 'active')
-    .or(`starts_at.is.null,starts_at.lte.${campaignCheckTime}`)
-    .or(`ends_at.is.null,ends_at.gt.${campaignCheckTime}`)
-    .order('starts_at', { ascending: false, nullsFirst: false })
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-
-  if (referralCampaignError) throw new Error(`Referral campaign details could not be loaded: ${referralCampaignError.message}`)
-
-  const { count: unreadNotificationCount } = await serverSupabase
-    .from('notification_events')
-    .select('id', { count: 'exact', head: true })
-    .eq('customer_id', userData.user.id)
-    .is('read_at', null)
-
-  const { data: orders } = await serverSupabase
-    .from('orders')
-    .select('*')
-    .eq('customer_id', userData.user.id)
-    .neq('status', 'cancelled')
-    .order('created_at', { ascending: false })
-
-  const invoiceOrderIds = (orders ?? []).map((order) => order.id)
-  const { data: orderInvoices, error: orderInvoicesError } =
-    invoiceOrderIds.length > 0
-      ? await serverSupabase.from('invoices').select('order_id, amount, status').in('order_id', invoiceOrderIds)
-      : { data: [], error: null }
-  if (orderInvoicesError) throw new Error(`Order payment status could not be loaded: ${orderInvoicesError.message}`)
-
-  const { data: pickupLocations } = await serverSupabase
-    .from('pickup_locations')
-    .select('id, name, address')
-    .eq('active', true)
-    .order('name')
-
-  const orderIds = (orders ?? []).map((order) => order.id)
-  const { data: orderItems } =
-    orderIds.length > 0
-      ? await serverSupabase
-          .from('order_items')
-          .select('id, order_id, category_id, quantity, confirmed_quantity, service, unit_price, subscription_units_snapshot')
-          .in('order_id', orderIds)
-      : { data: [] }
-  const categoryIds = [...new Set((orderItems ?? []).map((item) => item.category_id))]
-  const { data: orderCategories } =
-    categoryIds.length > 0 ? await serverSupabase.from('cloth_categories').select('id, name').in('id', categoryIds) : { data: [] }
-  const categoryNameById = new Map((orderCategories ?? []).map((category) => [category.id, category.name]))
-  const persistedOrderItems: PersistedOrderItem[] = (orderItems ?? []).map((item) => ({
-    ...item,
-    category_name: categoryNameById.get(item.category_id) ?? 'Laundry item',
-  }))
-  const { data: wallet } = await serverSupabase.from('wallets').select('*').eq('customer_id', userData.user.id).maybeSingle()
-
-  const { data: walletTransactions } = await serverSupabase
-    .from('wallet_transactions')
-    .select('*')
-    .eq('customer_id', userData.user.id)
-    .order('created_at', { ascending: false })
-    .limit(20)
-
-  const { data: payments, error: paymentsError } = await serverSupabase
-    .from('payments')
-    .select('*')
-    .eq('customer_id', userData.user.id)
-    .order('created_at', { ascending: false })
-    .limit(20)
-
-  const { data: invoiceRows, error: invoiceRowsError } =
-    orderIds.length > 0
-      ? await serverSupabase
-          .from('invoices')
-          .select('*, orders!inner(customer_id)')
-          .eq('orders.customer_id', userData.user.id)
-          .in('order_id', orderIds)
-          .order('created_at', { ascending: false })
-      : { data: [] }
-  const customerInvoiceOrderIds = (invoiceRows ?? []).map((invoice) => invoice.order_id)
-  const { data: invoiceMismatches } =
-    customerInvoiceOrderIds.length > 0
-      ? await serverSupabase
-          .from('mismatches')
-          .select('id, order_id, direction, detail, details, created_at')
-          .in('order_id', customerInvoiceOrderIds)
-          .order('created_at', { ascending: false })
-      : { data: [] }
-  const orderMismatches = (invoiceMismatches ?? []).map((mismatch) => ({
-    id: mismatch.id,
-    order_id: mismatch.order_id,
-    direction: mismatch.direction,
-    detail: mismatch.detail,
-    details: (mismatch.details ?? []) as MismatchLine[],
-  }))
-  const mismatchByOrderId = new Map<string, { direction: 'over' | 'under'; detail: string | null; details: MismatchLine[] }>()
-  for (const mismatch of invoiceMismatches ?? []) {
-    if (!mismatchByOrderId.has(mismatch.order_id)) mismatchByOrderId.set(mismatch.order_id, mismatch)
-  }
-  const invoicesWithDetails = (invoiceRows ?? []).map((invoice) => {
-    const invoiceOrder = (orders ?? []).find((order) => order.id === invoice.order_id)
-    const invoiceMismatch = mismatchByOrderId.get(invoice.order_id)
-    return {
-      ...invoice,
-      order_reference: invoiceOrder?.public_order_number ?? invoice.order_id,
-      original_count: invoiceOrder?.clothes_count_customer ?? null,
-      final_count: invoiceOrder?.clothes_count_vendor ?? null,
-      extra_amount: invoiceOrder?.billed_extra_amount ?? 0,
-      mismatch_direction: invoiceMismatch?.direction ?? null,
-      mismatch_detail: invoiceMismatch?.detail ?? null,
-      mismatch_details: invoiceMismatch?.details ?? [],
-    }
-  })
-
-  const { data: subscription } = await serverSupabase
-    .from('subscriptions')
-    .select('*')
-    .eq('customer_id', userData.user.id)
-    .eq('status', 'active')
-    .or(`end_date.is.null,end_date.gte.${new Date().toISOString().slice(0, 10)}`)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-
-  const { data: subscriptionPlan } = subscription
-    ? await serverSupabase.from('plans').select('*').eq('id', subscription.plan_id).maybeSingle()
-    : { data: null }
-  const subscriptionPlanSnapshot =
-    subscription && subscriptionPlan
-      ? {
-          ...subscriptionPlan,
-          weekly_limit: subscription.weekly_limit_snapshot,
-          covers_wash: subscription.covers_wash_snapshot,
-          covers_iron: subscription.covers_iron_snapshot,
-        }
-      : null
-  const subscriptionAllowance =
-    subscription && subscriptionPlanSnapshot
-      ? calculateSubscriptionAllowance(
-          {
-            weeklyLimit: Number(subscription.weekly_limit_snapshot),
-            startDate: subscription.start_date,
-            startAt: subscription.created_at,
-            endDate: subscription.end_date,
-            usedUnits: calculateSubscriptionUnitsApplied(orders ?? [], {
-              id: subscription.id,
-              startDate: subscription.start_date,
-              endDate: subscription.end_date,
-            }),
-          },
-          new Date(),
+  const loadCustomerData = async () => {
+    const campaignCheckTime = new Date().toISOString()
+    const [
+      { data: activeReferralCampaign, error: referralCampaignError },
+      { count: unreadNotificationCount },
+      { data: orders },
+      { data: pickupLocations },
+      { data: wallet },
+      { data: walletTransactions },
+      { data: payments, error: paymentsError },
+      { data: subscription },
+      { data: referredRows, error: referredRowsError },
+      { data: referrerRows, error: referrerRowsError },
+    ] = await Promise.all([
+      serverSupabase
+        .from('referral_campaigns')
+        .select('referrer_reward_value, referred_reward_value, minimum_order_amount')
+        .eq('status', 'active')
+        .or(`starts_at.is.null,starts_at.lte.${campaignCheckTime}`)
+        .or(`ends_at.is.null,ends_at.gt.${campaignCheckTime}`)
+        .order('starts_at', { ascending: false, nullsFirst: false })
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      serverSupabase
+        .from('notification_events')
+        .select('id', { count: 'exact', head: true })
+        .eq('customer_id', userData.user.id)
+        .is('read_at', null),
+      serverSupabase
+        .from('orders')
+        .select(
+          'id, public_order_number, customer_id, subscription_id, subscription_allowance_subscription_id, order_type, clothes_count_customer, clothes_count_vendor, subscription_units_applied, subscription_units_applied_at, status, pickup_otp, delivery_otp, pickup_location_id, notes, is_subscription_order, billed_extra_amount, picked, picked_up_date, created_at',
         )
-      : null
+        .eq('customer_id', userData.user.id)
+        .neq('status', 'cancelled')
+        .order('created_at', { ascending: false }),
+      serverSupabase.from('pickup_locations').select('id, name, address').eq('active', true).order('name'),
+      serverSupabase.from('wallets').select('*').eq('customer_id', userData.user.id).maybeSingle(),
+      serverSupabase
+        .from('wallet_transactions')
+        .select('*')
+        .eq('customer_id', userData.user.id)
+        .order('created_at', { ascending: false })
+        .limit(20),
+      serverSupabase
+        .from('payments')
+        .select('*')
+        .eq('customer_id', userData.user.id)
+        .order('created_at', { ascending: false })
+        .limit(20),
+      serverSupabase
+        .from('subscriptions')
+        .select('*')
+        .eq('customer_id', userData.user.id)
+        .eq('status', 'active')
+        .or(`end_date.is.null,end_date.gte.${new Date().toISOString().slice(0, 10)}`)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      serverSupabase
+        .from('referrals')
+        .select('id, referrer_id, referred_id, status, qualified_at, created_at')
+        .eq('referred_id', userData.user.id)
+        .order('created_at', { ascending: false }),
+      serverSupabase
+        .from('referrals')
+        .select('id, referrer_id, referred_id, status, qualified_at, created_at')
+        .eq('referrer_id', userData.user.id)
+        .order('created_at', { ascending: false }),
+    ])
 
-  const [{ data: referredRows, error: referredRowsError }, { data: referrerRows, error: referrerRowsError }] = await Promise.all([
-    serverSupabase
-      .from('referrals')
-      .select('id, referrer_id, referred_id, status, qualified_at, created_at')
-      .eq('referred_id', userData.user.id)
-      .order('created_at', { ascending: false }),
-    serverSupabase
-      .from('referrals')
-      .select('id, referrer_id, referred_id, status, qualified_at, created_at')
-      .eq('referrer_id', userData.user.id)
-      .order('created_at', { ascending: false }),
-  ])
-  if (referredRowsError || referrerRowsError) {
-    console.error('[referral] Referral history query failed', {
-      side: referredRowsError && referrerRowsError ? 'both' : referredRowsError ? 'referred' : 'referrer',
-      errorCode: referredRowsError?.code ?? referrerRowsError?.code ?? 'unknown',
-    })
-    throw new Error('Referral history could not be loaded.')
-  }
-  const referralRows = [...(referredRows ?? []), ...(referrerRows ?? [])].filter(
-    (row, index, rows) => rows.findIndex((candidate) => candidate.id === row.id) === index,
-  )
-  const referralIds = referralRows.map((row) => row.id)
-  const { data: referralRewards, error: referralRewardsError } =
-    referralIds.length > 0
-      ? await serverSupabase
-          .from('referral_rewards')
-          .select('referral_id, recipient_id, reward_value, status, expires_at')
-          .in('referral_id', referralIds)
-          .eq('recipient_id', userData.user.id)
-      : { data: [] }
-  if (referralRewardsError) {
-    console.error('[referral] Referral reward history query failed', {
-      errorCode: referralRewardsError.code ?? 'unknown',
-    })
-    throw new Error('Referral reward history could not be loaded.')
-  }
-  const persistedReferrals: CustomerReferral[] = referralRows.map((row) => {
-    const reward = (referralRewards ?? []).find((candidate) => candidate.referral_id === row.id)
-    return {
-      id: row.id,
-      status: row.status,
-      createdAt: row.created_at,
-      qualifiedAt: row.qualified_at,
-      isReferrer: row.referrer_id === userData.user.id,
-      rewardStatus: reward?.status ?? null,
-      rewardValue: reward ? Number(reward.reward_value) : null,
-      rewardExpiresAt: reward?.expires_at ?? null,
+    if (referralCampaignError) throw new Error(`Referral campaign details could not be loaded: ${referralCampaignError.message}`)
+    if (referredRowsError || referrerRowsError) {
+      console.error('[referral] Referral history query failed', {
+        side: referredRowsError && referrerRowsError ? 'both' : referredRowsError ? 'referred' : 'referrer',
+        errorCode: referredRowsError?.code ?? referrerRowsError?.code ?? 'unknown',
+      })
+      throw new Error('Referral history could not be loaded.')
     }
-  })
 
-  return data(
-    {
+    const orderIds = (orders ?? []).map((order) => order.id)
+    const referralRows = [...(referredRows ?? []), ...(referrerRows ?? [])].filter(
+      (row, index, rows) => rows.findIndex((candidate) => candidate.id === row.id) === index,
+    )
+    const referralIds = referralRows.map((row) => row.id)
+    const [
+      { data: orderItems },
+      { data: invoiceRows, error: invoiceRowsError },
+      { data: subscriptionPlan },
+      { data: referralRewards, error: referralRewardsError },
+    ] = await Promise.all([
+      orderIds.length > 0
+        ? serverSupabase
+            .from('order_items')
+            .select('id, order_id, category_id, quantity, confirmed_quantity, service, unit_price, subscription_units_snapshot')
+            .in('order_id', orderIds)
+        : Promise.resolve({ data: [] }),
+      orderIds.length > 0
+        ? serverSupabase
+            .from('invoices')
+            .select('*')
+            .in('order_id', orderIds)
+            .order('created_at', { ascending: false })
+        : Promise.resolve({ data: [], error: null }),
+      subscription ? serverSupabase.from('plans').select('*').eq('id', subscription.plan_id).maybeSingle() : Promise.resolve({ data: null }),
+      referralIds.length > 0
+        ? serverSupabase
+            .from('referral_rewards')
+            .select('referral_id, recipient_id, reward_value, status, expires_at')
+            .in('referral_id', referralIds)
+            .eq('recipient_id', userData.user.id)
+        : Promise.resolve({ data: [], error: null }),
+    ])
+
+    const categoryIds = [...new Set((orderItems ?? []).map((item) => item.category_id))]
+    const customerInvoiceOrderIds = (invoiceRows ?? []).map((invoice) => invoice.order_id)
+    const [{ data: orderCategories }, { data: invoiceMismatches }] = await Promise.all([
+      categoryIds.length > 0
+        ? serverSupabase.from('cloth_categories').select('id, name').in('id', categoryIds)
+        : Promise.resolve({ data: [] }),
+      customerInvoiceOrderIds.length > 0
+        ? serverSupabase
+            .from('mismatches')
+            .select('id, order_id, direction, detail, details, created_at')
+            .in('order_id', customerInvoiceOrderIds)
+            .order('created_at', { ascending: false })
+        : Promise.resolve({ data: [] }),
+    ])
+    const categoryNameById = new Map((orderCategories ?? []).map((category) => [category.id, category.name]))
+    const persistedOrderItems: PersistedOrderItem[] = (orderItems ?? []).map((item) => ({
+      ...item,
+      category_name: categoryNameById.get(item.category_id) ?? 'Laundry item',
+    }))
+    if (invoiceRowsError) {
+      console.error('Customer invoice details could not be loaded:', invoiceRowsError)
+    }
+    const orderMismatches = (invoiceMismatches ?? []).map((mismatch) => ({
+      id: mismatch.id,
+      order_id: mismatch.order_id,
+      direction: mismatch.direction,
+      detail: mismatch.detail,
+      details: (mismatch.details ?? []) as MismatchLine[],
+    }))
+    const mismatchByOrderId = new Map<string, { direction: 'over' | 'under'; detail: string | null; details: MismatchLine[] }>()
+    for (const mismatch of invoiceMismatches ?? []) {
+      if (!mismatchByOrderId.has(mismatch.order_id)) mismatchByOrderId.set(mismatch.order_id, mismatch)
+    }
+    const invoicesWithDetails = (invoiceRows ?? []).map((invoice) => {
+      const invoiceOrder = (orders ?? []).find((order) => order.id === invoice.order_id)
+      const invoiceMismatch = mismatchByOrderId.get(invoice.order_id)
+      return {
+        ...invoice,
+        order_reference: invoiceOrder?.public_order_number ?? invoice.order_id,
+        original_count: invoiceOrder?.clothes_count_customer ?? null,
+        final_count: invoiceOrder?.clothes_count_vendor ?? null,
+        extra_amount: invoiceOrder?.billed_extra_amount ?? 0,
+        mismatch_direction: invoiceMismatch?.direction ?? null,
+        mismatch_detail: invoiceMismatch?.detail ?? null,
+        mismatch_details: invoiceMismatch?.details ?? [],
+      }
+    })
+
+    const subscriptionPlanSnapshot =
+      subscription && subscriptionPlan
+        ? {
+            ...subscriptionPlan,
+            weekly_limit: subscription.weekly_limit_snapshot,
+            covers_wash: subscription.covers_wash_snapshot,
+            covers_iron: subscription.covers_iron_snapshot,
+          }
+        : null
+    const subscriptionAllowance =
+      subscription && subscriptionPlanSnapshot
+        ? calculateSubscriptionAllowance(
+            {
+              weeklyLimit: Number(subscription.weekly_limit_snapshot),
+              startDate: subscription.start_date,
+              startAt: subscription.created_at,
+              endDate: subscription.end_date,
+              usedUnits: calculateSubscriptionUnitsApplied(orders ?? [], {
+                id: subscription.id,
+                startDate: subscription.start_date,
+                endDate: subscription.end_date,
+              }),
+            },
+            new Date(),
+          )
+        : null
+
+    if (referralRewardsError) {
+      console.error('[referral] Referral reward history query failed', {
+        errorCode: referralRewardsError.code ?? 'unknown',
+      })
+      throw new Error('Referral reward history could not be loaded.')
+    }
+    const persistedReferrals: CustomerReferral[] = referralRows.map((row) => {
+      const reward = (referralRewards ?? []).find((candidate) => candidate.referral_id === row.id)
+      return {
+        id: row.id,
+        status: row.status,
+        createdAt: row.created_at,
+        qualifiedAt: row.qualified_at,
+        isReferrer: row.referrer_id === userData.user.id,
+        rewardStatus: reward?.status ?? null,
+        rewardValue: reward ? Number(reward.reward_value) : null,
+        rewardExpiresAt: reward?.expires_at ?? null,
+      }
+    })
+
+    return {
       user: userData.user,
       profile,
       orders: orders ?? [],
-      unpaidInvoiceOrderIds: (orderInvoices ?? []).filter((invoice) => invoice.status === 'unpaid').map((invoice) => invoice.order_id),
-      invoiceAmountsByOrderId: Object.fromEntries((orderInvoices ?? []).map((invoice) => [invoice.order_id, Number(invoice.amount)])),
+      unpaidInvoiceOrderIds: (invoiceRows ?? []).filter((invoice) => invoice.status === 'unpaid').map((invoice) => invoice.order_id),
+      invoiceAmountsByOrderId: Object.fromEntries((invoiceRows ?? []).map((invoice) => [invoice.order_id, Number(invoice.amount)])),
       pickupLocations: pickupLocations ?? [],
       orderItems: persistedOrderItems,
       subscriptionAllowance,
@@ -310,9 +323,90 @@ export async function loader({ request }: Route.LoaderArgs) {
             minimumOrderAmount: Number(activeReferralCampaign.minimum_order_amount),
           }
         : null,
-    },
-    { headers },
-  )
+    }
+  }
+
+  const requestUrl = new URL(request.url)
+  const isCustomerDataRequest = requestUrl.searchParams.get('customerData') === '1'
+  const customerDataRequestId = isCustomerDataRequest ? requestUrl.searchParams.get('requestId') : null
+
+  if (!isCustomerDataRequest) {
+    return data(
+      {
+        user: userData.user,
+        profile,
+        orders: [],
+        unpaidInvoiceOrderIds: [],
+        invoiceAmountsByOrderId: {},
+        pickupLocations: [],
+        orderItems: [],
+        subscriptionAllowance: null,
+        wallet: null,
+        walletTransactions: [],
+        payments: [],
+        transactionError: null,
+        invoices: [],
+        orderMismatches: [],
+        unreadNotificationCount: 0,
+        subscription: null,
+        subscriptionPlan: null,
+        persistedReferrals: [],
+        referralCampaignBenefit: null,
+        customerDataLoading: true,
+        customerDataRequestId: crypto.randomUUID(),
+        customerDataError: null,
+      },
+      { headers },
+    )
+  }
+
+  try {
+    const loadedCustomerData = await loadCustomerData()
+    return data(
+      {
+        ...loadedCustomerData,
+        customerDataLoading: false,
+        customerDataRequestId: customerDataRequestId,
+        customerDataError: null,
+      },
+      { headers },
+    )
+  } catch (error) {
+    if (!isCustomerDataRequest) throw error
+    console.error('Customer portal data could not be loaded:', error)
+    return data(
+      {
+        user: userData.user,
+        profile,
+        orders: [],
+        unpaidInvoiceOrderIds: [],
+        invoiceAmountsByOrderId: {},
+        pickupLocations: [],
+        orderItems: [],
+        subscriptionAllowance: null,
+        wallet: null,
+        walletTransactions: [],
+        payments: [],
+        transactionError: null,
+        invoices: [],
+        orderMismatches: [],
+        unreadNotificationCount: 0,
+        subscription: null,
+        subscriptionPlan: null,
+        persistedReferrals: [],
+        referralCampaignBenefit: null,
+        customerDataLoading: false,
+        customerDataRequestId: customerDataRequestId,
+        customerDataError: 'Your account data could not be loaded. Please try again.',
+      },
+      { headers, status: 500 },
+    )
+  }
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export async function loader({ request }: LoaderFunctionArgs) {
+  return loadCustomerLayoutData(request)
 }
 
 function PlanSummary({ onNavigate }: { onNavigate?: () => void }) {
@@ -323,6 +417,8 @@ function PlanSummary({ onNavigate }: { onNavigate?: () => void }) {
     subscriptionAvailableUnits,
     subscriptionBorrowedUnits,
     subscriptionNextBalanceAfterCredit,
+    isDataLoading,
+    dataLoadError,
   } = useCustomerStore()
   const displayedAvailableUnits = Math.max(0, subscriptionAvailableUnits ?? 0)
   const balancePercent = activePlan ? Math.min(100, Math.round((displayedAvailableUnits / activePlan.weekly_limit) * 100)) : 0
@@ -342,29 +438,44 @@ function PlanSummary({ onNavigate }: { onNavigate?: () => void }) {
       className="mt-auto block rounded-2xl border border-[#a7d7d2] bg-[#eef9f7] p-3.5 transition hover:border-[#78beb7] hover:bg-[#e4f5f2] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#00b7d4]"
     >
       <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-[#418d87]">Current plan</p>
-      <p className="mt-2 text-sm font-semibold capitalize text-slate-800">
-        {activePlan && subscription ? `${subscription.name} ${subscription.billingPeriod}` : 'No active plan'}
-      </p>
-      {activePlan && <p className="mt-1 text-xs text-slate-500">Covers: {coverageLabel}</p>}
+      {isDataLoading ? (
+        <CustomerInlineSkeleton className="mt-2 w-32 bg-[#d3ebe8]" />
+      ) : (
+        <p className="mt-2 text-sm font-semibold capitalize text-slate-800">
+          {dataLoadError
+            ? 'Plan unavailable'
+            : activePlan && subscription
+              ? `${subscription.name} ${subscription.billingPeriod}`
+              : 'No active plan'}
+        </p>
+      )}
+      {!isDataLoading && !dataLoadError && activePlan && <p className="mt-1 text-xs text-slate-500">Covers: {coverageLabel}</p>}
       {subscriptionBalance < 0 && (
         <p className="mt-1 text-xs text-brand-primary">Subscription debt: ₦{Math.abs(subscriptionBalance).toLocaleString()}</p>
       )}
-      {activePlan && (
+      {!isDataLoading && !dataLoadError && activePlan && (
         <p className="mt-2 text-xs text-slate-600">
           {displayedAvailableUnits} units available · {activePlan.weekly_limit} added weekly
         </p>
       )}
-      {subscriptionBorrowedUnits > 0 && (
+      {!isDataLoading && !dataLoadError && subscriptionBorrowedUnits > 0 && (
         <p className="mt-1 text-xs text-amber-700">
           {subscriptionBorrowedUnits} units borrowed
-          {subscriptionNextBalanceAfterCredit !== null
-            ? ` · ${subscriptionNextBalanceAfterCredit} expected after the next allowance`
-            : ''}
+          {subscriptionNextBalanceAfterCredit !== null ? ` · ${subscriptionNextBalanceAfterCredit} expected after the next allowance` : ''}
         </p>
       )}
-      <div className="mt-3 h-1.5 overflow-hidden bg-[#d3ebe8]" aria-label={`${balancePercent}% of the weekly allowance is available`}>
-        <div className="h-full bg-[#55aaa3] transition-[width] duration-500" style={{ width: `${balancePercent}%` }} />
-      </div>
+      {!dataLoadError && (
+        <div
+          className="mt-3 h-1.5 overflow-hidden bg-[#d3ebe8]"
+          aria-label={isDataLoading ? 'Loading weekly allowance' : `${balancePercent}% of the weekly allowance is available`}
+        >
+          {isDataLoading ? (
+            <div className="h-full w-1/2 animate-pulse bg-[#b8dcd8]" />
+          ) : (
+            <div className="h-full bg-[#55aaa3] transition-[width] duration-500" style={{ width: `${balancePercent}%` }} />
+          )}
+        </div>
+      )}
     </NavLink>
   )
 }
@@ -378,9 +489,42 @@ export default function CustomerLayout() {
   const navigate = useNavigate()
   const loaderData = useLoaderData<typeof loader>()
   const { revalidate } = useRevalidator()
+  const customerDataFetcher = useFetcher<typeof loader>()
+  const customerDataRequestId = loaderData?.customerDataRequestId
+  const shouldLoadCustomerData = Boolean(loaderData?.customerDataLoading)
+  const loadCustomerData = customerDataFetcher.load
+  const fetcherData = customerDataFetcher.data
+  const [startedCustomerDataRequestId, setStartedCustomerDataRequestId] = useState<string | null>(null)
+  useEffect(() => {
+    if (!shouldLoadCustomerData || !customerDataRequestId) return
+    if (fetcherData?.customerDataRequestId === customerDataRequestId && fetcherData.customerDataLoading === false) return
+    loadCustomerData(`/?index&customerData=1&requestId=${encodeURIComponent(customerDataRequestId)}`)
+  }, [shouldLoadCustomerData, customerDataRequestId, fetcherData, loadCustomerData])
+  useEffect(() => {
+    if (customerDataFetcher.state === 'idle' || !customerDataRequestId) return
+    const timer = window.setTimeout(() => setStartedCustomerDataRequestId(customerDataRequestId), 0)
+    return () => window.clearTimeout(timer)
+  }, [customerDataFetcher.state, customerDataRequestId])
+  const loadedCustomerData =
+    fetcherData && fetcherData.customerDataRequestId === customerDataRequestId && fetcherData.customerDataLoading === false
+      ? fetcherData
+      : null
+  const customerData = shouldLoadCustomerData ? (loadedCustomerData ?? loaderData) : loaderData
+  const customerDataRequestFailed =
+    shouldLoadCustomerData &&
+    startedCustomerDataRequestId === customerDataRequestId &&
+    customerDataFetcher.state === 'idle' &&
+    !loadedCustomerData
+  const isCustomerDataLoading =
+    shouldLoadCustomerData && !loadedCustomerData && !loaderData?.customerDataError && !customerDataRequestFailed
+  const customerDataError = shouldLoadCustomerData
+    ? (loadedCustomerData?.customerDataError ??
+      loaderData?.customerDataError ??
+      (customerDataRequestFailed ? 'Your account data could not be loaded. Please try again.' : null))
+    : null
   const referralCode = loaderData?.profile?.referral_code ?? null
   const [showReferralModal, setShowReferralModal] = useState(false)
-  const unreadNotificationCount = loaderData?.unreadNotificationCount ?? 0
+  const unreadNotificationCount = customerData?.unreadNotificationCount ?? 0
   const dismissReferralModal = () => {
     if (referralCode && typeof window !== 'undefined') {
       window.localStorage.setItem(`qaffy-referral-modal:${referralCode}`, '1')
@@ -498,26 +642,26 @@ export default function CustomerLayout() {
 
   return (
     <CustomerStoreProvider
-      key={`${loaderData?.profile?.id ?? 'customer'}:${loaderData?.profile?.name ?? ''}:${loaderData?.profile?.phone ?? ''}:${loaderData?.profile?.referral_code ?? ''}:${loaderData?.profile?.pickup_location_id ?? ''}:${loaderData?.wallet?.updated_at ?? 'no-wallet'}:${loaderData?.subscription?.id ?? 'no-subscription'}:${loaderData?.subscription?.end_date ?? ''}:${(loaderData?.orders ?? []).map((order) => `${order.id}-${order.status}-${order.pickup_otp ?? ''}-${order.delivery_otp ?? ''}-${order.clothes_count_vendor ?? ''}`).join('|')}:${(loaderData?.payments ?? []).map((payment) => `${payment.id}-${payment.status}`).join('|')}:${(loaderData?.invoices ?? []).map((invoice) => `${invoice.id}-${invoice.payment_method ?? ''}-${invoice.paid_at ?? ''}`).join('|')}:${(loaderData?.persistedReferrals ?? []).map((referral) => `${referral.id}-${referral.status}-${referral.rewardStatus ?? ''}`).join('|')}`}
+      key={`${customerData?.profile?.id ?? 'customer'}:${customerData?.profile?.name ?? ''}:${customerData?.profile?.phone ?? ''}:${customerData?.profile?.referral_code ?? ''}:${customerData?.profile?.pickup_location_id ?? ''}:${customerData?.wallet?.updated_at ?? 'no-wallet'}:${customerData?.subscription?.id ?? 'no-subscription'}:${customerData?.subscription?.end_date ?? ''}:${(customerData?.orders ?? []).map((order) => `${order.id}-${order.status}-${order.pickup_otp ?? ''}-${order.delivery_otp ?? ''}-${order.clothes_count_vendor ?? ''}`).join('|')}:${(customerData?.payments ?? []).map((payment) => `${payment.id}-${payment.status}`).join('|')}:${(customerData?.invoices ?? []).map((invoice) => `${invoice.id}-${invoice.payment_method ?? ''}-${invoice.paid_at ?? ''}`).join('|')}:${(customerData?.persistedReferrals ?? []).map((referral) => `${referral.id}-${referral.status}-${referral.rewardStatus ?? ''}`).join('|')}`}
       profile={loaderData?.profile ?? undefined}
-      persistedOrders={loaderData ? (loaderData.orders as Order[]) : undefined}
-      persistedUnpaidInvoiceOrderIds={loaderData?.unpaidInvoiceOrderIds as string[] | undefined}
-      invoiceAmountsByOrderId={loaderData?.invoiceAmountsByOrderId as Record<string, number> | undefined}
-      persistedPickupLocations={loaderData ? (loaderData.pickupLocations as PickupLocationOption[]) : undefined}
-      persistedOrderItems={loaderData ? (loaderData.orderItems as PersistedOrderItem[]) : undefined}
+      persistedOrders={customerData ? (customerData.orders as Order[]) : undefined}
+      persistedUnpaidInvoiceOrderIds={customerData?.unpaidInvoiceOrderIds as string[] | undefined}
+      invoiceAmountsByOrderId={customerData?.invoiceAmountsByOrderId as Record<string, number> | undefined}
+      persistedPickupLocations={customerData ? (customerData.pickupLocations as PickupLocationOption[]) : undefined}
+      persistedOrderItems={customerData ? (customerData.orderItems as PersistedOrderItem[]) : undefined}
       persistedOrderMismatches={
-        loaderData?.orderMismatches as
+        customerData?.orderMismatches as
           Array<{ id: string; order_id: string; direction: 'over' | 'under'; detail: string | null; details: MismatchLine[] }> | undefined
       }
-      persistedSubscriptionAllowance={loaderData?.subscriptionAllowance}
-      persistedWallet={loaderData?.wallet as Wallet | null | undefined}
-      persistedWalletTransactions={loaderData?.walletTransactions as WalletTransaction[] | undefined}
-      persistedPayments={loaderData?.payments as Payment[] | undefined}
-      persistedReferrals={loaderData?.persistedReferrals as CustomerReferral[] | undefined}
-      referralCampaignBenefit={loaderData?.referralCampaignBenefit}
-      persistedTransactionError={loaderData?.transactionError as string | null | undefined}
+      persistedSubscriptionAllowance={customerData?.subscriptionAllowance}
+      persistedWallet={customerData?.wallet as Wallet | null | undefined}
+      persistedWalletTransactions={customerData?.walletTransactions as WalletTransaction[] | undefined}
+      persistedPayments={customerData?.payments as Payment[] | undefined}
+      persistedReferrals={customerData?.persistedReferrals as CustomerReferral[] | undefined}
+      referralCampaignBenefit={customerData?.referralCampaignBenefit}
+      persistedTransactionError={customerData?.transactionError as string | null | undefined}
       persistedInvoices={
-        loaderData?.invoices as
+        customerData?.invoices as
           | Array<
               Invoice & {
                 order_reference?: string
@@ -532,10 +676,12 @@ export default function CustomerLayout() {
           | undefined
       }
       persistedSubscription={
-        loaderData?.subscription && loaderData.subscriptionPlan
-          ? { subscription: loaderData.subscription as Subscription, plan: loaderData.subscriptionPlan as Plan }
+        customerData?.subscription && customerData.subscriptionPlan
+          ? { subscription: customerData.subscription as Subscription, plan: customerData.subscriptionPlan as Plan }
           : null
       }
+      isDataLoading={isCustomerDataLoading}
+      dataLoadError={customerDataError}
     >
       {showReferralModal && referralCode && (
         <div className="referral-modal-backdrop fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/45 p-4 backdrop-blur-[2px]">
@@ -809,6 +955,17 @@ export default function CustomerLayout() {
               </div>
             </div>
             <main className="mx-auto w-full max-w-300 px-4 pb-8 pt-5 sm:px-6 sm:pt-6 lg:pb-10 lg:pt-5">
+              {customerDataError && location.pathname !== '/' && (
+                <div
+                  role="alert"
+                  className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700"
+                >
+                  <span>{customerDataError}</span>
+                  <button type="button" onClick={() => revalidate()} className="rounded-lg border border-red-300 px-3 py-1.5 font-semibold">
+                    Retry
+                  </button>
+                </div>
+              )}
               <Outlet />
             </main>
           </div>

@@ -9,6 +9,7 @@ import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../li
 import { toast } from '../../../lib/toast'
 import type { Plan } from '../../../types/database.types'
 import { getSpendableWalletBalance, purchaseSubscriptionWithWallet } from '../../../lib/wallet.server'
+import { CustomerSectionSkeleton } from '../../../components/customer/CustomerDataSkeleton'
 
 type BillingPeriod = 'monthly' | 'semester'
 
@@ -24,11 +25,14 @@ type CustomerPlan = {
   featured: boolean
 }
 
-type PlansData = { plans: CustomerPlan[]; loadError: boolean }
+type PlansData = { plans: CustomerPlan[]; loadError: boolean; loading: boolean }
 
 // eslint-disable-next-line react-refresh/only-export-components
 export async function loader({ request }: Route.LoaderArgs) {
-  if (!isSupabaseServerConfigured) return data<PlansData>({ plans: [], loadError: false }, { status: 200 })
+  if (new URL(request.url).searchParams.get('plansData') !== '1') {
+    return data<PlansData>({ plans: [], loadError: false, loading: true }, { status: 200 })
+  }
+  if (!isSupabaseServerConfigured) return data<PlansData>({ plans: [], loadError: true, loading: false }, { status: 200 })
   const { supabase, headers } = getSupabaseServerClient(request)
   try {
     const { data: rows, error } = await supabase
@@ -38,7 +42,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       .order('price')
     if (error) {
       console.error('[customer-plans] Could not load plans', error)
-      return data<PlansData>({ plans: [], loadError: true }, { headers, status: 200 })
+      return data<PlansData>({ plans: [], loadError: true, loading: false }, { headers, status: 200 })
     }
     return data<PlansData>(
       {
@@ -54,12 +58,13 @@ export async function loader({ request }: Route.LoaderArgs) {
           featured: index === 1,
         })),
         loadError: false,
+        loading: false,
       },
       { headers, status: 200 },
     )
   } catch (error) {
     console.error('[customer-plans] Could not load plans', error)
-    return data<PlansData>({ plans: [], loadError: true }, { headers, status: 200 })
+    return data<PlansData>({ plans: [], loadError: true, loading: false }, { headers, status: 200 })
   }
 }
 
@@ -186,17 +191,39 @@ function formatPrice(price: number) {
 }
 
 export default function Plans() {
-  const { plans, loadError } = useLoaderData<typeof loader>()
+  const loaderData = useLoaderData<typeof loader>()
+  const plansFetcher = useFetcher<typeof loader>()
+  const loadPlans = plansFetcher.load
+  const plans = plansFetcher.data?.loading === false ? plansFetcher.data.plans : loaderData.plans
+  const loadError = plansFetcher.data?.loading === false ? plansFetcher.data.loadError : loaderData.loadError
+  const [plansRequestStarted, setPlansRequestStarted] = useState(false)
+  const [plansRequestObserved, setPlansRequestObserved] = useState(false)
+  const isPlansLoading =
+    loaderData.loading &&
+    plansFetcher.data?.loading !== false &&
+    !(plansRequestObserved && plansFetcher.state === 'idle' && !plansFetcher.data)
   const {
     activePlan,
     subscriptionEndDate,
     subscriptionAvailableUnits,
     subscriptionBorrowedUnits,
     subscriptionNextBalanceAfterCredit,
+    isDataLoading,
   } = useCustomerStore()
   const fetcher = useFetcher<typeof action>()
   const revalidator = useRevalidator()
   const location = useLocation()
+  useEffect(() => {
+    if (!loaderData.loading || isDataLoading || plansRequestStarted || plansFetcher.state !== 'idle') return
+    const timer = window.setTimeout(() => setPlansRequestStarted(true), 0)
+    loadPlans('/plans?plansData=1')
+    return () => window.clearTimeout(timer)
+  }, [loaderData.loading, isDataLoading, plansRequestStarted, plansFetcher.state, loadPlans])
+  useEffect(() => {
+    if (plansFetcher.state === 'idle') return
+    const timer = window.setTimeout(() => setPlansRequestObserved(true), 0)
+    return () => window.clearTimeout(timer)
+  }, [plansFetcher.state])
   const [lastSuccessfulPlans, setLastSuccessfulPlans] = useState(plans)
   if (!loadError && lastSuccessfulPlans !== plans) setLastSuccessfulPlans(plans)
   const availablePlans = loadError ? lastSuccessfulPlans : plans
@@ -205,7 +232,13 @@ export default function Plans() {
   )
   const [isPaymentChoiceDismissed, setIsPaymentChoiceDismissed] = useState(false)
   const [latestPaymentRequestId, setLatestPaymentRequestId] = useState<string | null>(null)
-  const visiblePlans = availablePlans.filter((plan) => plan.billingPeriod === billingPeriod)
+  const displayedBillingPeriod =
+    availablePlans.length > 0 && !availablePlans.some((plan) => plan.billingPeriod === billingPeriod)
+      ? availablePlans.some((plan) => plan.billingPeriod === 'semester')
+        ? 'semester'
+        : 'monthly'
+      : billingPeriod
+  const visiblePlans = availablePlans.filter((plan) => plan.billingPeriod === displayedBillingPeriod)
   const currentPlan = activePlan
     ? {
         id: activePlan.id,
@@ -314,6 +347,7 @@ export default function Plans() {
                     : ''}
                 </p>
               )}
+              {!currentPlan && isDataLoading && <CustomerSectionSkeleton rows={3} />}
             </div>
             <div className="text-left sm:text-right">
               <p className="text-sm font-semibold text-slate-900">
@@ -344,9 +378,9 @@ export default function Plans() {
               key={period}
               type="button"
               role="tab"
-              aria-selected={billingPeriod === period}
+              aria-selected={displayedBillingPeriod === period}
               onClick={() => setBillingPeriod(period)}
-              className={`rounded-2xl px-4 py-2 text-sm font-semibold capitalize transition ${billingPeriod === period ? 'bg-brand-soft text-brand-strong' : 'text-slate-500 hover:text-slate-900'}`}
+              className={`rounded-2xl px-4 py-2 text-sm font-semibold capitalize transition ${displayedBillingPeriod === period ? 'bg-brand-soft text-brand-strong' : 'text-slate-500 hover:text-slate-900'}`}
             >
               {period}
             </button>
@@ -354,7 +388,7 @@ export default function Plans() {
         </div>
       </section>
 
-      {loadError && (
+      {(loadError || (plansRequestObserved && plansFetcher.state === 'idle' && !plansFetcher.data)) && (
         <RecoverableError
           title={availablePlans.length > 0 ? 'Couldn’t refresh plans' : 'Couldn’t load plans'}
           description={
@@ -362,13 +396,19 @@ export default function Plans() {
               ? 'Showing the plans loaded earlier. Try again to check for updates.'
               : 'Please check your connection and try again.'
           }
-          onRetry={() => revalidator.revalidate()}
-          retrying={revalidator.state !== 'idle'}
+          onRetry={() => {
+            setPlansRequestStarted(true)
+            setPlansRequestObserved(false)
+            loadPlans('/plans?plansData=1')
+          }}
+          retrying={plansFetcher.state !== 'idle'}
         />
       )}
 
       <section className="grid gap-4 xl:grid-cols-3">
-        {visiblePlans.length === 0 ? (
+        {isPlansLoading ? (
+          Array.from({ length: 3 }, (_, index) => <CustomerSectionSkeleton key={index} rows={4} />)
+        ) : visiblePlans.length === 0 ? (
           loadError && availablePlans.length === 0 ? null : (
             <div className="col-span-full rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
               <p className="text-sm font-semibold text-slate-700">No {billingPeriod} plans are available yet.</p>

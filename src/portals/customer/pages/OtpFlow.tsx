@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import ProtectedOtp from '../../../components/ProtectedOtp'
 import { useCustomerStore } from '../customer-store-hook'
+import { CustomerInlineSkeleton, CustomerSectionSkeleton } from '../../../components/customer/CustomerDataSkeleton'
 
 export default function OtpFlow() {
-  const { orders } = useCustomerStore()
+  const { orders, isDataLoading, dataLoadError } = useCustomerStore()
   const [activeStep, setActiveStep] = useState(0)
   const activeOrders = orders.filter((candidate) => candidate.status !== 'Delivered')
   const [selectedOrderId, setSelectedOrderId] = useState(activeOrders[0]?.id ?? '')
@@ -20,8 +21,9 @@ export default function OtpFlow() {
   ]
 
   const currentStep = otpSteps[activeStep]
-  const unavailableMessage =
-    activeStep === 0
+  const unavailableMessage = dataLoadError
+    ? 'Order information unavailable'
+    : activeStep === 0
       ? order?.pickedUp
         ? 'Picked up'
         : 'Not ready'
@@ -38,11 +40,19 @@ export default function OtpFlow() {
           <h2 className="mt-1 text-2xl font-bold tracking-tight text-[#121212] lg:hidden">Pickup and delivery OTP</h2>
         </div>
         <span className="rounded-full bg-sky-50 px-3 py-1.5 text-sm font-medium text-sky-700">
-          {order?.publicOrderNumber ?? 'No active order'}
+          {isDataLoading ? (
+            <CustomerInlineSkeleton className="w-24 bg-sky-100" />
+          ) : dataLoadError ? (
+            'Unavailable'
+          ) : (
+            (order?.publicOrderNumber ?? 'No active order')
+          )}
         </span>
       </header>
 
-      {activeOrders.length > 0 && (
+      {isDataLoading ? (
+        <CustomerSectionSkeleton rows={2} />
+      ) : activeOrders.length > 0 ? (
         <section className="rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-100 sm:p-5">
           <label className="block">
             <span className="mb-1.5 block text-sm font-medium text-slate-600">Active order</span>
@@ -62,45 +72,51 @@ export default function OtpFlow() {
             </select>
           </label>
         </section>
-      )}
+      ) : null}
 
-      {activeOrders.length === 0 && (
+      {!isDataLoading && !dataLoadError && activeOrders.length === 0 && (
         <section className="rounded-[26px] border border-slate-200 bg-white p-5 shadow-sm shadow-slate-100">
           <p className="text-sm text-slate-500">No active orders have OTPs available.</p>
         </section>
       )}
 
-      <section className="rounded-[28px] bg-gradient-to-br from-brand-primary via-brand-primary to-brand-primary-hover p-4 text-white shadow-lg shadow-brand-border sm:p-6">
-        <div className="flex min-w-0 flex-col items-start justify-between gap-3 sm:flex-row sm:gap-4">
-          <div className="w-full min-w-0">
-            <p className="text-xs font-medium capitalize tracking-[0.18em] text-white/80">Current code</p>
-            <div className="mt-3">
-              {currentStep.value ? (
-                <ProtectedOtp
-                  value={currentStep.value}
-                  className="gap-2 sm:gap-3"
-                  digitClassName="h-12 w-12 rounded-md border-2 text-xl sm:h-14 sm:w-14 sm:text-2xl"
-                  containerClassName="inline-block"
-                />
-              ) : (
-                <p className="max-w-md rounded-xl border border-white/20 bg-white/10 p-3 text-sm font-medium text-white">
-                  {unavailableMessage}
-                </p>
-              )}
-            </div>
-          </div>
-          <button
-            type="button"
-            disabled={!currentStep.value}
-            onClick={() => currentStep.value && navigator.clipboard?.writeText(currentStep.value)}
-            className="shrink-0 self-start rounded-2xl bg-white/10 px-3 py-2 text-sm font-medium text-white backdrop-blur-sm disabled:cursor-not-allowed disabled:opacity-50 sm:self-auto"
-          >
-            Copy
-          </button>
+      {isDataLoading ? (
+        <div className="rounded-[28px] bg-gradient-to-br from-brand-primary via-brand-primary to-brand-primary-hover p-4 shadow-lg shadow-brand-border sm:p-6">
+          <CustomerSectionSkeleton rows={3} />
         </div>
+      ) : (
+        <section className="rounded-[28px] bg-gradient-to-br from-brand-primary via-brand-primary to-brand-primary-hover p-4 text-white shadow-lg shadow-brand-border sm:p-6">
+          <div className="flex min-w-0 flex-col items-start justify-between gap-3 sm:flex-row sm:gap-4">
+            <div className="w-full min-w-0">
+              <p className="text-xs font-medium capitalize tracking-[0.18em] text-white/80">Current code</p>
+              <div className="mt-3">
+                {currentStep.value ? (
+                  <ProtectedOtp
+                    value={currentStep.value}
+                    className="gap-2 sm:gap-3"
+                    digitClassName="h-12 w-12 rounded-md border-2 text-xl sm:h-14 sm:w-14 sm:text-2xl"
+                    containerClassName="inline-block"
+                  />
+                ) : (
+                  <p className="max-w-md rounded-xl border border-white/20 bg-white/10 p-3 text-sm font-medium text-white">
+                    {unavailableMessage}
+                  </p>
+                )}
+              </div>
+            </div>
+            <button
+              type="button"
+              disabled={!currentStep.value}
+              onClick={() => currentStep.value && navigator.clipboard?.writeText(currentStep.value)}
+              className="shrink-0 self-start rounded-2xl bg-white/10 px-3 py-2 text-sm font-medium text-white backdrop-blur-sm disabled:cursor-not-allowed disabled:opacity-50 sm:self-auto"
+            >
+              Copy
+            </button>
+          </div>
 
-        <p className="mt-4 text-sm text-white/80">{currentStep.detail}</p>
-      </section>
+          <p className="mt-4 text-sm text-white/80">{currentStep.detail}</p>
+        </section>
+      )}
 
       <section className="rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-100 sm:p-5">
         <div className="flex gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
@@ -136,11 +152,13 @@ export default function OtpFlow() {
           <div className="mt-5 grid gap-3 sm:grid-cols-2">
             <div className="rounded-2xl border border-slate-200 bg-white p-3">
               <p className="text-xs text-slate-500">Bag count</p>
-              <p className="mt-2 text-xl font-bold text-slate-900">{order?.items ?? 0} clothes</p>
+              <p className="mt-2 text-xl font-bold text-slate-900">{dataLoadError ? 'Unavailable' : `${order?.items ?? 0} clothes`}</p>
             </div>
             <div className="rounded-2xl border border-slate-200 bg-white p-3">
               <p className="text-xs text-slate-500">Service</p>
-              <p className="mt-2 text-xl font-bold text-slate-900">{order?.service ?? 'No active order'}</p>
+              <p className="mt-2 text-xl font-bold text-slate-900">
+                {dataLoadError ? 'Unavailable' : (order?.service ?? 'No active order')}
+              </p>
             </div>
           </div>
         </div>

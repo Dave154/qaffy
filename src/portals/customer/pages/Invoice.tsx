@@ -6,6 +6,7 @@ import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../li
 import { useCustomerStore } from '../customer-store-hook'
 import { InsufficientBalanceError, payFromWallet } from '../../../lib/wallet.server'
 import { sendCustomerNotification, walletInvoicePaidNotification } from '../../../lib/notifications.server'
+import { CustomerSectionSkeleton } from '../../../components/customer/CustomerDataSkeleton'
 
 // eslint-disable-next-line react-refresh/only-export-components
 export async function action({ request }: Route.ActionArgs) {
@@ -38,10 +39,26 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function Invoice() {
-  const { invoices, orders } = useCustomerStore()
+  const { invoices, orders, isDataLoading, dataLoadError } = useCustomerStore()
   const [selectedInvoiceId, setSelectedInvoiceId] = useState(invoices[0]?.id ?? '')
   const invoice = invoices.find((item) => item.id === selectedInvoiceId) ?? invoices[0] ?? null
-  const selectedOrder = invoice ? orders.find((order) => order.id === invoice.orderId) ?? null : null
+  const selectedOrder = invoice ? (orders.find((order) => order.id === invoice.orderId) ?? null) : null
+  if (!invoice && (isDataLoading || dataLoadError)) {
+    return (
+      <div className="space-y-5 pb-8">
+        <header className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+          <h2 className="mt-1 text-2xl font-bold tracking-tight text-[#121212] lg:hidden">Invoice</h2>
+        </header>
+        {isDataLoading ? (
+          <CustomerSectionSkeleton rows={5} />
+        ) : (
+          <section className="rounded-[26px] border border-slate-200 bg-white p-5 shadow-sm shadow-slate-100">
+            <p className="text-sm text-slate-500">Invoice details are unavailable.</p>
+          </section>
+        )}
+      </div>
+    )
+  }
   if (!invoice) {
     return (
       <div className="space-y-5 pb-8">
@@ -136,37 +153,49 @@ export default function Invoice() {
             <table className="w-full min-w-[620px] text-left text-sm">
               <thead className="border-b border-slate-200 bg-slate-50 text-xs font-semibold text-slate-500">
                 <tr>
-                  <th scope="col" className="px-4 py-3">Item</th>
-                  <th scope="col" className="px-4 py-3 text-right">Quantity</th>
-                  <th scope="col" className="px-4 py-3 text-right">Unit rate</th>
-                  <th scope="col" className="px-4 py-3 text-right">Amount</th>
+                  <th scope="col" className="px-4 py-3">
+                    Item
+                  </th>
+                  <th scope="col" className="px-4 py-3 text-right">
+                    Quantity
+                  </th>
+                  <th scope="col" className="px-4 py-3 text-right">
+                    Unit rate
+                  </th>
+                  <th scope="col" className="px-4 py-3 text-right">
+                    Amount
+                  </th>
                 </tr>
               </thead>
-            {invoiceItems.length > 0 ? (
-              <tbody className="divide-y divide-slate-100">
-                {invoiceItems.map((item, index) => (
-                  <tr key={`${item.label}-${item.service}-${index}`}>
-                    <th scope="row" className="px-4 py-3 font-semibold text-slate-900">
-                      <span className="block">{item.label}</span>
-                      <span className="mt-0.5 block text-xs font-normal text-slate-500">{item.service}</span>
-                    </th>
-                    <td className="px-4 py-3 text-right text-slate-600">{item.quantity}</td>
-                    <td className="px-4 py-3 text-right text-slate-600">₦{item.unitPrice.toLocaleString()}</td>
-                    <td className="px-4 py-3 text-right font-semibold text-slate-900">₦{item.amount.toLocaleString()}</td>
-                  </tr>
-                ))}
-              </tbody>
-            ) : (
-              <tbody className="divide-y divide-slate-100">
-                {invoice.items.map((item) => (
-                  <tr key={item.label}>
-                    <th scope="row" className="px-4 py-3 font-semibold text-slate-900">{item.label}</th>
-                    <td className="px-4 py-3 text-right text-slate-600" colSpan={2}>{item.quantity}</td>
-                    <td className="px-4 py-3 text-right font-semibold text-slate-900">₦{item.amount.toLocaleString()}</td>
-                  </tr>
-                ))}
-              </tbody>
-            )}
+              {invoiceItems.length > 0 ? (
+                <tbody className="divide-y divide-slate-100">
+                  {invoiceItems.map((item, index) => (
+                    <tr key={`${item.label}-${item.service}-${index}`}>
+                      <th scope="row" className="px-4 py-3 font-semibold text-slate-900">
+                        <span className="block">{item.label}</span>
+                        <span className="mt-0.5 block text-xs font-normal text-slate-500">{item.service}</span>
+                      </th>
+                      <td className="px-4 py-3 text-right text-slate-600">{item.quantity}</td>
+                      <td className="px-4 py-3 text-right text-slate-600">₦{item.unitPrice.toLocaleString()}</td>
+                      <td className="px-4 py-3 text-right font-semibold text-slate-900">₦{item.amount.toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              ) : (
+                <tbody className="divide-y divide-slate-100">
+                  {invoice.items.map((item) => (
+                    <tr key={item.label}>
+                      <th scope="row" className="px-4 py-3 font-semibold text-slate-900">
+                        {item.label}
+                      </th>
+                      <td className="px-4 py-3 text-right text-slate-600" colSpan={2}>
+                        {item.quantity}
+                      </td>
+                      <td className="px-4 py-3 text-right font-semibold text-slate-900">₦{item.amount.toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              )}
             </table>
             {selectedOrder?.isSubscriptionOrder && invoiceItems.length > 0 && pricingAdjustment !== 0 && (
               <div className="flex items-start justify-between gap-3 border-t border-slate-200 bg-amber-50 px-4 py-3 text-sm">
@@ -199,35 +228,37 @@ export default function Invoice() {
                     <>
                       <div className="mt-3 hidden overflow-x-auto rounded-xl border border-amber-200 bg-white sm:block">
                         <table className="w-full min-w-[620px] text-left text-xs">
-                        <thead className="border-b border-amber-100 bg-amber-50 text-[10px] capitalize tracking-[0.08em] text-amber-700">
-                          <tr>
-                            <th className="px-3 py-2 font-semibold">Item</th>
-                            <th className="px-3 py-2 font-semibold">Service</th>
-                            <th className="px-3 py-2 text-right font-semibold">Declared</th>
-                            <th className="px-3 py-2 text-right font-semibold">Confirmed</th>
-                            <th className="px-3 py-2 text-right font-semibold">Difference</th>
-                            <th className="px-3 py-2 text-right font-semibold">Unit price</th>
-                            <th className="px-3 py-2 text-right font-semibold">Extra</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {invoice.mismatch.lines.map((line, index) => (
-                            <tr key={`${line.category}-${line.service}-${index}`} className="border-b border-amber-50 last:border-0">
-                              <td className="px-3 py-2.5 font-semibold text-slate-800">{line.category}</td>
-                              <td className="px-3 py-2.5 text-slate-600">
-                                {line.service === 'wash_iron' ? 'Wash + Iron' : line.service === 'wash' ? 'Wash' : 'Iron'}
-                              </td>
-                              <td className="px-3 py-2.5 text-right text-slate-600">{line.originalQuantity}</td>
-                              <td className="px-3 py-2.5 text-right text-slate-600">{line.confirmedQuantity}</td>
-                              <td className="px-3 py-2.5 text-right font-semibold text-amber-700">
-                                {line.difference > 0 ? '+' : ''}
-                                {line.difference}
-                              </td>
-                              <td className="px-3 py-2.5 text-right text-slate-600">₦{line.unitPrice.toLocaleString()}</td>
-                              <td className="px-3 py-2.5 text-right font-semibold text-amber-700">₦{line.extraAmount.toLocaleString()}</td>
+                          <thead className="border-b border-amber-100 bg-amber-50 text-[10px] capitalize tracking-[0.08em] text-amber-700">
+                            <tr>
+                              <th className="px-3 py-2 font-semibold">Item</th>
+                              <th className="px-3 py-2 font-semibold">Service</th>
+                              <th className="px-3 py-2 text-right font-semibold">Declared</th>
+                              <th className="px-3 py-2 text-right font-semibold">Confirmed</th>
+                              <th className="px-3 py-2 text-right font-semibold">Difference</th>
+                              <th className="px-3 py-2 text-right font-semibold">Unit price</th>
+                              <th className="px-3 py-2 text-right font-semibold">Extra</th>
                             </tr>
-                          ))}
-                        </tbody>
+                          </thead>
+                          <tbody>
+                            {invoice.mismatch.lines.map((line, index) => (
+                              <tr key={`${line.category}-${line.service}-${index}`} className="border-b border-amber-50 last:border-0">
+                                <td className="px-3 py-2.5 font-semibold text-slate-800">{line.category}</td>
+                                <td className="px-3 py-2.5 text-slate-600">
+                                  {line.service === 'wash_iron' ? 'Wash + Iron' : line.service === 'wash' ? 'Wash' : 'Iron'}
+                                </td>
+                                <td className="px-3 py-2.5 text-right text-slate-600">{line.originalQuantity}</td>
+                                <td className="px-3 py-2.5 text-right text-slate-600">{line.confirmedQuantity}</td>
+                                <td className="px-3 py-2.5 text-right font-semibold text-amber-700">
+                                  {line.difference > 0 ? '+' : ''}
+                                  {line.difference}
+                                </td>
+                                <td className="px-3 py-2.5 text-right text-slate-600">₦{line.unitPrice.toLocaleString()}</td>
+                                <td className="px-3 py-2.5 text-right font-semibold text-amber-700">
+                                  ₦{line.extraAmount.toLocaleString()}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
                         </table>
                       </div>
                       <div className="mt-3 divide-y divide-amber-100 rounded-xl border border-amber-200 bg-white sm:hidden">
@@ -305,7 +336,9 @@ export default function Invoice() {
               {invoice.billingBreakdown.subscriberAmount > 0 && (
                 <div className="flex items-center justify-between gap-3">
                   <span>Subscriber-rate extra</span>
-                  <span className="shrink-0 font-semibold text-slate-900">₦{invoice.billingBreakdown.subscriberAmount.toLocaleString()}</span>
+                  <span className="shrink-0 font-semibold text-slate-900">
+                    ₦{invoice.billingBreakdown.subscriberAmount.toLocaleString()}
+                  </span>
                 </div>
               )}
               {invoice.billingBreakdown.regularAmount > 0 && (

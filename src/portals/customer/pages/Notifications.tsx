@@ -1,7 +1,10 @@
+import { useEffect, useState } from 'react'
 import { data, Link, useFetcher, useLoaderData } from 'react-router'
 import type { Route } from './+types/Notifications'
 import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
 import type { NotificationEvent } from '../../../types/database.types'
+import { CustomerSectionSkeleton } from '../../../components/customer/CustomerDataSkeleton'
+import { useCustomerStore } from '../customer-store-hook'
 
 type NotificationPayload = {
   title?: unknown
@@ -41,11 +44,18 @@ function formatNotificationDate(value: string) {
 
 // eslint-disable-next-line react-refresh/only-export-components
 export async function loader({ request }: Route.LoaderArgs) {
-  if (!isSupabaseServerConfigured) return data({ notifications: [], error: 'Notifications are unavailable right now.' })
+  const url = new URL(request.url)
+  const requestId = url.searchParams.get('requestId') ?? crypto.randomUUID()
+  if (url.searchParams.get('notificationsData') !== '1') {
+    return data({ notifications: [], error: null, loading: true, requestId: crypto.randomUUID() })
+  }
+  if (!isSupabaseServerConfigured)
+    return data({ notifications: [], error: 'Notifications are unavailable right now.', loading: false, requestId })
 
   const { supabase, headers } = getSupabaseServerClient(request)
   const { data: userData } = await supabase.auth.getUser()
-  if (!userData.user) return data({ notifications: [], error: 'Please sign in again.' }, { status: 401, headers })
+  if (!userData.user)
+    return data({ notifications: [], error: 'Please sign in again.', loading: false, requestId }, { status: 401, headers })
 
   const { data: notifications, error } = await supabase
     .from('notification_events')
@@ -53,7 +63,10 @@ export async function loader({ request }: Route.LoaderArgs) {
     .eq('customer_id', userData.user.id)
     .order('created_at', { ascending: false })
 
-  return data({ notifications: (notifications ?? []) as NotificationRow[], error: error?.message ?? null }, { headers })
+  return data(
+    { notifications: (notifications ?? []) as NotificationRow[], error: error?.message ?? null, loading: false, requestId },
+    { headers },
+  )
 }
 
 // eslint-disable-next-line react-refresh/only-export-components
@@ -85,13 +98,46 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function Notifications() {
-  const { notifications, error } = useLoaderData<typeof loader>()
-  const fetcher = useFetcher<typeof action>()
+  const loaderData = useLoaderData<typeof loader>()
+  const { isDataLoading } = useCustomerStore()
+  const dataFetcher = useFetcher<typeof loader>()
+  const actionFetcher = useFetcher<typeof action>()
+  const loadNotifications = dataFetcher.load
+  const [requestedDataId, setRequestedDataId] = useState<string | null>(null)
+  const [observedDataId, setObservedDataId] = useState<string | null>(null)
+  const requestNotifications = (requestId: string) => {
+    setRequestedDataId(requestId)
+    setObservedDataId(null)
+    loadNotifications(`/notifications?notificationsData=1&requestId=${encodeURIComponent(requestId)}`)
+  }
+  useEffect(() => {
+    if (!loaderData.loading || isDataLoading || loaderData.requestId === requestedDataId) return
+    const requestId = loaderData.requestId
+    const timer = window.setTimeout(() => setRequestedDataId(requestId), 0)
+    loadNotifications(`/notifications?notificationsData=1&requestId=${encodeURIComponent(requestId)}`)
+    return () => window.clearTimeout(timer)
+  }, [loaderData.loading, loaderData.requestId, isDataLoading, requestedDataId, loadNotifications])
+  useEffect(() => {
+    if (dataFetcher.state === 'idle' || !requestedDataId) return
+    const timer = window.setTimeout(() => setObservedDataId(requestedDataId), 0)
+    return () => window.clearTimeout(timer)
+  }, [dataFetcher.state, requestedDataId])
+  const fetchedData = dataFetcher.data?.loading === false && dataFetcher.data.requestId === requestedDataId ? dataFetcher.data : null
+  const notifications = fetchedData?.notifications ?? loaderData.notifications
+  const error =
+    fetchedData?.error ??
+    loaderData.error ??
+    (requestedDataId !== null && observedDataId === requestedDataId && dataFetcher.state === 'idle' && !fetchedData
+      ? 'Notifications could not be loaded. Please try again.'
+      : null)
+  const isLoading = loaderData.loading && !fetchedData && !error
+  const fetcher = actionFetcher
   const unreadCount = notifications.filter((notification) => !notification.read_at).length
 
   const markAllRead = () => {
     fetcher.submit({ intent: 'mark-all-read' }, { method: 'post' })
   }
+  const retryNotifications = () => requestNotifications(crypto.randomUUID())
 
   return (
     <div className="space-y-5 pb-8">
@@ -114,19 +160,29 @@ export default function Notifications() {
         )}
       </header>
 
-      {error && (
-        <p role="alert" className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-          {error}
-        </p>
+      {isLoading && <CustomerSectionSkeleton rows={5} />}
+
+      {!isLoading && error && (
+        <div role="alert" className="space-y-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          <p>{error}</p>
+          <button
+            type="button"
+            onClick={retryNotifications}
+            disabled={dataFetcher.state !== 'idle'}
+            className="rounded-lg border border-red-300 px-3 py-1.5 font-semibold disabled:opacity-50"
+          >
+            Retry
+          </button>
+        </div>
       )}
 
-      {!error && notifications.length === 0 && (
+      {!isLoading && !error && notifications.length === 0 && (
         <section className="rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm shadow-slate-100">
           <p className="text-sm text-slate-500">No notifications yet.</p>
         </section>
       )}
 
-      {!error && notifications.length > 0 && (
+      {!isLoading && !error && notifications.length > 0 && (
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm shadow-slate-100">
           <div className="divide-y divide-slate-100">
             {notifications.map((notification) => {

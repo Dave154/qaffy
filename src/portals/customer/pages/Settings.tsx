@@ -5,6 +5,7 @@ import { useCustomerStore } from '../customer-store-hook'
 import { useEffect, useRef, useState } from 'react'
 import { ensurePushSubscription, getPushSubscription, removePushSubscription, savePushSubscription } from '../../../lib/push.client'
 import { toast } from '../../../lib/toast'
+import { CustomerInlineSkeleton, CustomerSectionSkeleton } from '../../../components/customer/CustomerDataSkeleton'
 
 // eslint-disable-next-line react-refresh/only-export-components
 export async function action({ request }: Route.ActionArgs) {
@@ -52,6 +53,8 @@ export default function Settings() {
     pickupLocations,
     preferredPickupLocationId,
     transactions,
+    isDataLoading,
+    dataLoadError,
   } = useCustomerStore()
   const fetcher = useFetcher<typeof action>()
   const profileFetcher = useFetcher<typeof action>()
@@ -151,8 +154,24 @@ export default function Settings() {
         {quickStats.map((stat) => (
           <div key={stat.label} className="rounded-[22px] border border-brand-border bg-white p-4 shadow-sm shadow-brand-soft">
             <p className="text-[10px] capitalize tracking-[0.22em] text-slate-400">{stat.label}</p>
-            <p className="mt-3 text-lg font-bold text-slate-900">{stat.value}</p>
-            <p className="mt-1 text-sm text-slate-500">{stat.helper}</p>
+            <p className="mt-3 text-lg font-bold text-slate-900">
+              {isDataLoading && (stat.label === 'Plan status' || stat.label === 'Next renewal') ? (
+                <CustomerInlineSkeleton className="w-24" />
+              ) : dataLoadError && (stat.label === 'Plan status' || stat.label === 'Next renewal') ? (
+                'Unavailable'
+              ) : (
+                stat.value
+              )}
+            </p>
+            <p className="mt-1 text-sm text-slate-500">
+              {isDataLoading && (stat.label === 'Plan status' || stat.label === 'Next renewal') ? (
+                <CustomerInlineSkeleton className="w-32" />
+              ) : dataLoadError && (stat.label === 'Plan status' || stat.label === 'Next renewal') ? (
+                'Account information unavailable'
+              ) : (
+                stat.helper
+              )}
+            </p>
           </div>
         ))}
       </section>
@@ -180,27 +199,37 @@ export default function Settings() {
             <div className="rounded-2xl border border-brand-border bg-brand-soft p-4">
               <label className="block">
                 <span className="mb-1.5 block text-sm font-medium text-slate-600">Preferred pickup location</span>
-                <select
-                  value={selectedLocationId}
-                  onChange={(event) => setSelectedLocationId(event.target.value)}
-                  required
-                  className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-base text-slate-900 focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
-                >
-                  <option value="" disabled>
-                    Select a location
-                  </option>
-                  {pickupLocations.map((location) => (
-                    <option key={location.id} value={location.id}>
-                      {location.name}
-                      {location.address ? ` (${location.address})` : ''}
+                {isDataLoading ? (
+                  <div className="rounded-2xl border border-slate-200 bg-white px-3 py-3">
+                    <CustomerInlineSkeleton className="w-40" />
+                  </div>
+                ) : dataLoadError ? (
+                  <p className="rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-500">
+                    Pickup locations are unavailable.
+                  </p>
+                ) : (
+                  <select
+                    value={selectedLocationId}
+                    onChange={(event) => setSelectedLocationId(event.target.value)}
+                    required
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-base text-slate-900 focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
+                  >
+                    <option value="" disabled>
+                      Select a location
                     </option>
-                  ))}
-                </select>
+                    {pickupLocations.map((location) => (
+                      <option key={location.id} value={location.id}>
+                        {location.name}
+                        {location.address ? ` (${location.address})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </label>
               <button
                 type="button"
                 onClick={() => fetcher.submit({ pickupLocationId: selectedLocationId }, { method: 'post' })}
-                disabled={!selectedLocationId || fetcher.state !== 'idle'}
+                disabled={isDataLoading || Boolean(dataLoadError) || !selectedLocationId || fetcher.state !== 'idle'}
                 className="mt-3 rounded-2xl bg-brand-primary px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
               >
                 {fetcher.state === 'idle' ? 'Save location' : 'Saving...'}
@@ -276,18 +305,28 @@ export default function Settings() {
                   : 'There is no active referral bonus campaign right now.'
               }
             >
-              {referralCampaignBenefit
-                ? `Friend gets ₦${referralCampaignBenefit.referredRewardValue.toLocaleString()}; you get ₦${referralCampaignBenefit.referrerRewardValue.toLocaleString()} after ${referralCampaignBenefit.minimumOrderAmount > 0 ? `a paid order of ₦${referralCampaignBenefit.minimumOrderAmount.toLocaleString()}+` : 'any paid order'}.`
-                : 'No active referral bonus campaign right now.'}
+              {isDataLoading ? (
+                <CustomerInlineSkeleton className="w-4/5" />
+              ) : dataLoadError ? (
+                'Referral information is unavailable.'
+              ) : referralCampaignBenefit ? (
+                `Friend gets ₦${referralCampaignBenefit.referredRewardValue.toLocaleString()}; you get ₦${referralCampaignBenefit.referrerRewardValue.toLocaleString()} after ${referralCampaignBenefit.minimumOrderAmount > 0 ? `a paid order of ₦${referralCampaignBenefit.minimumOrderAmount.toLocaleString()}+` : 'any paid order'}.`
+              ) : (
+                'No active referral bonus campaign right now.'
+              )}
             </p>
             <div className="grid grid-cols-2 gap-2 text-sm">
               <div className="rounded-2xl bg-brand-soft px-3.5 py-3">
                 <p className="text-xs text-slate-500">Successful referrals</p>
-                <p className="mt-1 text-xl font-bold text-slate-900">{successfulReferrals}</p>
+                <p className="mt-1 text-xl font-bold text-slate-900">
+                  {isDataLoading ? <CustomerInlineSkeleton className="w-8" /> : dataLoadError ? '—' : successfulReferrals}
+                </p>
               </div>
               <div className="rounded-2xl bg-slate-50 px-3.5 py-3">
                 <p className="text-xs text-slate-500">Referral history</p>
-                <p className="mt-1 text-xl font-bold text-slate-900">{referrals.length}</p>
+                <p className="mt-1 text-xl font-bold text-slate-900">
+                  {isDataLoading ? <CustomerInlineSkeleton className="w-8" /> : dataLoadError ? '—' : referrals.length}
+                </p>
               </div>
             </div>
             <div className="flex flex-col gap-2 sm:flex-row">
@@ -315,7 +354,11 @@ export default function Settings() {
                 {referralMessage}
               </p>
             )}
-            {referrals.length > 0 && (
+            {isDataLoading ? (
+              <CustomerSectionSkeleton rows={2} />
+            ) : dataLoadError ? (
+              <p className="text-sm text-slate-500">Referral history is unavailable.</p>
+            ) : referrals.length > 0 ? (
               <div className="divide-y divide-slate-100 rounded-2xl border border-slate-100 px-3.5">
                 {referrals.slice(0, 4).map((referral) => (
                   <div key={referral.id} className="flex items-center justify-between gap-3 py-3 text-sm">
@@ -331,7 +374,7 @@ export default function Settings() {
                   </div>
                 ))}
               </div>
-            )}
+            ) : null}
           </div>
         </div>
 
@@ -372,7 +415,11 @@ export default function Settings() {
           </Link>
         </div>
 
-        {transactions.filter((transaction) => transaction.category === 'topup').slice(0, 3).length === 0 ? (
+        {isDataLoading ? (
+          <CustomerSectionSkeleton rows={3} />
+        ) : dataLoadError ? (
+          <p className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-500">Payment history is unavailable.</p>
+        ) : transactions.filter((transaction) => transaction.category === 'topup').slice(0, 3).length === 0 ? (
           <p className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-500">No payments recorded yet.</p>
         ) : (
           <div className="divide-y divide-slate-100">

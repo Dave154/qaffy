@@ -3,14 +3,15 @@ import { Link, useNavigation } from 'react-router'
 import { ArrowUpRight } from 'lucide-react'
 import { useCustomerStore } from '../customer-store-hook'
 import CopyableOrderId from '../../../components/CopyableOrderId'
+import { CustomerActivityListSkeleton } from '../../../components/customer/CustomerDataSkeleton'
 
 const filterItems = ['All activity', 'Top ups', 'Payments', 'Rewards']
 
 export default function Transactions() {
-  const { transactions, transactionError } = useCustomerStore()
+  const { transactions, transactionError, isDataLoading, dataLoadError } = useCustomerStore()
   const navigation = useNavigation()
   const [activeFilter, setActiveFilter] = useState('All activity')
-  const isLoading = navigation.state === 'loading'
+  const isLoading = isDataLoading || navigation.state === 'loading'
   const filteredTransactions =
     activeFilter === 'Top ups'
       ? transactions.filter((transaction) => transaction.category === 'topup')
@@ -89,12 +90,8 @@ export default function Transactions() {
           </div>
         )}
         {isLoading ? (
-          <div className="space-y-3" aria-live="polite">
-            {[1, 2, 3].map((item) => (
-              <div key={item} className="h-16 animate-pulse rounded-2xl bg-slate-100" />
-            ))}
-          </div>
-        ) : filteredTransactions.length === 0 ? (
+          <CustomerActivityListSkeleton rows={3} />
+        ) : dataLoadError ? null : filteredTransactions.length === 0 ? (
           <div className="rounded-2xl bg-slate-50 p-8 text-center text-sm text-slate-500">
             {transactions.length === 0 ? 'No wallet activity yet.' : `No ${activeFilter.toLowerCase()} found.`}
           </div>

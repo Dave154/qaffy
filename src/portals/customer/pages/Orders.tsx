@@ -14,6 +14,7 @@ import { sql } from '../../../lib/db.server'
 import { chargeSubscriptionInvoice, debitOneOffInvoice, InsufficientBalanceError } from '../../../lib/wallet.server'
 import { sendCustomerNotification, walletInvoicePaidNotification } from '../../../lib/notifications.server'
 import { toast } from '../../../lib/toast'
+import { CustomerInlineSkeleton, CustomerOrderListSkeleton } from '../../../components/customer/CustomerDataSkeleton'
 
 // eslint-disable-next-line react-refresh/only-export-components
 export async function action({ request }: Route.ActionArgs) {
@@ -83,7 +84,7 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function Orders() {
-  const { orders, balance, invoices } = useCustomerStore()
+  const { orders, balance, invoices, isDataLoading, dataLoadError } = useCustomerStore()
   const cancelFetcher = useFetcher<typeof action>()
   const handledCancelResponse = useRef<typeof cancelFetcher.data>(null)
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false)
@@ -188,7 +189,8 @@ export default function Orders() {
         <button
           type="button"
           onClick={() => setIsOrderModalOpen(true)}
-          className="rounded-lg bg-brand-primary px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-primary-hover"
+          disabled={isDataLoading || Boolean(dataLoadError)}
+          className="rounded-lg bg-brand-primary px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
         >
           New order
         </button>
@@ -198,7 +200,9 @@ export default function Orders() {
         {stats.map((stat) => (
           <div key={stat.label} className="rounded-2xl border border-[#e7e7e7] bg-white p-4">
             <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-slate-400">{stat.label}</p>
-            <p className="mt-3 text-2xl font-semibold text-slate-900">{stat.value}</p>
+            <p className="mt-3 text-2xl font-semibold text-slate-900">
+              {isDataLoading || dataLoadError ? <CustomerInlineSkeleton className="w-12" /> : stat.value}
+            </p>
             <p className="mt-1 text-sm text-slate-500">{stat.helper}</p>
           </div>
         ))}
@@ -227,100 +231,106 @@ export default function Orders() {
         </div>
 
         <div className="space-y-3">
-          {filteredOrders.map((order) => (
-            <article key={order.id} className="border-b border-[#eeeeee] bg-white p-4 last:border-b-0">
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                <div className="min-w-0 flex-1 sm:pr-4">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-lg font-semibold text-slate-900">
-                      <CopyableOrderId id={order.publicOrderNumber} />
-                    </p>
-                    <span
-                      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold ${order.statusTone}`}
-                    >
-                      <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" aria-hidden="true" />
-                      {order.status}
-                    </span>
-                  </div>
-                  <p className="mt-2 text-sm font-medium text-slate-700">{order.title}</p>
-                  <p className="mt-1 text-xs text-slate-500">{order.date}</p>
-                  {order.mismatch && (
-                    <div className="mt-3 min-w-0 overflow-hidden rounded-xl border border-amber-200 bg-amber-50 p-3 text-left">
-                      <p className="text-xs font-semibold text-amber-800">
-                        {order.mismatch.direction === 'over' ? 'Extra items confirmed' : 'Fewer items confirmed'}
+          {isDataLoading ? (
+            <CustomerOrderListSkeleton rows={3} />
+          ) : dataLoadError ? (
+            <p className="p-4 text-sm text-slate-500">Order details are unavailable.</p>
+          ) : (
+            filteredOrders.map((order) => (
+              <article key={order.id} className="border-b border-[#eeeeee] bg-white p-4 last:border-b-0">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0 flex-1 sm:pr-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-lg font-semibold text-slate-900">
+                        <CopyableOrderId id={order.publicOrderNumber} />
                       </p>
-                      <p className="mt-1 min-w-0 truncate text-xs text-amber-700" title={order.mismatch.detail}>
-                        {order.mismatch.detail}
-                      </p>
+                      <span
+                        className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold ${order.statusTone}`}
+                      >
+                        <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" aria-hidden="true" />
+                        {order.status}
+                      </span>
                     </div>
-                  )}
-                </div>
-
-                <div className="shrink-0 sm:ml-2">
-                  {order.paymentStatus === 'Pending' && order.total > 0 ? (
-                    <DeliveryOtpPaywall
-                      amount={order.total}
-                      walletBalance={balance}
-                      invoiceId={invoices.find((invoice) => invoice.orderId === order.id && invoice.status === 'Awaiting payment')?.id}
-                      onClick={() => navigate('/?topup=1')}
-                    />
-                  ) : order.paymentStatus === 'Paid' && order.status !== 'Delivered' && !order.deliveryOtp ? (
-                    <DeliveryOtpStatus />
-                  ) : getVisibleOtp(order) ? (
-                    <div className="flex items-start gap-3 sm:flex-col sm:items-end">
-                      <div className="min-w-0">
-                        <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-brand-primary">
-                          {order.status === 'Awaiting pickup' ? 'Pickup OTP' : 'Delivery OTP'}
+                    <p className="mt-2 text-sm font-medium text-slate-700">{order.title}</p>
+                    <p className="mt-1 text-xs text-slate-500">{order.date}</p>
+                    {order.mismatch && (
+                      <div className="mt-3 min-w-0 overflow-hidden rounded-xl border border-amber-200 bg-amber-50 p-3 text-left">
+                        <p className="text-xs font-semibold text-amber-800">
+                          {order.mismatch.direction === 'over' ? 'Extra items confirmed' : 'Fewer items confirmed'}
                         </p>
-                        <div className="mt-2">
-                          <ProtectedOtp value={getVisibleOtp(order)} />
+                        <p className="mt-1 min-w-0 truncate text-xs text-amber-700" title={order.mismatch.detail}>
+                          {order.mismatch.detail}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="shrink-0 sm:ml-2">
+                    {order.paymentStatus === 'Pending' && order.total > 0 ? (
+                      <DeliveryOtpPaywall
+                        amount={order.total}
+                        walletBalance={balance}
+                        invoiceId={invoices.find((invoice) => invoice.orderId === order.id && invoice.status === 'Awaiting payment')?.id}
+                        onClick={() => navigate('/?topup=1')}
+                      />
+                    ) : order.paymentStatus === 'Paid' && order.status !== 'Delivered' && !order.deliveryOtp ? (
+                      <DeliveryOtpStatus />
+                    ) : getVisibleOtp(order) ? (
+                      <div className="flex items-start gap-3 sm:flex-col sm:items-end">
+                        <div className="min-w-0">
+                          <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-brand-primary">
+                            {order.status === 'Awaiting pickup' ? 'Pickup OTP' : 'Delivery OTP'}
+                          </p>
+                          <div className="mt-2">
+                            <ProtectedOtp value={getVisibleOtp(order)} />
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ) : (
-                    <div className="text-left sm:text-right">
-                      <p className="max-w-40 text-sm font-bold text-slate-900">{getAmountLabel(order)}</p>
-                      <p className="mt-1 text-xs text-slate-500">{order.items} clothes</p>
-                    </div>
-                  )}
+                    ) : (
+                      <div className="text-left sm:text-right">
+                        <p className="max-w-40 text-sm font-bold text-slate-900">{getAmountLabel(order)}</p>
+                        <p className="mt-1 text-xs text-slate-500">{order.items} clothes</p>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
 
-              <div className="mt-4 flex flex-row flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-3">
-                <p className="text-sm text-slate-600">{order.pickup}</p>
-                <div className="flex flex-wrap items-center gap-2">
-                  {order.status === 'Awaiting pickup' && (
-                    <cancelFetcher.Form
-                      method="post"
-                      onSubmit={(event) => {
-                        if (!window.confirm('Are you sure you want to cancel this order?')) event.preventDefault()
-                      }}
-                    >
-                      <input type="hidden" name="intent" value="cancel-order" />
-                      <input type="hidden" name="orderId" value={order.id} />
-                      <button
-                        type="submit"
-                        disabled={cancelFetcher.state !== 'idle'}
-                        className="rounded-lg border border-rose-200 bg-white px-3.5 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                <div className="mt-4 flex flex-row flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-3">
+                  <p className="text-sm text-slate-600">{order.pickup}</p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {order.status === 'Awaiting pickup' && (
+                      <cancelFetcher.Form
+                        method="post"
+                        onSubmit={(event) => {
+                          if (!window.confirm('Are you sure you want to cancel this order?')) event.preventDefault()
+                        }}
                       >
-                        {cancelFetcher.state !== 'idle' && cancelFetcher.formData?.get('orderId') === order.id
-                          ? 'Cancelling…'
-                          : 'Cancel order'}
-                      </button>
-                    </cancelFetcher.Form>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setSelectedOrder(order)}
-                    disabled={cancelFetcher.state !== 'idle' && cancelFetcher.formData?.get('orderId') === order.id}
-                    className="rounded-lg border border-brand-border bg-white px-3.5 py-2 text-sm font-semibold text-brand-primary hover:bg-brand-soft disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {order.action}
-                  </button>
+                        <input type="hidden" name="intent" value="cancel-order" />
+                        <input type="hidden" name="orderId" value={order.id} />
+                        <button
+                          type="submit"
+                          disabled={cancelFetcher.state !== 'idle'}
+                          className="rounded-lg border border-rose-200 bg-white px-3.5 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                        >
+                          {cancelFetcher.state !== 'idle' && cancelFetcher.formData?.get('orderId') === order.id
+                            ? 'Cancelling…'
+                            : 'Cancel order'}
+                        </button>
+                      </cancelFetcher.Form>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedOrder(order)}
+                      disabled={cancelFetcher.state !== 'idle' && cancelFetcher.formData?.get('orderId') === order.id}
+                      className="rounded-lg border border-brand-border bg-white px-3.5 py-2 text-sm font-semibold text-brand-primary hover:bg-brand-soft disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {order.action}
+                    </button>
+                  </div>
                 </div>
-              </div>
-            </article>
-          ))}
+              </article>
+            ))
+          )}
           {filteredOrders.length === 0 && (
             <p className="rounded-2xl bg-slate-50 p-6 text-center text-sm text-slate-500">No orders match this filter.</p>
           )}

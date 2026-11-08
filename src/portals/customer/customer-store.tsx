@@ -152,6 +152,8 @@ export type CustomerStore = {
   transactions: CustomerTransaction[]
   pendingTopUp: boolean
   transactionError: string | null
+  isDataLoading: boolean
+  dataLoadError: string | null
   invoice: CustomerInvoice | null
   invoices: CustomerInvoice[]
   topUpWallet: (amount: number) => Promise<void>
@@ -481,6 +483,8 @@ type CustomerStoreProviderProps = {
     unitsAvailableForConfirmation: number
     nextBalanceAfterCredit: number | null
   } | null
+  isDataLoading?: boolean
+  dataLoadError?: string | null
 }
 
 export function CustomerStoreProvider({
@@ -501,6 +505,8 @@ export function CustomerStoreProvider({
   persistedOrderItems,
   persistedOrderMismatches = [],
   persistedSubscriptionAllowance = null,
+  isDataLoading = false,
+  dataLoadError = null,
 }: CustomerStoreProviderProps) {
   const unpaidInvoiceOrderIds = new Set(persistedUnpaidInvoiceOrderIds)
   const orderReferenceByInvoiceId = new Map(
@@ -592,6 +598,8 @@ export function CustomerStoreProvider({
         transactions.some((transaction) => transaction.title === 'Wallet top up' && transaction.status === 'Pending') &&
         orders.some((order) => order.status === 'Pending payment'),
       transactionError: persistedTransactionError,
+      isDataLoading,
+      dataLoadError,
       invoice,
       invoices,
       topUpWallet: async (amount) => {
@@ -745,6 +753,8 @@ export function CustomerStoreProvider({
     subscriptionAvailableUnits,
     subscriptionBorrowedUnits,
     transactions,
+    isDataLoading,
+    dataLoadError,
   ])
 
   return <CustomerStoreContext.Provider value={store}>{children}</CustomerStoreContext.Provider>
