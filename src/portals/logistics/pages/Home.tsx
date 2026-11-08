@@ -23,36 +23,14 @@ export async function action({ request }: Route.ActionArgs) {
   const formData = await request.formData()
   const orderId = String(formData.get('orderId') ?? '')
   const otp = String(formData.get('otp') ?? '')
-    .replace(/\D/g, '')
+    .replace(/\D/g, '') 
     .slice(-4)
   const intent = String(formData.get('intent') ?? 'pickup')
 
   if (intent === 'search') {
     if (otp.length !== 4) return data({ ok: false, intent, otp, message: 'Enter all four digits.' }, { status: 400 })
     try {
-      const matches = await sql`
-        select
-          'active'::text as kind,
-          o.id as order_id,
-          o.public_order_number,
-          coalesce(customer.name, 'Customer') as customer_name,
-          customer.qaffy_id as customer_uid,
-          location.name as pickup_location_name,
-          case when o.status = 'pending_pickup' then 'pickup' else 'delivery' end as handoff_type,
-          null::timestamptz as confirmed_at,
-          null::text as agent_name
-        from orders o
-        left join profiles customer on customer.id = o.customer_id
-        left join pickup_locations location on location.id = o.pickup_location_id
-        where (
-          o.status = 'pending_pickup'
-          and right(regexp_replace(coalesce(o.pickup_otp, ''), '[^0-9]', '', 'g'), 4) = ${otp}
-        ) or (
-          o.status = 'out_for_delivery'
-          and exists (select 1 from invoices i where i.order_id = o.id and i.status = 'paid')
-          and right(regexp_replace(coalesce(o.delivery_otp, ''), '[^0-9]', '', 'g'), 4) = ${otp}
-        )
-        union all
+      const usedLookup = sql`
         select
           'used'::text as kind,
           o.id as order_id,
@@ -73,8 +51,48 @@ export async function action({ request }: Route.ActionArgs) {
           )
           and used.expires_at > now()
         order by confirmed_at desc nulls first
+      `.then(
+        (matches) => ({ ok: true as const, matches }),
+        (error: unknown) => ({ ok: false as const, error }),
+      )
+      try {
+        waitUntil(
+          usedLookup.then((result) => {
+            if (!result.ok) console.error('Background used OTP lookup failed:', result.error)
+          }),
+        )
+      } catch (error) {
+        console.error('Background used OTP lookup scheduling is unavailable:', error)
+      }
+
+      const activeMatches = await sql`
+          select
+            'active'::text as kind,
+            o.id as order_id,
+            o.public_order_number,
+            coalesce(customer.name, 'Customer') as customer_name,
+            customer.qaffy_id as customer_uid,
+            location.name as pickup_location_name,
+            case when o.status = 'pending_pickup' then 'pickup' else 'delivery' end as handoff_type,
+            null::timestamptz as confirmed_at,
+            null::text as agent_name
+          from orders o
+          left join profiles customer on customer.id = o.customer_id
+          left join pickup_locations location on location.id = o.pickup_location_id
+          where (
+            o.status = 'pending_pickup'
+            and right(regexp_replace(coalesce(o.pickup_otp, ''), '[^0-9]', '', 'g'), 4) = ${otp}
+          ) or (
+            o.status = 'out_for_delivery'
+            and exists (select 1 from invoices i where i.order_id = o.id and i.status = 'paid')
+            and right(regexp_replace(coalesce(o.delivery_otp, ''), '[^0-9]', '', 'g'), 4) = ${otp}
+          )
       `
-      return data({ ok: true, intent, otp, matches })
+      if (activeMatches.length > 0) return data({ ok: true, intent, otp, matches: activeMatches })
+
+      const usedResult = await usedLookup
+      if (!usedResult.ok) throw usedResult.error
+      return data({ ok: true, intent, otp, matches: usedResult.matches })
     } catch (error) {
       console.error('Logistics OTP lookup failed:', error)
       return data({ ok: false, intent, otp, message: 'OTP search failed. Please try again.' }, { status: 500 })

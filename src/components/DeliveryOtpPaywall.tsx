@@ -21,7 +21,7 @@ export default function DeliveryOtpPaywall({ amount, walletBalance, invoiceId, o
       ? 'Payment received'
       : canPayFromWallet
         ? `Pay ₦${amount.toLocaleString()}`
-        : `Top up ₦${topUpAmount.toLocaleString()} to see`
+        : `Top up extra ₦${topUpAmount.toLocaleString()} to see`
   const buttonLabel = canPayFromWallet && !invoiceId ? 'Loading invoice...' : label
 
   return (
