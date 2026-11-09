@@ -230,6 +230,9 @@ type VendorLoaderData = {
   orders: VendorLoaderOrder[]
   vendorName: string
   rateCard: Array<{ name: string; wash: number | null; iron: number | null; wash_iron: number | null }>
+  overviewMetrics: Record<string, { pending: number; active: number; dispatched: number; completed: number }> | null
+  overviewOrderIds: string[] | null
+  overviewPagination: { page: number; pageSize: number; totalCount: number; pageCount: number } | null
 }
 
 function mapLoaderOrder(order: VendorLoaderOrder): VendorOrder {
@@ -311,7 +314,14 @@ const statusStyles: Record<VendorOrder['status'], string> = {
 
 const orderTypeLabels: Record<VendorOrder['orderType'], string> = { wash: 'Wash only', wash_iron: 'Wash + Iron', mixed: 'Mixed service' }
 export default function Home() {
-  const { orders: loadedOrders, vendorName, rateCard } = useOutletContext<VendorLoaderData>()
+  const {
+    orders: loadedOrders,
+    vendorName,
+    rateCard,
+    overviewMetrics,
+    overviewOrderIds,
+    overviewPagination,
+  } = useOutletContext<VendorLoaderData>()
   const fetcher = useFetcher<typeof action>()
   const { revalidate } = useRevalidator()
   const location = useLocation()
@@ -322,7 +332,9 @@ export default function Home() {
   const [received, setReceived] = useState<Record<string, Record<string, number | undefined>>>({})
   const [addedItems, setAddedItems] = useState<VendorReviewAddedItem[]>([])
   const [notes, setNotes] = useState('')
-  const [dateRange, setDateRange] = useState('Today')
+  const requestedDateRange = new URLSearchParams(location.search).get('range') ?? 'Today'
+  const dateRange = (['Today', 'This week', 'All time'].includes(requestedDateRange) ? requestedDateRange : 'Today') as
+    'Today' | 'This week' | 'All time'
   const handledFetcherData = useRef<typeof fetcher.data>(null)
   const isClaimingOrder = (orderId: string) =>
     fetcher.state !== 'idle' && fetcher.formData?.get('intent') === 'claim' && fetcher.formData?.get('orderId') === orderId
@@ -370,50 +382,48 @@ export default function Home() {
     }
   }, [fetcher.data, revalidate])
 
-  const visibleOrders = orders.filter((order) => {
-    if (dateRange === 'All time') return true
-
-    const referenceDate = order.pickedUpDate ?? loadedOrders.find((loadedOrder) => loadedOrder.id === order.id)?.created_at
-    if (!referenceDate) return false
-
-    const orderDate = new Date(referenceDate)
-    const now = new Date()
-    const startOfToday = new Date(now)
-    startOfToday.setHours(0, 0, 0, 0)
-
-    if (dateRange === 'Today') return orderDate >= startOfToday
-
-    const startOfWeek = new Date(startOfToday)
-    startOfWeek.setDate(startOfWeek.getDate() - 6)
-    return orderDate >= startOfWeek
-  })
+  const visibleOrders = orders.filter((order) => overviewOrderIds?.includes(order.id))
   const attentionOrders = visibleOrders.filter((order) => order.orderStatus === 'picked_up')
+  const updateOverviewQuery = (updates: { range?: string; page?: number }) => {
+    const searchParams = new URLSearchParams(location.search)
+    if (updates.range !== undefined) {
+      searchParams.set('range', updates.range)
+      searchParams.delete('page')
+    }
+    if (updates.page !== undefined) {
+      if (updates.page <= 1) searchParams.delete('page')
+      else searchParams.set('page', String(updates.page))
+    }
+    const query = searchParams.toString()
+    navigate(`${location.pathname}${query ? `?${query}` : ''}`, { replace: true })
+  }
 
+  const summary = overviewMetrics?.[dateRange]
   const metrics = [
     {
       label: 'Pending',
-      value: visibleOrders.filter((order) => order.orderStatus === 'picked_up').length,
+      value: summary?.pending ?? visibleOrders.filter((order) => order.orderStatus === 'picked_up').length,
       helper: 'Available to claim',
       icon: Clock3,
       tone: 'bg-amber-50 text-amber-700',
     },
     {
       label: 'Active orders',
-      value: visibleOrders.filter((order) => ['at_vendor', 'invoiced', 'paid'].includes(order.orderStatus)).length,
+      value: summary?.active ?? visibleOrders.filter((order) => ['at_vendor', 'invoiced', 'paid'].includes(order.orderStatus)).length,
       helper: 'In progress or ready to dispatch',
       icon: PackageCheck,
       tone: 'bg-brand-soft text-brand-primary',
     },
     {
       label: 'Dispatched',
-      value: visibleOrders.filter((order) => order.orderStatus === 'out_for_delivery').length,
+      value: summary?.dispatched ?? visibleOrders.filter((order) => order.orderStatus === 'out_for_delivery').length,
       helper: 'Out for delivery',
       icon: Truck,
       tone: 'bg-teal-50 text-teal-700',
     },
     {
       label: 'Completed',
-      value: visibleOrders.filter((order) => order.orderStatus === 'delivered').length,
+      value: summary?.completed ?? visibleOrders.filter((order) => order.orderStatus === 'delivered').length,
       helper: 'Completed orders',
       icon: Check,
       tone: 'bg-emerald-50 text-emerald-700',
@@ -480,7 +490,7 @@ export default function Home() {
             <span className="font-medium">Date</span>
             <select
               value={dateRange}
-              onChange={(event) => setDateRange(event.target.value)}
+              onChange={(event) => updateOverviewQuery({ range: event.target.value })}
               className="bg-transparent font-semibold outline-none"
             >
               <option>Today</option>
@@ -489,7 +499,7 @@ export default function Home() {
             </select>
           </label>
           <Link
-            to="/vendor/orders"
+            to="/vendor/orders?tab=unclaimed"
             className="inline-flex h-10 items-center gap-2 rounded-[8px] border border-[#dedede] bg-white px-3 text-sm font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary"
           >
             View all orders <ArrowRight size={16} />
@@ -523,7 +533,7 @@ export default function Home() {
               </span>
             </div>
             <Link
-              to="/vendor/orders"
+              to="/vendor/orders?tab=unclaimed"
               className="flex h-9 w-9 items-center justify-center rounded-[8px] border border-[#e1e1e1] text-slate-500 hover:border-brand-primary hover:text-brand-primary"
               aria-label="Open all orders"
             >
@@ -646,6 +656,34 @@ export default function Home() {
           )}
         </div>
       </section>
+
+      {overviewPagination && (
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3">
+          <p className="text-sm text-slate-500">
+            {overviewPagination.totalCount === 0
+              ? 'No orders'
+              : `${(overviewPagination.page - 1) * overviewPagination.pageSize + 1}–${Math.min(overviewPagination.page * overviewPagination.pageSize, overviewPagination.totalCount)} of ${overviewPagination.totalCount}`}
+          </p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => updateOverviewQuery({ page: overviewPagination.page - 1 })}
+              disabled={overviewPagination.page <= 1}
+              className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              onClick={() => updateOverviewQuery({ page: overviewPagination.page + 1 })}
+              disabled={overviewPagination.page >= overviewPagination.pageCount}
+              className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
 
       {selectedOrder && reviewOrder && (
         <VendorOrderReviewDialog

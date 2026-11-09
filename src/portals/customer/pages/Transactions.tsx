@@ -1,5 +1,4 @@
-import { useState } from 'react'
-import { Link, useNavigation } from 'react-router'
+import { Link, useNavigation, useSearchParams } from 'react-router'
 import { ArrowUpRight } from 'lucide-react'
 import { useCustomerStore } from '../customer-store-hook'
 import CopyableOrderId from '../../../components/CopyableOrderId'
@@ -8,18 +7,33 @@ import { CustomerActivityListSkeleton } from '../../../components/customer/Custo
 const filterItems = ['All activity', 'Top ups', 'Payments', 'Rewards']
 
 export default function Transactions() {
-  const { transactions, transactionError, isDataLoading, dataLoadError } = useCustomerStore()
+  const { transactions, transactionError, transactionPagination, isDataLoading, dataLoadError } = useCustomerStore()
   const navigation = useNavigation()
-  const [activeFilter, setActiveFilter] = useState('All activity')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requestedFilter = searchParams.get('filter') ?? 'All activity'
+  const activeFilter = filterItems.includes(requestedFilter) ? requestedFilter : 'All activity'
   const isLoading = isDataLoading || navigation.state === 'loading'
-  const filteredTransactions =
-    activeFilter === 'Top ups'
+  const filteredTransactions = transactionPagination
+    ? transactions
+    : activeFilter === 'Top ups'
       ? transactions.filter((transaction) => transaction.category === 'topup')
       : activeFilter === 'Payments'
         ? transactions.filter((transaction) => transaction.category === 'payment')
         : activeFilter === 'Rewards'
           ? transactions.filter((transaction) => transaction.category === 'reward')
           : transactions
+  const totalCount = transactionPagination?.totalCount ?? filteredTransactions.length
+  const pageCount = transactionPagination ? Math.max(1, Math.ceil(totalCount / transactionPagination.pageSize)) : 1
+  const updateTransactionPage = (page: number, filter = activeFilter) => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      if (filter === 'All activity') next.delete('filter')
+      else next.set('filter', filter)
+      if (page <= 1) next.delete('page')
+      else next.set('page', String(page))
+      return next
+    })
+  }
   const exportTransactions = () => {
     const rows = [
       ['Type', 'Reference', 'Amount', 'Date', 'Status'],
@@ -55,7 +69,7 @@ export default function Transactions() {
             <button
               key={item}
               type="button"
-              onClick={() => setActiveFilter(item)}
+              onClick={() => updateTransactionPage(1, item)}
               aria-pressed={activeFilter === item}
               className={`shrink-0 rounded-full px-4 py-2 text-sm font-medium transition ${
                 activeFilter === item
@@ -80,7 +94,7 @@ export default function Transactions() {
             onClick={exportTransactions}
             className="hidden rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 hover:border-sky-200 hover:text-sky-700 sm:block"
           >
-            Export
+            Export page
           </button>
         </div>
 
@@ -93,7 +107,11 @@ export default function Transactions() {
           <CustomerActivityListSkeleton rows={3} />
         ) : dataLoadError ? null : filteredTransactions.length === 0 ? (
           <div className="rounded-2xl bg-slate-50 p-8 text-center text-sm text-slate-500">
-            {transactions.length === 0 ? 'No wallet activity yet.' : `No ${activeFilter.toLowerCase()} found.`}
+            {totalCount === 0
+              ? activeFilter === 'All activity'
+                ? 'No wallet activity yet.'
+                : `No ${activeFilter.toLowerCase()} found.`
+              : `No ${activeFilter.toLowerCase()} found.`}
           </div>
         ) : (
           <div className="divide-y divide-slate-100">
@@ -140,6 +158,36 @@ export default function Transactions() {
                 </div>
               </div>
             ))}
+          </div>
+        )}
+        {transactionPagination && totalCount > transactionPagination.pageSize && (
+          <div className="mt-4 flex flex-col gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-slate-500">
+              Showing {(transactionPagination.page - 1) * transactionPagination.pageSize + 1}–
+              {Math.min(transactionPagination.page * transactionPagination.pageSize, totalCount)} of {totalCount.toLocaleString()}{' '}
+              activities
+            </p>
+            <div className="flex items-center justify-between gap-3 sm:justify-end">
+              <button
+                type="button"
+                onClick={() => updateTransactionPage(transactionPagination.page - 1)}
+                disabled={transactionPagination.page <= 1 || isLoading}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Previous
+              </button>
+              <span className="whitespace-nowrap text-sm text-slate-600">
+                Page {transactionPagination.page} of {pageCount}
+              </span>
+              <button
+                type="button"
+                onClick={() => updateTransactionPage(transactionPagination.page + 1)}
+                disabled={transactionPagination.page >= pageCount || isLoading}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Next
+              </button>
+            </div>
           </div>
         )}
       </section>

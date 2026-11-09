@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { data, Link, useFetcher, useLoaderData } from 'react-router'
 import type { Route } from './+types/Notifications'
 import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
@@ -14,6 +14,7 @@ type NotificationPayload = {
 }
 
 type NotificationRow = Pick<NotificationEvent, 'id' | 'notification_type' | 'payload' | 'status' | 'created_at' | 'read_at'>
+const notificationPageSize = 20
 
 function getText(value: unknown, fallback: string) {
   return typeof value === 'string' && value.trim() ? value : fallback
@@ -46,25 +47,76 @@ function formatNotificationDate(value: string) {
 export async function loader({ request }: Route.LoaderArgs) {
   const url = new URL(request.url)
   const requestId = url.searchParams.get('requestId') ?? crypto.randomUUID()
+  const requestedOffset = Number(url.searchParams.get('offset') ?? '0')
+  const offset = Number.isSafeInteger(requestedOffset) && requestedOffset >= 0 ? requestedOffset : 0
   if (url.searchParams.get('notificationsData') !== '1') {
-    return data({ notifications: [], error: null, loading: true, requestId: crypto.randomUUID() })
+    return data({
+      notifications: [],
+      unreadCount: 0,
+      totalCount: 0,
+      hasMore: false,
+      offset: 0,
+      error: null,
+      loading: true,
+      requestId: crypto.randomUUID(),
+    })
   }
   if (!isSupabaseServerConfigured)
-    return data({ notifications: [], error: 'Notifications are unavailable right now.', loading: false, requestId })
+    return data({
+      notifications: [],
+      unreadCount: 0,
+      totalCount: 0,
+      hasMore: false,
+      offset,
+      error: 'Notifications are unavailable right now.',
+      loading: false,
+      requestId,
+    })
 
   const { supabase, headers } = getSupabaseServerClient(request)
   const { data: userData } = await supabase.auth.getUser()
   if (!userData.user)
-    return data({ notifications: [], error: 'Please sign in again.', loading: false, requestId }, { status: 401, headers })
+    return data(
+      {
+        notifications: [],
+        unreadCount: 0,
+        totalCount: 0,
+        hasMore: false,
+        offset,
+        error: 'Please sign in again.',
+        loading: false,
+        requestId,
+      },
+      { status: 401, headers },
+    )
 
-  const { data: notifications, error } = await supabase
-    .from('notification_events')
-    .select('id, notification_type, payload, status, created_at, read_at')
-    .eq('customer_id', userData.user.id)
-    .order('created_at', { ascending: false })
+  const [{ data: notifications, count: totalCount, error }, { count: unreadCount, error: unreadCountError }] = await Promise.all([
+    supabase
+      .from('notification_events')
+      .select('id, notification_type, payload, status, created_at, read_at', { count: 'exact' })
+      .eq('customer_id', userData.user.id)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + notificationPageSize - 1),
+    supabase
+      .from('notification_events')
+      .select('id', { count: 'exact', head: true })
+      .eq('customer_id', userData.user.id)
+      .is('read_at', null),
+  ])
+  const queryError = error ?? unreadCountError
+  if (queryError) console.error('[notifications] Customer notifications could not be loaded', queryError)
 
   return data(
-    { notifications: (notifications ?? []) as NotificationRow[], error: error?.message ?? null, loading: false, requestId },
+    {
+      notifications: (notifications ?? []) as NotificationRow[],
+      unreadCount: unreadCount ?? 0,
+      totalCount: totalCount ?? 0,
+      hasMore: offset + (notifications?.length ?? 0) < (totalCount ?? 0),
+      offset,
+      error: queryError?.message ?? null,
+      loading: false,
+      requestId,
+    },
     { headers },
   )
 }
@@ -105,18 +157,24 @@ export default function Notifications() {
   const loadNotifications = dataFetcher.load
   const [requestedDataId, setRequestedDataId] = useState<string | null>(null)
   const [observedDataId, setObservedDataId] = useState<string | null>(null)
-  const requestNotifications = (requestId: string) => {
-    setRequestedDataId(requestId)
-    setObservedDataId(null)
-    loadNotifications(`/notifications?notificationsData=1&requestId=${encodeURIComponent(requestId)}`)
-  }
+  const [handledLoaderDataId, setHandledLoaderDataId] = useState<string | null>(null)
+  const requestNotifications = useCallback(
+    (requestId: string, offset = 0) => {
+      setRequestedDataId(requestId)
+      setObservedDataId(null)
+      loadNotifications(`/notifications?notificationsData=1&requestId=${encodeURIComponent(requestId)}&offset=${offset}`)
+    },
+    [loadNotifications],
+  )
   useEffect(() => {
-    if (!loaderData.loading || isDataLoading || loaderData.requestId === requestedDataId) return
+    if (!loaderData.loading || isDataLoading || loaderData.requestId === handledLoaderDataId) return
     const requestId = loaderData.requestId
-    const timer = window.setTimeout(() => setRequestedDataId(requestId), 0)
-    loadNotifications(`/notifications?notificationsData=1&requestId=${encodeURIComponent(requestId)}`)
+    const timer = window.setTimeout(() => {
+      setHandledLoaderDataId(requestId)
+      requestNotifications(requestId, 0)
+    }, 0)
     return () => window.clearTimeout(timer)
-  }, [loaderData.loading, loaderData.requestId, isDataLoading, requestedDataId, loadNotifications])
+  }, [loaderData.loading, loaderData.requestId, isDataLoading, handledLoaderDataId, requestNotifications])
   useEffect(() => {
     if (dataFetcher.state === 'idle' || !requestedDataId) return
     const timer = window.setTimeout(() => setObservedDataId(requestedDataId), 0)
@@ -124,6 +182,10 @@ export default function Notifications() {
   }, [dataFetcher.state, requestedDataId])
   const fetchedData = dataFetcher.data?.loading === false && dataFetcher.data.requestId === requestedDataId ? dataFetcher.data : null
   const notifications = fetchedData?.notifications ?? loaderData.notifications
+  const unreadCount = fetchedData?.unreadCount ?? loaderData.unreadCount
+  const totalCount = fetchedData?.totalCount ?? loaderData.totalCount
+  const currentOffset = fetchedData?.offset ?? loaderData.offset
+  const hasMore = fetchedData?.hasMore ?? loaderData.hasMore
   const error =
     fetchedData?.error ??
     loaderData.error ??
@@ -132,12 +194,12 @@ export default function Notifications() {
       : null)
   const isLoading = loaderData.loading && !fetchedData && !error
   const fetcher = actionFetcher
-  const unreadCount = notifications.filter((notification) => !notification.read_at).length
 
   const markAllRead = () => {
     fetcher.submit({ intent: 'mark-all-read' }, { method: 'post' })
   }
-  const retryNotifications = () => requestNotifications(crypto.randomUUID())
+  const retryNotifications = () => requestNotifications(crypto.randomUUID(), currentOffset)
+  const loadNotificationPage = (offset: number) => requestNotifications(crypto.randomUUID(), offset)
 
   return (
     <div className="space-y-5 pb-8">
@@ -176,9 +238,15 @@ export default function Notifications() {
         </div>
       )}
 
-      {!isLoading && !error && notifications.length === 0 && (
+      {!isLoading && !error && totalCount === 0 && (
         <section className="rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm shadow-slate-100">
           <p className="text-sm text-slate-500">No notifications yet.</p>
+        </section>
+      )}
+
+      {!isLoading && !error && totalCount > 0 && notifications.length === 0 && (
+        <section className="rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm shadow-slate-100">
+          <p className="text-sm text-slate-500">No notifications on this page.</p>
         </section>
       )}
 
@@ -220,6 +288,30 @@ export default function Notifications() {
             })}
           </div>
         </section>
+      )}
+
+      {!isLoading && !error && totalCount > 0 && (
+        <nav aria-label="Notification pages" className="flex items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={() => loadNotificationPage(Math.max(0, currentOffset - notificationPageSize))}
+            disabled={currentOffset === 0 || dataFetcher.state !== 'idle'}
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 disabled:opacity-50"
+          >
+            Previous
+          </button>
+          <p className="text-sm text-slate-500">
+            Page {Math.floor(currentOffset / notificationPageSize) + 1} of {Math.max(1, Math.ceil(totalCount / notificationPageSize))}
+          </p>
+          <button
+            type="button"
+            onClick={() => loadNotificationPage(currentOffset + notificationPageSize)}
+            disabled={!hasMore || dataFetcher.state !== 'idle'}
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 disabled:opacity-50"
+          >
+            Next
+          </button>
+        </nav>
       )}
     </div>
   )

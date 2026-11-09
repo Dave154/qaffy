@@ -1,17 +1,12 @@
 import { AlertTriangle, ArrowRight } from 'lucide-react'
-import type { CustomerOrder } from '../portals/customer/customer-store'
 
 type MismatchBannerProps = {
-  orders: CustomerOrder[]
+  count: number
+  detail: string | null
 }
 
-export default function MismatchBanner({ orders }: MismatchBannerProps) {
-  const mismatches = orders
-    .filter((order) => order.mismatch && order.paymentStatus === 'Pending')
-    .map((order) => ({ order, mismatch: order.mismatch! }))
-  const latestMismatch = mismatches[0]?.mismatch
-
-  if (!latestMismatch) return null
+export default function MismatchBanner({ count, detail }: MismatchBannerProps) {
+  if (count === 0) return null
 
   return (
     <section className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-slate-900 sm:p-5" role="status">
@@ -20,11 +15,11 @@ export default function MismatchBanner({ orders }: MismatchBannerProps) {
       </span>
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-bold text-amber-900">
-          {mismatches.length === 1 ? 'Your order count was updated' : `${mismatches.length} order counts were updated`}
+          {count === 1 ? 'Your order count was updated' : `${count} order counts were updated`}
         </p>
         <div className="mt-1 flex min-w-0 items-center gap-3">
-          <p className="min-w-0 flex-1 truncate text-sm text-amber-800" title={latestMismatch.detail}>
-            {latestMismatch.detail}
+          <p className="min-w-0 flex-1 truncate text-sm text-amber-800" title={detail ?? undefined}>
+            {detail ?? 'A vendor confirmed an updated item count.'}
           </p>
           <a
             href="/orders?filter=Needs%20attention"

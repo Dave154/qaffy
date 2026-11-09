@@ -124,6 +124,36 @@ export type CustomerOrder = {
   mismatch: { id: string; direction: 'over' | 'under'; detail: string; lines: MismatchLine[] } | null
 }
 
+export type CustomerOverviewSummary = {
+  activeOrderCount: number
+  pendingPaymentTotal: number
+  hasPendingInvoiceOrder: boolean
+  mismatchCount: number
+  latestMismatchDetail: string | null
+}
+
+export type CustomerOrdersPagination = {
+  page: number
+  pageSize: number
+  totalCount: number
+  filteredCount: number
+  activeCount: number
+  deliveredCount: number
+  pageOrderIds: string[]
+}
+
+export type CustomerInvoicePagination = {
+  page: number
+  pageSize: number
+  totalCount: number
+}
+
+export type CustomerTransactionPagination = {
+  page: number
+  pageSize: number
+  totalCount: number
+}
+
 export type CustomerStore = {
   customerId: string
   customerName: string
@@ -149,7 +179,11 @@ export type CustomerStore = {
   preferredPickupLocationName: string | null
   pickupLocations: PickupLocationOption[]
   orders: CustomerOrder[]
+  overviewSummary: CustomerOverviewSummary | null
+  ordersPagination: CustomerOrdersPagination | null
+  invoicePagination: CustomerInvoicePagination | null
   transactions: CustomerTransaction[]
+  transactionPagination: CustomerTransactionPagination | null
   pendingTopUp: boolean
   transactionError: string | null
   isDataLoading: boolean
@@ -454,6 +488,8 @@ type CustomerStoreProviderProps = {
   persistedWalletTransactions?: WalletTransaction[]
   persistedPayments?: Payment[]
   persistedTransactionError?: string | null
+  persistedTransactions?: CustomerTransaction[]
+  persistedTransactionPagination?: CustomerTransactionPagination | null
   persistedUnpaidInvoiceOrderIds?: string[]
   invoiceAmountsByOrderId?: Record<string, number>
   persistedInvoices?: Array<
@@ -483,6 +519,9 @@ type CustomerStoreProviderProps = {
     unitsAvailableForConfirmation: number
     nextBalanceAfterCredit: number | null
   } | null
+  persistedOverviewSummary?: CustomerOverviewSummary | null
+  persistedOrdersPagination?: CustomerOrdersPagination | null
+  persistedInvoicePagination?: CustomerInvoicePagination | null
   isDataLoading?: boolean
   dataLoadError?: string | null
 }
@@ -497,6 +536,8 @@ export function CustomerStoreProvider({
   persistedWalletTransactions,
   persistedPayments,
   persistedTransactionError = null,
+  persistedTransactions,
+  persistedTransactionPagination = null,
   persistedUnpaidInvoiceOrderIds,
   invoiceAmountsByOrderId,
   persistedInvoices,
@@ -505,6 +546,9 @@ export function CustomerStoreProvider({
   persistedOrderItems,
   persistedOrderMismatches = [],
   persistedSubscriptionAllowance = null,
+  persistedOverviewSummary = null,
+  persistedOrdersPagination = null,
+  persistedInvoicePagination = null,
   isDataLoading = false,
   dataLoadError = null,
 }: CustomerStoreProviderProps) {
@@ -530,28 +574,30 @@ export function CustomerStoreProvider({
   const [oneOffBalance, setOneOffBalance] = useState(persistedWallet?.one_off_balance ?? 0)
   const [subscriptionBalance, setSubscriptionBalance] = useState(persistedWallet?.subscription_balance ?? 0)
   const [promotionalBalance] = useState(persistedWallet?.promotional_balance ?? 0)
-  const [transactions] = useState(() =>
-    [
-      ...(persistedPayments ?? []).map(mapPayment),
-      ...mapDatabaseTransactions(persistedWalletTransactions ?? [], orderReferenceByInvoiceId),
-      ...(persistedInvoices ?? [])
-        .filter((invoice) => invoice.status === 'paid' && invoice.payment_method === 'offline')
-        .map((invoice) => {
-          const date = invoice.paid_at ?? invoice.created_at
-          return {
-            id: `offline-invoice-${invoice.id}`,
-            title: 'Offline order payment',
-            reference: `Offline payment • ${invoice.id.slice(0, 8).toUpperCase()}`,
-            orderReference: invoice.order_reference ?? invoice.order_id,
-            date: new Date(date).toLocaleString(),
-            sortDate: date,
-            amount: `-₦${Number(invoice.amount).toLocaleString()}`,
-            direction: 'debit' as const,
-            category: 'payment' as const,
-            status: 'Successful',
-          }
-        }),
-    ].sort((left, right) => new Date(right.sortDate).getTime() - new Date(left.sortDate).getTime()),
+  const [transactions] = useState(
+    () =>
+      persistedTransactions ??
+      [
+        ...(persistedPayments ?? []).map(mapPayment),
+        ...mapDatabaseTransactions(persistedWalletTransactions ?? [], orderReferenceByInvoiceId),
+        ...(persistedInvoices ?? [])
+          .filter((invoice) => invoice.status === 'paid' && invoice.payment_method === 'offline')
+          .map((invoice) => {
+            const date = invoice.paid_at ?? invoice.created_at
+            return {
+              id: `offline-invoice-${invoice.id}`,
+              title: 'Offline order payment',
+              reference: `Offline payment • ${invoice.id.slice(0, 8).toUpperCase()}`,
+              orderReference: invoice.order_reference ?? invoice.order_id,
+              date: new Date(date).toLocaleString(),
+              sortDate: date,
+              amount: `-₦${Number(invoice.amount).toLocaleString()}`,
+              direction: 'debit' as const,
+              category: 'payment' as const,
+              status: 'Successful',
+            }
+          }),
+      ].sort((left, right) => new Date(right.sortDate).getTime() - new Date(left.sortDate).getTime()),
   )
   const [invoices] = useState(() => (persistedInvoices ?? []).map(mapDatabaseInvoice))
   const invoice = invoices[0] ?? null
@@ -593,10 +639,14 @@ export function CustomerStoreProvider({
       preferredPickupLocationName: preferredPickupLocation?.name ?? null,
       pickupLocations: persistedPickupLocations ?? [],
       orders,
+      overviewSummary: persistedOverviewSummary,
+      ordersPagination: persistedOrdersPagination,
+      invoicePagination: persistedInvoicePagination,
       transactions,
+      transactionPagination: persistedTransactionPagination,
       pendingTopUp:
         transactions.some((transaction) => transaction.title === 'Wallet top up' && transaction.status === 'Pending') &&
-        orders.some((order) => order.status === 'Pending payment'),
+        (persistedOverviewSummary?.hasPendingInvoiceOrder ?? orders.some((order) => order.status === 'Pending payment')),
       transactionError: persistedTransactionError,
       isDataLoading,
       dataLoadError,
@@ -750,6 +800,10 @@ export function CustomerStoreProvider({
     savedPickupLocationId,
     subscriptionBalance,
     persistedSubscriptionAllowance,
+    persistedOverviewSummary,
+    persistedOrdersPagination,
+    persistedInvoicePagination,
+    persistedTransactionPagination,
     subscriptionAvailableUnits,
     subscriptionBorrowedUnits,
     transactions,

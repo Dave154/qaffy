@@ -6,7 +6,7 @@ type DeliveryOtpPaywallProps = {
   amount: number
   walletBalance: number
   invoiceId?: string
-  onClick: () => void
+  onClick: (suggestedAmount: number) => void
 }
 
 export default function DeliveryOtpPaywall({ amount, walletBalance, invoiceId, onClick }: DeliveryOtpPaywallProps) {
@@ -28,11 +28,7 @@ export default function DeliveryOtpPaywall({ amount, walletBalance, invoiceId, o
     <div className="min-w-0">
       <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-brand-primary">Delivery OTP</p>
       {canPayFromWallet && invoiceId ? (
-        <paymentFetcher.Form
-          method="post"
-          action="/invoice"
-          className="mt-2"
-        >
+        <paymentFetcher.Form method="post" action="/invoice" className="mt-2">
           <input type="hidden" name="invoiceId" value={invoiceId} />
           <button
             type="submit"
@@ -56,7 +52,7 @@ export default function DeliveryOtpPaywall({ amount, walletBalance, invoiceId, o
           {paymentFetcher.data?.message?.includes('wallet balance is too low') && (
             <button
               type="button"
-              onClick={onClick}
+              onClick={() => onClick(topUpAmount)}
               className="mt-2 inline-flex w-[208px] items-center justify-center rounded-xl border border-brand-primary px-3 py-2 text-xs font-semibold text-brand-primary transition hover:bg-white"
             >
               Top up wallet
@@ -67,7 +63,7 @@ export default function DeliveryOtpPaywall({ amount, walletBalance, invoiceId, o
         <button
           type="button"
           onClick={() => {
-            if (!canPayFromWallet) onClick()
+            if (!canPayFromWallet) onClick(topUpAmount)
           }}
           disabled={canPayFromWallet}
           aria-label={buttonLabel}

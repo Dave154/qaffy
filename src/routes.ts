@@ -17,7 +17,6 @@ export default [
     route('plans', 'portals/customer/pages/Plans.tsx'),
     route('settings', 'portals/customer/pages/Settings.tsx'),
     route('invoice', 'portals/customer/pages/Invoice.tsx'),
-    route('otp', 'portals/customer/pages/OtpFlow.tsx'),
   ]),
   route('login', 'portals/customer/pages/Login.tsx'),
   route('create-account', 'portals/customer/pages/CreateAccount.tsx'),

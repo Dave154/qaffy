@@ -108,6 +108,7 @@ export default function Home() {
     referralCode,
     orders,
     invoices,
+    overviewSummary,
     subscription,
     subscriptionEndDate,
     pendingTopUp,
@@ -117,7 +118,8 @@ export default function Home() {
   const [searchParams, setSearchParams] = useSearchParams()
   const revalidator = useRevalidator()
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false)
-  const [isTopUpModalOpen, setIsTopUpModalOpen] = useState(() => searchParams.get('topup') === '1')
+  const [isTopUpModalOpenManually, setIsTopUpModalOpenManually] = useState(false)
+  const [topUpSuggestedAmount, setTopUpSuggestedAmount] = useState<number | null>(null)
   const [pushSetupVisible, setPushSetupVisible] = useState(false)
   const [planBannerDismissed, setPlanBannerDismissed] = useState(false)
   const [pushSetupBusy, setPushSetupBusy] = useState(false)
@@ -125,10 +127,12 @@ export default function Home() {
   const topUpFetcher = useFetcher<typeof action>()
   const cancelFetcher = useFetcher<{ ok: boolean; orderId?: string; message?: string }>()
   const handledCancelResponse = useRef<typeof cancelFetcher.data>(null)
-  const activeOrderCount = orders.filter((order) => order.status !== 'Delivered').length
-  const pendingPaymentTotal = orders
-    .filter((order) => order.paymentStatus === 'Pending' && order.status !== 'Delivered')
-    .reduce((total, order) => total + order.total, 0)
+  const activeOrderCount = overviewSummary?.activeOrderCount ?? orders.filter((order) => order.status !== 'Delivered').length
+  const pendingPaymentTotal =
+    overviewSummary?.pendingPaymentTotal ??
+    orders
+      .filter((order) => order.paymentStatus === 'Pending' && order.status !== 'Delivered')
+      .reduce((total, order) => total + order.total, 0)
   const getVisibleOtp = (order: (typeof orders)[number]) => {
     if (order.status === 'Awaiting pickup') return order.pickupOtp
     if (order.paymentStatus === 'Paid' && order.status !== 'Delivered' && order.deliveryOtp) return order.deliveryOtp
@@ -147,11 +151,30 @@ export default function Home() {
   }
   const today = new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' }).format(new Date())
   const referralPath = referralCode ? `/create-account?ref=${encodeURIComponent(referralCode)}` : ''
-  const hasMismatchBanner = orders.some((order) => order.mismatch && order.paymentStatus === 'Pending')
+  const mismatchCount =
+    overviewSummary?.mismatchCount ?? orders.filter((order) => order.mismatch && order.paymentStatus === 'Pending').length
   const hasPlanEndingBanner = !planBannerDismissed && shouldShowPlanEndingBanner(subscriptionEndDate)
+  const hasTopUpIntent = searchParams.get('topup') === '1'
+  const requestedTopUpAmount = Number(searchParams.get('amount'))
+  const urlTopUpSuggestedAmount =
+    Number.isFinite(requestedTopUpAmount) && requestedTopUpAmount > 0 ? Math.max(100, requestedTopUpAmount) : null
+  const isTopUpModalOpen = isTopUpModalOpenManually || (hasTopUpIntent && !isDataLoading)
 
   const handleTopUp = async (amount: number) => {
     topUpFetcher.submit({ amount: String(amount) }, { method: 'post', encType: 'application/x-www-form-urlencoded' })
+  }
+  const openTopUpModal = (suggestedAmount: number | null = null) => {
+    setTopUpSuggestedAmount(suggestedAmount)
+    setIsTopUpModalOpenManually(true)
+  }
+  const closeTopUpModal = () => {
+    setIsTopUpModalOpenManually(false)
+    setTopUpSuggestedAmount(null)
+    if (!hasTopUpIntent) return
+    const nextParams = new URLSearchParams(searchParams)
+    nextParams.delete('topup')
+    nextParams.delete('amount')
+    setSearchParams(nextParams, { replace: true })
   }
 
   const handleEnableNotifications = async () => {
@@ -206,14 +229,6 @@ export default function Home() {
   }, [topUpFetcher.data])
 
   useEffect(() => {
-    if (searchParams.get('topup') !== '1') return
-    setIsTopUpModalOpen(true)
-    const nextParams = new URLSearchParams(searchParams)
-    nextParams.delete('topup')
-    setSearchParams(nextParams, { replace: true })
-  }, [searchParams, setSearchParams])
-
-  useEffect(() => {
     const result = cancelFetcher.data
     if (cancelFetcher.state !== 'idle' || !result || handledCancelResponse.current === result) return
     handledCancelResponse.current = result
@@ -251,8 +266,8 @@ export default function Home() {
         </p>
       )}
 
-      {hasMismatchBanner ? (
-        <MismatchBanner orders={orders} />
+      {mismatchCount > 0 ? (
+        <MismatchBanner count={mismatchCount} detail={overviewSummary?.latestMismatchDetail ?? null} />
       ) : hasPlanEndingBanner && subscription ? (
         <PlanEndingBanner
           planName={`${subscription.name} ${subscription.billingPeriod}`}
@@ -373,7 +388,7 @@ export default function Home() {
           <div className="mt-5 flex gap-2">
             <button
               type="button"
-              onClick={() => setIsTopUpModalOpen(true)}
+              onClick={() => openTopUpModal()}
               disabled={isDataLoading || Boolean(dataLoadError)}
               title={isDataLoading ? 'Loading account details' : undefined}
               className="flex-1 rounded-lg bg-brand-primary px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-primary-hover"
@@ -449,7 +464,7 @@ export default function Home() {
                           amount={order.total}
                           walletBalance={balance}
                           invoiceId={invoices.find((invoice) => invoice.orderId === order.id && invoice.status === 'Awaiting payment')?.id}
-                          onClick={() => setIsTopUpModalOpen(true)}
+                          onClick={(suggestedAmount) => openTopUpModal(suggestedAmount)}
                         />
                       ) : order.paymentStatus === 'Paid' && order.status !== 'Delivered' && !order.deliveryOtp ? (
                         <DeliveryOtpStatus />
@@ -575,7 +590,6 @@ export default function Home() {
             { to: '/transactions', label: 'Transactions', icon: CreditCard },
             { to: '/plans', label: 'Plans', icon: Sparkles },
             { to: '/invoice', label: 'Invoice', icon: FileText },
-            { to: '/otp', label: 'Pickup OTP', icon: Gift },
             { to: '/settings', label: 'Settings', icon: Settings2 },
           ].map((item) => {
             const Icon = item.icon
@@ -600,10 +614,11 @@ export default function Home() {
           currentBalance={balance}
           subscriptionBalance={subscriptionBalance}
           pendingPaymentTotal={pendingPaymentTotal}
+          suggestedAmount={topUpSuggestedAmount ?? urlTopUpSuggestedAmount}
           onTopUp={handleTopUp}
           isProcessing={topUpFetcher.state !== 'idle'}
           error={topUpFetcher.data && !topUpFetcher.data.ok && 'message' in topUpFetcher.data ? topUpFetcher.data.message : null}
-          onClose={() => setIsTopUpModalOpen(false)}
+          onClose={closeTopUpModal}
         />
       )}
     </div>

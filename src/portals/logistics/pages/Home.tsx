@@ -1,5 +1,5 @@
-import { data, useFetcher, useOutletContext, useRevalidator } from 'react-router'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { data, useFetcher, useOutletContext, useRevalidator, useSearchParams } from 'react-router'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { waitUntil } from '@vercel/functions'
 import type { Route } from './+types/Home'
 import { sql } from '../../../lib/db.server'
@@ -144,10 +144,7 @@ export async function action({ request }: Route.ActionArgs) {
       return data({ ok: true, intent, otp, matches: usedResult.matches, timing }, { headers: authHeaders })
     } catch (error) {
       console.error('Logistics OTP lookup failed:', error)
-      return data(
-        { ok: false, intent, otp, message: 'OTP search failed. Please try again.' },
-        { status: 500, headers: authHeaders },
-      )
+      return data({ ok: false, intent, otp, message: 'OTP search failed. Please try again.' }, { status: 500, headers: authHeaders })
     }
   }
 
@@ -285,29 +282,14 @@ export async function action({ request }: Route.ActionArgs) {
   return data({ ok: true, orderId: order.id, status: order.status, pickedUpDate: order.picked_up_date })
 }
 
-const filters = ['Today', 'Last week', 'Last month'] as const
+const filters = ['Today', 'Yesterday', 'Last week', 'Last month', 'All time'] as const
 
 const presetLabels: Record<(typeof filters)[number], string> = {
   Today: 'Today',
+  Yesterday: 'Yesterday',
   'Last week': 'Last week',
   'Last month': 'Last month',
-}
-
-type OrderRecord = {
-  id: string
-  public_order_number: string
-  status: 'picked_up' | 'delivered' | 'pending_pickup' | 'at_vendor' | 'invoiced' | 'paid' | 'out_for_delivery' | 'cancelled'
-  pickup_otp: string | null
-  delivery_otp: string | null
-  pickup_location_id: string | null
-  pickup_location_name?: string | null
-  customer_id: string
-  created_at: string
-  notes: string | null
-  picked: boolean
-  picked_up_date: string | null
-  customer_name?: string
-  customer_uid?: string | null
+  'All time': 'All time',
 }
 
 type HandoffQueueEntry = {
@@ -367,9 +349,10 @@ function HandoffQueueItem({
     } else if (!fetcher.data.ok && 'message' in fetcher.data) {
       onResult(entry.orderId, {
         status: 'failed',
-        message: 'alreadyUsed' in fetcher.data && fetcher.data.alreadyUsed
-          ? `${fetcher.data.message} Refresh handoff history to verify.`
-          : fetcher.data.message,
+        message:
+          'alreadyUsed' in fetcher.data && fetcher.data.alreadyUsed
+            ? `${fetcher.data.message} Refresh handoff history to verify.`
+            : fetcher.data.message,
       })
     }
   }, [entry.orderId, fetcher.data, fetcher.state, onResult])
@@ -413,50 +396,45 @@ function HandoffQueueItem({
   )
 }
 
-function isWithinRange(dateIso: string, range: (typeof filters)[number]) {
-  const date = new Date(dateIso)
-  const now = new Date()
-
-  const startOfToday = new Date(now)
-  startOfToday.setHours(0, 0, 0, 0)
-
-  const endOfToday = new Date(now)
-  endOfToday.setHours(23, 59, 59, 999)
-
-  if (range === 'Today') return date >= startOfToday && date <= endOfToday
-
-  if (range === 'Last week') {
-    const startOfWeek = new Date(startOfToday)
-    startOfWeek.setDate(startOfToday.getDate() - 6)
-    return date >= startOfWeek && date <= endOfToday
-  }
-
-  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)
-  return date >= startOfMonth && date <= endOfToday
-}
-
 export default function Home() {
-  const { orders, logisticsEvents } = useOutletContext<{
-    orders: OrderRecord[]
-    logisticsEvents: Array<{ order_id: string; event_type: 'picked_up' | 'delivered'; created_at: string }>
+  const { summary, selectedLocation, locations, historyEvents, historyPagination } = useOutletContext<{
+    summary: { pickedUp: number; pendingPickup: number; delivered: number; pendingDelivery: number }
+    selectedLocation: string
+    locations: Array<{ id: string; name: string }>
+    historyEvents: Array<{
+      id: string
+      order_id: string
+      event_type: 'picked_up' | 'delivered'
+      created_at: string
+      public_order_number: string
+      customer_name: string
+      customer_uid: string | null
+      pickup_location_name: string | null
+    }>
+    historyPagination: { page: number; pageSize: number; totalCount: number; pageCount: number }
   }>()
   const lookupFetcher = useFetcher<typeof action>()
   const revalidator = useRevalidator()
-  const [selectedRange, setSelectedRange] = useState<(typeof filters)[number]>('Today')
-  const [selectedLocation, setSelectedLocation] = useState('All locations')
-  const [selectedHistory, setSelectedHistory] = useState<'picked_up' | 'delivered'>('picked_up')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requestedRange = searchParams.get('range') ?? 'Today'
+  const selectedRange = (
+    filters.includes(requestedRange as (typeof filters)[number]) ? requestedRange : 'Today'
+  ) as (typeof filters)[number]
+  const selectedHistory = searchParams.get('history') === 'delivered' ? 'delivered' : 'picked_up'
   const [otp, setOtp] = useState(['', '', '', ''])
   const [handoffQueue, setHandoffQueue] = useState<HandoffQueueEntry[]>([])
   const inputRefs = useRef<Array<HTMLInputElement | null>>([])
 
-  const locationOptions = useMemo(
-    () => ['All locations', ...new Set(orders.map((order) => order.pickup_location_name).filter((name): name is string => Boolean(name)))],
-    [orders],
-  )
-
-  const matchesSelectedLocation = (order: OrderRecord) => {
-    if (selectedLocation === 'All locations') return true
-    return order.pickup_location_name === selectedLocation
+  const updateFilters = (updates: Record<string, string | null>) => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      for (const [key, value] of Object.entries(updates)) {
+        if (value) next.set(key, value)
+        else next.delete(key)
+      }
+      if (!('page' in updates)) next.delete('page')
+      return next
+    })
   }
 
   const handleHandoffResult = useCallback(
@@ -478,10 +456,7 @@ export default function Home() {
 
   const enteredOtp = otp.join('').trim()
   const lookupResponse =
-    lookupFetcher.data &&
-    'intent' in lookupFetcher.data &&
-    lookupFetcher.data.intent === 'search' &&
-    lookupFetcher.data.otp === enteredOtp
+    lookupFetcher.data && 'intent' in lookupFetcher.data && lookupFetcher.data.intent === 'search' && lookupFetcher.data.otp === enteredOtp
       ? lookupFetcher.data
       : null
   const pendingLookupTiming = useRef<{ otp: string; startedAt: number | null } | null>(null)
@@ -507,13 +482,14 @@ export default function Home() {
 
     console.info('[logistics-otp] browser round trip', {
       durationMs: performance.now() - pending.startedAt,
-      result: 'ok' in response && response.ok && 'matches' in response
-        ? response.matches.some((match) => match.kind === 'active')
-          ? 'active'
-          : response.matches.length > 0
-            ? 'used'
-            : 'none'
-        : 'error',
+      result:
+        'ok' in response && response.ok && 'matches' in response
+          ? response.matches.some((match) => match.kind === 'active')
+            ? 'active'
+            : response.matches.length > 0
+              ? 'used'
+              : 'none'
+          : 'error',
       serverTiming: 'timing' in response ? response.timing : undefined,
     })
     pendingLookupTiming.current = null
@@ -522,42 +498,7 @@ export default function Home() {
   const activeMatches = lookupMatches.filter((match) => match.kind === 'active')
   const usedMatches = lookupMatches.filter((match) => match.kind === 'used')
 
-  const pendingOrders = useMemo(
-    () =>
-      orders.filter(
-        (order) =>
-          order.status === 'pending_pickup' && matchesSelectedLocation(order) && isWithinRange(order.created_at, selectedRange),
-      ),
-    [orders, selectedLocation, selectedRange],
-  )
-
-  const pickedUpEvents = useMemo(
-    () =>
-      logisticsEvents.filter((event) => {
-        if (event.event_type !== 'picked_up') return false
-        const order = orders.find((item) => item.id === event.order_id)
-        return order ? matchesSelectedLocation(order) && isWithinRange(event.created_at, selectedRange) : false
-      }),
-    [logisticsEvents, orders, selectedLocation, selectedRange],
-  )
-
-  const deliveredEvents = useMemo(
-    () =>
-      logisticsEvents.filter((event) => {
-        if (event.event_type !== 'delivered') return false
-        const order = orders.find((item) => item.id === event.order_id)
-        return order ? matchesSelectedLocation(order) && isWithinRange(event.created_at, selectedRange) : false
-      }),
-    [logisticsEvents, orders, selectedLocation, selectedRange],
-  )
-
-  const pendingDeliveryOrders = useMemo(
-    () =>
-      orders.filter(
-        (order) => order.status === 'out_for_delivery' && matchesSelectedLocation(order) && isWithinRange(order.created_at, selectedRange),
-      ),
-    [orders, selectedLocation, selectedRange],
-  )
+  const historyForSelectedType = historyEvents.filter((event) => event.event_type === selectedHistory)
   const focusInput = (index: number) => {
     const nextInput = inputRefs.current[index]
     nextInput?.focus()
@@ -680,7 +621,7 @@ export default function Home() {
           <span className="whitespace-nowrap font-medium">Activity</span>
           <select
             value={selectedRange}
-            onChange={(event) => setSelectedRange(event.target.value as (typeof filters)[number])}
+            onChange={(event) => updateFilters({ range: event.target.value === 'Today' ? null : event.target.value })}
             className="min-w-0 rounded-full border border-slate-200 bg-transparent px-1.5 py-0.5 text-xs font-medium text-slate-700 outline-none focus:border-brand-primary sm:px-2 sm:py-1 sm:text-sm"
             aria-label="Activity date range"
           >
@@ -696,13 +637,14 @@ export default function Home() {
           <span className="whitespace-nowrap font-medium">Location</span>
           <select
             value={selectedLocation}
-            onChange={(event) => setSelectedLocation(event.target.value)}
+            onChange={(event) => updateFilters({ location: event.target.value === 'all' ? null : event.target.value })}
             className="min-w-0 rounded-full border border-slate-200 bg-transparent px-1.5 py-0.5 text-xs font-medium text-slate-700 outline-none focus:border-brand-primary sm:px-2 sm:py-1 sm:text-sm"
             aria-label="Pickup location filter"
           >
-            {locationOptions.map((location) => (
-              <option key={location} value={location}>
-                {location}
+            <option value="all">All locations</option>
+            {locations.map((location) => (
+              <option key={location.id} value={location.id}>
+                {location.name}
               </option>
             ))}
           </select>
@@ -711,10 +653,10 @@ export default function Home() {
 
       <div className="grid grid-cols-2 gap-x-4 gap-y-3 rounded-2xl border border-[#e7e7e7] bg-white px-4 py-3 text-sm shadow-sm shadow-slate-100 sm:grid-cols-4">
         {[
-          { label: 'Picked up', count: pickedUpEvents.length },
-          { label: 'Pending pickup', count: pendingOrders.length },
-          { label: 'Delivered', count: deliveredEvents.length },
-          { label: 'Pending delivery', count: pendingDeliveryOrders.length },
+          { label: 'Picked up', count: summary.pickedUp },
+          { label: 'Pending pickup', count: summary.pendingPickup },
+          { label: 'Delivered', count: summary.delivered },
+          { label: 'Pending delivery', count: summary.pendingDelivery },
         ].map((metric) => (
           <div key={metric.label} className="flex min-w-0 items-center justify-between gap-2">
             <span className="truncate text-slate-500">{metric.label}</span>
@@ -781,7 +723,10 @@ export default function Home() {
                     : 'Multiple matches. Confirm the order before proceeding.'}
                 </p>
                 {[...activeMatches, ...usedMatches].map((match) => (
-                  <div key={`${match.kind}-${match.order_id}-${match.handoff_type}`} className="flex flex-col justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-3 sm:flex-row sm:items-center">
+                  <div
+                    key={`${match.kind}-${match.order_id}-${match.handoff_type}`}
+                    className="flex flex-col justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-3 sm:flex-row sm:items-center"
+                  >
                     <div>
                       <p className="text-sm font-semibold text-slate-800">{match.public_order_number}</p>
                       <p className="mt-1 text-xs font-medium text-slate-600">{match.customer_name}</p>
@@ -819,7 +764,10 @@ export default function Home() {
               </>
             ) : activeMatches.length === 1 ? (
               activeMatches.map((match) => (
-                <div key={`${match.order_id}-${match.handoff_type}`} className="flex flex-col justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-3 sm:flex-row sm:items-center">
+                <div
+                  key={`${match.order_id}-${match.handoff_type}`}
+                  className="flex flex-col justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-3 sm:flex-row sm:items-center"
+                >
                   <div>
                     <p className="text-sm font-semibold text-slate-800">{match.public_order_number}</p>
                     <p className="mt-1 text-xs font-medium text-slate-600">{match.customer_name}</p>
@@ -877,60 +825,50 @@ export default function Home() {
       <section className="rounded-[28px] border border-[#e7e7e7] bg-white p-4 shadow-sm shadow-slate-100 md:p-5">
         <div className="flex items-center justify-between gap-3">
           <h2 className="whitespace-nowrap font-bold text-slate-900 text-sm sm:text-xl">Handoff history</h2>
-          <div className="flex shrink-0 rounded-full text-sm border border-brand-border bg-brand-soft p-px" role="group" aria-label="Handoff history type">
+          <div
+            className="flex shrink-0 rounded-full text-sm border border-brand-border bg-brand-soft p-px"
+            role="group"
+            aria-label="Handoff history type"
+          >
             <button
               type="button"
-              onClick={() => setSelectedHistory('picked_up')}
+              onClick={() => updateFilters({ history: null })}
               aria-pressed={selectedHistory === 'picked_up'}
               className={`rounded-full px-1.5 py-0.5  font-semibold transition ${
                 selectedHistory === 'picked_up' ? 'bg-brand-primary text-white shadow-sm' : 'text-slate-600 hover:text-brand-primary'
               }`}
             >
-              Pickups ({pickedUpEvents.length})
+              Pickups ({summary.pickedUp})
             </button>
             <button
               type="button"
-              onClick={() => setSelectedHistory('delivered')}
+              onClick={() => updateFilters({ history: 'delivered' })}
               aria-pressed={selectedHistory === 'delivered'}
               className={`rounded-full px-2 py-1 text-xs font-semibold transition ${
                 selectedHistory === 'delivered' ? 'bg-brand-primary text-white shadow-sm' : 'text-slate-600 hover:text-brand-primary'
               }`}
             >
-              Deliveries ({deliveredEvents.length})
+              Deliveries ({summary.delivered})
             </button>
           </div>
         </div>
         <div className="mt-4 space-y-2">
-          {selectedHistory === 'picked_up' ? (
-            pickedUpEvents.length === 0 ? (
-              <p className="text-sm text-slate-500">No pickup events recorded for this period.</p>
-            ) : (
-              pickedUpEvents.slice(0, 10).map((event) => {
-                const pickedOrder = orders.find((item) => item.id === event.order_id)
-                return (
-                  <div key={event.order_id + event.created_at} className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-3 py-3 text-sm">
-                    <div>
-                      <p className="font-semibold text-slate-800">{pickedOrder?.public_order_number ?? 'Order unavailable'}</p>
-                      <p className="mt-1 text-xs text-slate-500">{pickedOrder?.customer_name ?? 'Customer'}</p>
-                      <p className="mt-1 text-[11px] text-slate-500">Customer UID: {pickedOrder?.customer_uid ?? 'Not available'}</p>
-                      <p className="mt-1 text-[11px] text-slate-500">Pickup: {pickedOrder?.pickup_location_name ?? 'Location pending'}</p>
-                    </div>
-                    <span className="shrink-0 text-xs text-slate-500">{new Date(event.created_at).toLocaleString()}</span>
-                  </div>
-                )
-              })
-            )
-          ) : deliveredEvents.length === 0 ? (
-            <p className="text-sm text-slate-500">No delivery events recorded for this period.</p>
+          {historyForSelectedType.length === 0 ? (
+            <p className="text-sm text-slate-500">
+              No {selectedHistory === 'picked_up' ? 'pickup' : 'delivery'} events recorded for this period.
+            </p>
           ) : (
-            deliveredEvents.slice(0, 10).map((event) => {
-              const deliveredOrder = orders.find((item) => item.id === event.order_id)
+            historyForSelectedType.map((event) => {
               return (
-                <div key={event.order_id + event.created_at} className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-3 py-3 text-sm">
+                <div
+                  key={event.id}
+                  className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-3 py-3 text-sm"
+                >
                   <div>
-                    <p className="font-semibold text-slate-800">{deliveredOrder?.public_order_number ?? 'Order unavailable'}</p>
-                    <p className="mt-1 text-xs text-slate-500">{deliveredOrder?.customer_name ?? 'Customer'}</p>
-                    <p className="mt-1 text-[11px] text-slate-500">Customer UID: {deliveredOrder?.customer_uid ?? 'Not available'}</p>
+                    <p className="font-semibold text-slate-800">{event.public_order_number}</p>
+                    <p className="mt-1 text-xs text-slate-500">{event.customer_name}</p>
+                    <p className="mt-1 text-[11px] text-slate-500">Customer UID: {event.customer_uid ?? 'Not available'}</p>
+                    <p className="mt-1 text-[11px] text-slate-500">Pickup: {event.pickup_location_name ?? 'Location pending'}</p>
                   </div>
                   <span className="shrink-0 text-xs text-slate-500">{new Date(event.created_at).toLocaleString()}</span>
                 </div>
@@ -938,6 +876,33 @@ export default function Home() {
             })
           )}
         </div>
+        {historyPagination.totalCount > historyPagination.pageSize && (
+          <div className="mt-4 flex items-center justify-between gap-3 border-t border-slate-100 pt-4">
+            <p className="text-xs text-slate-500">
+              Showing {(historyPagination.page - 1) * historyPagination.pageSize + 1}–
+              {Math.min(historyPagination.page * historyPagination.pageSize, historyPagination.totalCount)} of{' '}
+              {historyPagination.totalCount}
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => updateFilters({ page: String(historyPagination.page - 1) })}
+                disabled={historyPagination.page <= 1}
+                className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 disabled:opacity-50"
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                onClick={() => updateFilters({ page: String(historyPagination.page + 1) })}
+                disabled={historyPagination.page >= historyPagination.pageCount}
+                className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 disabled:opacity-50"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
       </section>
     </div>
   )

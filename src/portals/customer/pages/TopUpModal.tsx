@@ -5,6 +5,7 @@ type TopUpModalProps = {
   currentBalance: number
   subscriptionBalance: number
   pendingPaymentTotal: number
+  suggestedAmount?: number | null
   onTopUp: (amount: number) => Promise<void>
   isProcessing: boolean
   error: string | null
@@ -15,6 +16,7 @@ export default function TopUpModal({
   currentBalance,
   subscriptionBalance,
   pendingPaymentTotal,
+  suggestedAmount: suggestedAmountOverride,
   onTopUp,
   isProcessing,
   error,
@@ -29,8 +31,8 @@ export default function TopUpModal({
     const remaining = Math.max(0, outstanding - currentBalance)
     return Math.max(minimum, remaining)
   }, [currentBalance, debt, pendingPaymentTotal])
-
-  const [amount, setAmount] = useState(String(suggestedAmount))
+  const [amountOverride, setAmountOverride] = useState<string | null>(null)
+  const amount = amountOverride ?? String(suggestedAmountOverride ?? suggestedAmount)
   const numericAmount = amount === '' ? 0 : Number(amount)
   const amountError = amount !== '' && (!Number.isFinite(numericAmount) || numericAmount < 100) ? 'Minimum top-up is ₦100.' : null
   const appliedToDebt = Math.min(Math.max(numericAmount, 0), negativeBalance)
@@ -86,7 +88,7 @@ export default function TopUpModal({
               type="number"
               min={100}
               value={amount}
-              onChange={(event) => setAmount(event.target.value)}
+              onChange={(event) => setAmountOverride(event.target.value)}
               aria-invalid={Boolean(amountError)}
               className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-base text-slate-900 focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
             />

@@ -43,6 +43,19 @@ export type SettlementVendorPreview = {
   reason: string | null
 }
 
+export type SettlementVendorSummaryInput = {
+  vendorId: string
+  vendorName: string
+  payoutAccountReady: boolean
+  orderCount: number
+  amount: number
+}
+
+export type SettlementVendorSummary = Pick<
+  SettlementVendorPreview,
+  'vendorId' | 'vendorName' | 'orderCount' | 'amount' | 'eligible' | 'reason'
+>
+
 export function getRateValue(rate: RateCardRow | null | undefined, service: RateCardService, type: 'customer' | 'vendor' = 'customer') {
   const key =
     type === 'vendor'
@@ -119,6 +132,26 @@ export function buildSettlementVendorPreviews(
         : !payoutAccountReady
           ? 'Verify the vendor payout account before creating a settlement.'
           : orderIds.length === 0
+            ? 'No paid, payable orders are available in this period.'
+            : 'The payable amount must be greater than zero.',
+    }
+  })
+}
+
+export function summarizeSettlementVendorTotals(vendors: SettlementVendorSummaryInput[]): SettlementVendorSummary[] {
+  return vendors.map(({ vendorId, vendorName, payoutAccountReady, orderCount, amount }) => {
+    const eligible = payoutAccountReady && orderCount > 0 && Number.isFinite(amount) && amount > 0
+    return {
+      vendorId,
+      vendorName,
+      orderCount,
+      amount,
+      eligible,
+      reason: eligible
+        ? null
+        : !payoutAccountReady
+          ? 'Verify the vendor payout account before creating a settlement.'
+          : orderCount === 0
             ? 'No paid, payable orders are available in this period.'
             : 'The payable amount must be greater than zero.',
     }

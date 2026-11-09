@@ -5,70 +5,335 @@ import type { Route } from './+types/VendorLayout'
 import { Banknote, ClipboardList, History, LayoutDashboard, LogOut, Menu, Settings, X } from 'lucide-react'
 import QaffyLogo from '../../components/QaffyLogo'
 import { requireRole } from '../../lib/auth.server'
+import { sql } from '../../lib/db.server'
 import { supabase } from '../../lib/supabase.client'
+
+const vendorOrderPageSize = 20
+const vendorOverviewOrderPageSize = 10
 
 // eslint-disable-next-line react-refresh/only-export-components
 export async function loader({ request }: Route.LoaderArgs) {
   const auth = await requireRole(request, 'vendor')
   if (!auth) throw redirect('/vendor/login')
   const { supabase, headers } = auth
+  const requestUrl = new URL(request.url)
 
-  const { data: vendor } = await supabase
+  const { data: vendor, error: vendorError } = await supabase
     .from('vendors')
     .select('id, payout_account_status, payout_recipient_code')
     .eq('profile_id', auth.profile.id)
     .eq('status', 'approved')
     .maybeSingle()
-  const { data: orders } = vendor
+  if (vendorError) throw new Error(`Vendor account could not be loaded: ${vendorError.message}`)
+
+  const isOrdersPage = requestUrl.pathname === '/vendor/orders'
+  const isOverviewPage = requestUrl.pathname === '/vendor' || requestUrl.pathname === '/vendor/'
+  const requestedTab = requestUrl.searchParams.get('tab') ?? 'processing'
+  const allowedTabs = ['unclaimed', 'processing', 'ready', 'dispatched', 'delivered']
+  const activeTab = allowedTabs.includes(requestedTab) ? requestedTab : 'processing'
+  const orderSearch = (requestUrl.searchParams.get('search') ?? '').trim().slice(0, 100)
+  const requestedPage = Number.parseInt(requestUrl.searchParams.get('page') ?? '1', 10)
+  const page = Number.isSafeInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1
+  const requestedOverviewRange = requestUrl.searchParams.get('range') ?? 'Today'
+  const overviewRange = ['Today', 'This week', 'All time'].includes(requestedOverviewRange) ? requestedOverviewRange : 'Today'
+  let pageOrderIds: string[] = []
+  let overviewOrderIds: string[] | null = null
+  let ordersPagination: {
+    page: number
+    pageSize: number
+    totalCount: number
+    tabCounts: { unclaimed: number; processing: number; ready: number; dispatched: number; delivered: number }
+  } | null = null
+  let overviewMetrics: Record<string, { pending: number; active: number; dispatched: number; completed: number }> | null = null
+  let overviewPagination: { page: number; pageSize: number; totalCount: number; pageCount: number } | null = null
+
+  if (vendor?.id && isOrdersPage) {
+    const [pageSummary] = await sql<
+      {
+        order_ids: string[]
+        total_count: number
+        page: number
+        unclaimed_count: number
+        processing_count: number
+        ready_count: number
+        dispatched_count: number
+        delivered_count: number
+      }[]
+    >`
+      with vendor_orders as (
+        select
+          order_row.id,
+          order_row.vendor_id,
+          order_row.status,
+          order_row.created_at,
+          coalesce(invoice.status::text, 'none') as invoice_status
+        from orders order_row
+        left join lateral (
+          select status
+          from invoices
+          where order_id = order_row.id
+          order by created_at desc, id desc
+          limit 1
+        ) invoice on true
+        where order_row.status <> 'cancelled'
+          and (
+            order_row.vendor_id = ${vendor.id}
+            or (order_row.vendor_id is null and order_row.status = 'picked_up')
+          )
+      ),
+      tab_counts as (
+        select
+          count(*) filter (where status = 'picked_up' and vendor_id is null)::int as unclaimed_count,
+          count(*) filter (where vendor_id = ${vendor.id} and status in ('at_vendor', 'invoiced', 'paid'))::int as processing_count,
+          count(*) filter (
+            where vendor_id = ${vendor.id}
+              and ((status = 'paid' and invoice_status = 'paid') or (status = 'invoiced' and invoice_status = 'unpaid'))
+          )::int as ready_count,
+          count(*) filter (where vendor_id = ${vendor.id} and status = 'out_for_delivery')::int as dispatched_count,
+          count(*) filter (where vendor_id = ${vendor.id} and status = 'delivered')::int as delivered_count
+        from vendor_orders
+      ),
+      matching_orders as (
+        select vendor_orders.id, vendor_orders.created_at
+        from vendor_orders
+        join orders order_row on order_row.id = vendor_orders.id
+        where (
+          (${activeTab} = 'unclaimed' and vendor_orders.status = 'picked_up' and vendor_orders.vendor_id is null)
+          or (${activeTab} = 'processing' and vendor_orders.vendor_id = ${vendor.id} and vendor_orders.status in ('at_vendor', 'invoiced', 'paid'))
+          or (
+            ${activeTab} = 'ready'
+            and vendor_orders.vendor_id = ${vendor.id}
+            and ((vendor_orders.status = 'paid' and vendor_orders.invoice_status = 'paid')
+              or (vendor_orders.status = 'invoiced' and vendor_orders.invoice_status = 'unpaid'))
+          )
+          or (${activeTab} = 'dispatched' and vendor_orders.vendor_id = ${vendor.id} and vendor_orders.status = 'out_for_delivery')
+          or (${activeTab} = 'delivered' and vendor_orders.vendor_id = ${vendor.id} and vendor_orders.status = 'delivered')
+        )
+        and (
+          ${orderSearch} = ''
+          or position(lower(${orderSearch}) in lower(concat_ws(
+            ' ',
+            order_row.public_order_number,
+            (select name from profiles where id = order_row.customer_id),
+            (select qaffy_id from profiles where id = order_row.customer_id),
+            (select name from pickup_locations where id = order_row.pickup_location_id),
+            case order_row.order_type when 'wash' then 'Wash only' when 'wash_iron' then 'Wash + Iron' else 'Mixed service' end
+          ))) > 0
+        )
+      ),
+      total as (
+        select count(*)::int as total_count from matching_orders
+      ),
+      page_info as (
+        select case
+          when total.total_count = 0 then 1
+          else least(${page}, ceil(total.total_count::numeric / ${vendorOrderPageSize})::int)
+        end as page
+        from total
+      )
+      select
+        coalesce(array(
+          select id
+          from matching_orders
+          order by created_at desc, id desc
+          offset ((select page from page_info) - 1) * ${vendorOrderPageSize}
+          limit ${vendorOrderPageSize}
+        ), '{}'::uuid[]) as order_ids,
+        total.total_count,
+        page_info.page,
+        tab_counts.unclaimed_count,
+        tab_counts.processing_count,
+        tab_counts.ready_count,
+        tab_counts.dispatched_count,
+        tab_counts.delivered_count
+      from total, page_info, tab_counts
+    `
+    pageOrderIds = pageSummary?.order_ids ?? []
+    ordersPagination = {
+      page: Number(pageSummary?.page ?? 1),
+      pageSize: vendorOrderPageSize,
+      totalCount: Number(pageSummary?.total_count ?? 0),
+      tabCounts: {
+        unclaimed: Number(pageSummary?.unclaimed_count ?? 0),
+        processing: Number(pageSummary?.processing_count ?? 0),
+        ready: Number(pageSummary?.ready_count ?? 0),
+        dispatched: Number(pageSummary?.dispatched_count ?? 0),
+        delivered: Number(pageSummary?.delivered_count ?? 0),
+      },
+    }
+  } else if (vendor?.id && isOverviewPage) {
+    const [metrics] = await sql<
+      {
+        today_pending: number
+        today_active: number
+        today_dispatched: number
+        today_completed: number
+        week_pending: number
+        week_active: number
+        week_dispatched: number
+        week_completed: number
+        all_pending: number
+        all_active: number
+        all_dispatched: number
+        all_completed: number
+      }[]
+    >`
+      select
+        count(*) filter (where status = 'picked_up' and coalesce(picked_up_date, created_at) >= (date_trunc('day', now() at time zone 'Africa/Lagos') at time zone 'Africa/Lagos'))::int as today_pending,
+        count(*) filter (where status in ('at_vendor', 'invoiced', 'paid') and coalesce(picked_up_date, created_at) >= (date_trunc('day', now() at time zone 'Africa/Lagos') at time zone 'Africa/Lagos'))::int as today_active,
+        count(*) filter (where status = 'out_for_delivery' and coalesce(picked_up_date, created_at) >= (date_trunc('day', now() at time zone 'Africa/Lagos') at time zone 'Africa/Lagos'))::int as today_dispatched,
+        count(*) filter (where status = 'delivered' and coalesce(picked_up_date, created_at) >= (date_trunc('day', now() at time zone 'Africa/Lagos') at time zone 'Africa/Lagos'))::int as today_completed,
+        count(*) filter (where status = 'picked_up' and coalesce(picked_up_date, created_at) >= ((date_trunc('day', now() at time zone 'Africa/Lagos') - interval '6 days') at time zone 'Africa/Lagos'))::int as week_pending,
+        count(*) filter (where status in ('at_vendor', 'invoiced', 'paid') and coalesce(picked_up_date, created_at) >= ((date_trunc('day', now() at time zone 'Africa/Lagos') - interval '6 days') at time zone 'Africa/Lagos'))::int as week_active,
+        count(*) filter (where status = 'out_for_delivery' and coalesce(picked_up_date, created_at) >= ((date_trunc('day', now() at time zone 'Africa/Lagos') - interval '6 days') at time zone 'Africa/Lagos'))::int as week_dispatched,
+        count(*) filter (where status = 'delivered' and coalesce(picked_up_date, created_at) >= ((date_trunc('day', now() at time zone 'Africa/Lagos') - interval '6 days') at time zone 'Africa/Lagos'))::int as week_completed,
+        count(*) filter (where status = 'picked_up')::int as all_pending,
+        count(*) filter (where status in ('at_vendor', 'invoiced', 'paid'))::int as all_active,
+        count(*) filter (where status = 'out_for_delivery')::int as all_dispatched,
+        count(*) filter (where status = 'delivered')::int as all_completed
+      from orders
+      where status <> 'cancelled'
+        and (vendor_id = ${vendor.id} or (vendor_id is null and status = 'picked_up'))
+    `
+    overviewMetrics = {
+      Today: {
+        pending: Number(metrics?.today_pending ?? 0),
+        active: Number(metrics?.today_active ?? 0),
+        dispatched: Number(metrics?.today_dispatched ?? 0),
+        completed: Number(metrics?.today_completed ?? 0),
+      },
+      'This week': {
+        pending: Number(metrics?.week_pending ?? 0),
+        active: Number(metrics?.week_active ?? 0),
+        dispatched: Number(metrics?.week_dispatched ?? 0),
+        completed: Number(metrics?.week_completed ?? 0),
+      },
+      'All time': {
+        pending: Number(metrics?.all_pending ?? 0),
+        active: Number(metrics?.all_active ?? 0),
+        dispatched: Number(metrics?.all_dispatched ?? 0),
+        completed: Number(metrics?.all_completed ?? 0),
+      },
+    }
+    const [overviewOrderPage] = await sql<{ order_ids: string[]; total_count: number; page: number; page_count: number }[]>`
+      with matching_orders as (
+        select id, coalesce(picked_up_date, created_at) as order_date, created_at
+        from orders
+        where status = 'picked_up'
+          and vendor_id is null
+          and (
+            ${overviewRange} = 'All time'
+            or (
+              ${overviewRange} = 'Today'
+              and coalesce(picked_up_date, created_at) >= (date_trunc('day', now() at time zone 'Africa/Lagos') at time zone 'Africa/Lagos')
+            )
+            or (
+              ${overviewRange} = 'This week'
+              and coalesce(picked_up_date, created_at) >= ((date_trunc('day', now() at time zone 'Africa/Lagos') - interval '6 days') at time zone 'Africa/Lagos')
+            )
+          )
+      ),
+      total as (
+        select count(*)::int as total_count from matching_orders
+      ),
+      page_info as (
+        select
+          case
+            when total.total_count = 0 then 1
+            else least(${page}, ceil(total.total_count::numeric / ${vendorOverviewOrderPageSize})::int)
+          end as page,
+          greatest(1, ceil(total.total_count::numeric / ${vendorOverviewOrderPageSize})::int) as page_count
+        from total
+      )
+      select
+        coalesce(array(
+          select id
+          from matching_orders
+          order by order_date desc, created_at desc, id desc
+          offset ((select page from page_info) - 1) * ${vendorOverviewOrderPageSize}
+          limit ${vendorOverviewOrderPageSize}
+        ), '{}'::uuid[]) as order_ids,
+        total.total_count,
+        page_info.page,
+        page_info.page_count
+      from total, page_info
+    `
+    pageOrderIds = overviewOrderPage?.order_ids ?? []
+    overviewOrderIds = [...pageOrderIds]
+    overviewPagination = {
+      page: Number(overviewOrderPage?.page ?? 1),
+      pageSize: vendorOverviewOrderPageSize,
+      totalCount: Number(overviewOrderPage?.total_count ?? 0),
+      pageCount: Number(overviewOrderPage?.page_count ?? 1),
+    }
+    const requestedOrderId = requestUrl.searchParams.get('orderId')
+    if (requestedOrderId) {
+      const { data: selectedOrder, error: selectedOrderError } = await supabase
+        .from('orders')
+        .select('id')
+        .eq('id', requestedOrderId)
+        .or(`vendor_id.eq.${vendor.id},and(vendor_id.is.null,status.eq.picked_up)`)
+        .maybeSingle()
+      if (selectedOrderError) throw new Error(`Selected vendor order could not be loaded: ${selectedOrderError.message}`)
+      if (selectedOrder?.id) pageOrderIds = [...new Set([...pageOrderIds, selectedOrder.id])]
+    }
+  }
+
+  const { data: orders, error: ordersError } = pageOrderIds.length
     ? await supabase
         .from('orders')
-        .select('*')
-        .or(`vendor_id.eq.${vendor.id},and(vendor_id.is.null,status.eq.picked_up)`)
-        .neq('status', 'cancelled')
-        .order('created_at', { ascending: false })
-    : { data: [] }
-  const orderIds = (orders ?? []).map((order) => order.id)
-  const customerIds = [...new Set((orders ?? []).map((order) => order.customer_id))]
-  const locationIds = [...new Set((orders ?? []).map((order) => order.pickup_location_id).filter(Boolean))] as string[]
+        .select(
+          'id, public_order_number, customer_id, order_type, clothes_count_vendor, status, pickup_otp, delivery_otp, pickup_location_id, notes, is_subscription_order, billed_extra_amount, picked, picked_up_date, created_at',
+        )
+        .in('id', pageOrderIds)
+    : { data: [], error: null }
+  if (ordersError) throw new Error(`Vendor orders could not be loaded: ${ordersError.message}`)
+  const orderById = new Map((orders ?? []).map((order) => [order.id, order]))
+  const orderedOrders = pageOrderIds.map((id) => orderById.get(id)).filter((order) => order !== undefined)
+  const orderIds = orderedOrders.map((order) => order.id)
+  const customerIds = [...new Set(orderedOrders.map((order) => order.customer_id))]
+  const locationIds = [...new Set(orderedOrders.map((order) => order.pickup_location_id).filter(Boolean))] as string[]
 
   const [
-    { data: profiles },
-    { data: locations },
-    { data: items },
+    { data: profiles, error: profilesError },
+    { data: locations, error: locationsError },
+    { data: items, error: itemsError },
     { data: invoices, error: invoicesError },
-    { data: mismatches },
-    { data: logisticsEvents },
-  ] =
-    await Promise.all([
-      customerIds.length
-        ? supabase.from('profiles').select('id, name, qaffy_id, email, phone').in('id', customerIds)
-        : Promise.resolve({ data: [] }),
-      locationIds.length ? supabase.from('pickup_locations').select('id, name').in('id', locationIds) : Promise.resolve({ data: [] }),
-      orderIds.length
-        ? supabase
-            .from('order_items')
-            .select('id, order_id, category_id, quantity, confirmed_quantity, service, unit_price')
-            .in('order_id', orderIds)
-        : Promise.resolve({ data: [] }),
-      orderIds.length
-        ? supabase.from('invoices').select('id, order_id, amount, status, created_at, paid_at').in('order_id', orderIds)
-        : Promise.resolve({ data: [], error: null }),
-      orderIds.length
-        ? supabase
-            .from('mismatches')
-            .select('id, order_id, direction, detail, details, created_at')
-            .in('order_id', orderIds)
-            .order('created_at', { ascending: false })
-        : Promise.resolve({ data: [] }),
-      orderIds.length
-        ? supabase
-            .from('order_logistics_events')
-            .select('id, order_id, event_type, created_at')
-            .in('order_id', orderIds)
-            .order('created_at', { ascending: false })
-        : Promise.resolve({ data: [] }),
-    ])
-  if (invoicesError) throw new Error(`Order payment status could not be loaded: ${invoicesError.message}`)
+    { data: mismatches, error: mismatchesError },
+    { data: logisticsEvents, error: logisticsEventsError },
+  ] = await Promise.all([
+    customerIds.length
+      ? supabase.from('profiles').select('id, name, qaffy_id, email, phone').in('id', customerIds)
+      : Promise.resolve({ data: [], error: null }),
+    locationIds.length
+      ? supabase.from('pickup_locations').select('id, name').in('id', locationIds)
+      : Promise.resolve({ data: [], error: null }),
+    orderIds.length
+      ? supabase
+          .from('order_items')
+          .select('id, order_id, category_id, quantity, confirmed_quantity, service, unit_price')
+          .in('order_id', orderIds)
+      : Promise.resolve({ data: [], error: null }),
+    orderIds.length
+      ? supabase.from('invoices').select('id, order_id, amount, status, created_at, paid_at').in('order_id', orderIds)
+      : Promise.resolve({ data: [], error: null }),
+    orderIds.length
+      ? supabase
+          .from('mismatches')
+          .select('id, order_id, direction, detail, details, created_at')
+          .in('order_id', orderIds)
+          .order('created_at', { ascending: false })
+      : Promise.resolve({ data: [], error: null }),
+    orderIds.length
+      ? supabase
+          .from('order_logistics_events')
+          .select('id, order_id, event_type, created_at')
+          .in('order_id', orderIds)
+          .order('created_at', { ascending: false })
+      : Promise.resolve({ data: [], error: null }),
+  ])
+  const enrichmentError = profilesError ?? locationsError ?? itemsError ?? invoicesError ?? mismatchesError ?? logisticsEventsError
+  if (enrichmentError) throw new Error(`Vendor order details could not be loaded: ${enrichmentError.message}`)
   const [{ data: categories }, { data: categoryRates }] = await Promise.all([
     supabase.from('cloth_categories').select('id, name').order('name', { ascending: true }),
     supabase.from('cloth_category_rates').select('category_id, vendor_wash_price, vendor_iron_price, vendor_wash_iron_price'),
@@ -88,7 +353,7 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   return data(
     {
-      orders: (orders ?? []).map((order) => ({
+      orders: orderedOrders.map((order) => ({
         ...order,
         customer: (profiles ?? []).find((profile) => profile.id === order.customer_id) ?? null,
         location: (locations ?? []).find((location) => location.id === order.pickup_location_id) ?? null,
@@ -102,6 +367,10 @@ export async function loader({ request }: Route.LoaderArgs) {
       vendorName: auth.profile.name ?? 'Vendor',
       rateCard: [...rateCard.values()],
       payoutAccountReady: !vendor || (vendor.payout_account_status === 'verified' && Boolean(vendor.payout_recipient_code)),
+      ordersPagination,
+      overviewMetrics,
+      overviewOrderIds,
+      overviewPagination,
     },
     { headers, status: 200 },
   )

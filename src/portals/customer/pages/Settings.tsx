@@ -1,11 +1,105 @@
 import { Bell, Copy, Share2 } from 'lucide-react'
-import { data, Link, useFetcher } from 'react-router'
+import { data, Link, useFetcher, useLoaderData } from 'react-router'
 import type { Route } from './+types/Settings'
 import { useCustomerStore } from '../customer-store-hook'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ensurePushSubscription, getPushSubscription, removePushSubscription, savePushSubscription } from '../../../lib/push.client'
 import { toast } from '../../../lib/toast'
 import { CustomerInlineSkeleton, CustomerSectionSkeleton } from '../../../components/customer/CustomerDataSkeleton'
+import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
+import type { CustomerReferral, ReferralCampaignBenefit } from '../customer-store'
+
+// eslint-disable-next-line react-refresh/only-export-components
+export async function loader({ request }: Route.LoaderArgs) {
+  const url = new URL(request.url)
+  const requestId = url.searchParams.get('requestId') ?? crypto.randomUUID()
+  const emptyData = {
+    referrals: [] as CustomerReferral[],
+    referralCount: 0,
+    successfulReferralCount: 0,
+    referralCampaignBenefit: null as ReferralCampaignBenefit | null,
+    error: null as string | null,
+    loading: true,
+    requestId: crypto.randomUUID(),
+  }
+  if (url.searchParams.get('settingsData') !== '1') return data(emptyData)
+  if (!isSupabaseServerConfigured) {
+    return data({ ...emptyData, error: 'Referral information is unavailable.', loading: false, requestId })
+  }
+
+  const { supabase, headers } = getSupabaseServerClient(request)
+  const { data: userData } = await supabase.auth.getUser()
+  if (!userData.user) {
+    return data({ ...emptyData, error: 'Please sign in again.', loading: false, requestId }, { status: 401, headers })
+  }
+
+  const campaignCheckTime = new Date().toISOString()
+  const [
+    { data: activeReferralCampaign, error: referralCampaignError },
+    { data: referralRows, count: referralCount, error: referralError },
+    { count: successfulReferralCount, error: successfulReferralError },
+  ] = await Promise.all([
+    supabase
+      .from('referral_campaigns')
+      .select('referrer_reward_value, referred_reward_value, minimum_order_amount')
+      .eq('status', 'active')
+      .or(`starts_at.is.null,starts_at.lte.${campaignCheckTime}`)
+      .or(`ends_at.is.null,ends_at.gt.${campaignCheckTime}`)
+      .order('starts_at', { ascending: false, nullsFirst: false })
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabase
+      .from('referrals')
+      .select('id, referrer_id, status, qualified_at, created_at', { count: 'exact' })
+      .or(`referred_id.eq.${userData.user.id},referrer_id.eq.${userData.user.id}`)
+      .order('created_at', { ascending: false })
+      .limit(4),
+    supabase
+      .from('referrals')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'rewarded')
+      .or(`referred_id.eq.${userData.user.id},referrer_id.eq.${userData.user.id}`),
+  ])
+  if (referralCampaignError || referralError || successfulReferralError) {
+    console.error('[referral] Settings data query failed', {
+      campaign: referralCampaignError?.code ?? null,
+      referrals: referralError?.code ?? null,
+      successfulCount: successfulReferralError?.code ?? null,
+    })
+    return data({ ...emptyData, error: 'Referral information could not be loaded.', loading: false, requestId }, { status: 500, headers })
+  }
+
+  const referrals: CustomerReferral[] = (referralRows ?? []).map((row) => ({
+    id: row.id,
+    status: row.status,
+    createdAt: row.created_at,
+    qualifiedAt: row.qualified_at,
+    isReferrer: row.referrer_id === userData.user.id,
+    rewardStatus: null,
+    rewardValue: null,
+    rewardExpiresAt: null,
+  }))
+
+  return data(
+    {
+      referrals,
+      referralCount: referralCount ?? 0,
+      successfulReferralCount: successfulReferralCount ?? 0,
+      referralCampaignBenefit: activeReferralCampaign
+        ? {
+            referrerRewardValue: Number(activeReferralCampaign.referrer_reward_value),
+            referredRewardValue: Number(activeReferralCampaign.referred_reward_value),
+            minimumOrderAmount: Number(activeReferralCampaign.minimum_order_amount),
+          }
+        : null,
+      error: null,
+      loading: false,
+      requestId,
+    },
+    { headers },
+  )
+}
 
 // eslint-disable-next-line react-refresh/only-export-components
 export async function action({ request }: Route.ActionArgs) {
@@ -40,14 +134,13 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function Settings() {
+  const loaderData = useLoaderData<typeof loader>()
   const {
     customerName,
     customerEmail,
     customerPhone,
     customerId,
     referralCode,
-    referralCampaignBenefit,
-    referrals,
     subscription,
     subscriptionEndDate,
     pickupLocations,
@@ -56,6 +149,11 @@ export default function Settings() {
     isDataLoading,
     dataLoadError,
   } = useCustomerStore()
+  const referralFetcher = useFetcher<typeof loader>()
+  const loadReferralData = referralFetcher.load
+  const [requestedReferralDataId, setRequestedReferralDataId] = useState<string | null>(null)
+  const [observedReferralDataId, setObservedReferralDataId] = useState<string | null>(null)
+  const [handledReferralLoaderId, setHandledReferralLoaderId] = useState<string | null>(null)
   const fetcher = useFetcher<typeof action>()
   const profileFetcher = useFetcher<typeof action>()
   const handledProfileResponse = useRef<typeof profileFetcher.data>(null)
@@ -63,8 +161,49 @@ export default function Settings() {
   const [notificationsEnabled, setNotificationsEnabled] = useState(false)
   const [notificationBusy, setNotificationBusy] = useState(false)
   const [notificationMessage, setNotificationMessage] = useState('')
-  const successfulReferrals = referrals.filter((referral) => referral.status === 'rewarded').length
+  const requestReferralData = useCallback(
+    (requestId: string) => {
+      setRequestedReferralDataId(requestId)
+      setObservedReferralDataId(null)
+      loadReferralData(`/settings?settingsData=1&requestId=${encodeURIComponent(requestId)}`)
+    },
+    [loadReferralData],
+  )
+  useEffect(() => {
+    if (!loaderData.loading || isDataLoading || loaderData.requestId === handledReferralLoaderId) return
+    const requestId = loaderData.requestId
+    const timer = window.setTimeout(() => {
+      setHandledReferralLoaderId(requestId)
+      requestReferralData(requestId)
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [loaderData.loading, loaderData.requestId, isDataLoading, handledReferralLoaderId, requestReferralData])
+  useEffect(() => {
+    if (referralFetcher.state === 'idle' || !requestedReferralDataId) return
+    const timer = window.setTimeout(() => setObservedReferralDataId(requestedReferralDataId), 0)
+    return () => window.clearTimeout(timer)
+  }, [referralFetcher.state, requestedReferralDataId])
+  const fetchedReferralData =
+    referralFetcher.data?.loading === false && referralFetcher.data.requestId === requestedReferralDataId ? referralFetcher.data : null
+  const referrals = fetchedReferralData?.referrals ?? loaderData.referrals
+  const referralCount = fetchedReferralData?.referralCount ?? loaderData.referralCount
+  const successfulReferrals = fetchedReferralData?.successfulReferralCount ?? loaderData.successfulReferralCount
+  const referralCampaignBenefit = fetchedReferralData?.referralCampaignBenefit ?? loaderData.referralCampaignBenefit
+  const referralDataError =
+    fetchedReferralData?.error ??
+    loaderData.error ??
+    (requestedReferralDataId !== null &&
+    observedReferralDataId === requestedReferralDataId &&
+    referralFetcher.state === 'idle' &&
+    !fetchedReferralData
+      ? 'Referral information could not be loaded. Please try again.'
+      : null)
+  const isReferralDataLoading = loaderData.loading && !fetchedReferralData && !referralDataError
   const referralLink = referralCode ? `/create-account?ref=${encodeURIComponent(referralCode)}` : ''
+  const retryReferralData = () => {
+    const requestId = crypto.randomUUID()
+    requestReferralData(requestId)
+  }
   const copyReferralLink = async () => {
     if (!referralLink) return
     await navigator.clipboard.writeText(new URL(referralLink, window.location.origin).toString())
@@ -305,10 +444,10 @@ export default function Settings() {
                   : 'There is no active referral bonus campaign right now.'
               }
             >
-              {isDataLoading ? (
+              {isReferralDataLoading ? (
                 <CustomerInlineSkeleton className="w-4/5" />
-              ) : dataLoadError ? (
-                'Referral information is unavailable.'
+              ) : referralDataError ? (
+                'Referral information could not be loaded.'
               ) : referralCampaignBenefit ? (
                 `Friend gets ₦${referralCampaignBenefit.referredRewardValue.toLocaleString()}; you get ₦${referralCampaignBenefit.referrerRewardValue.toLocaleString()} after ${referralCampaignBenefit.minimumOrderAmount > 0 ? `a paid order of ₦${referralCampaignBenefit.minimumOrderAmount.toLocaleString()}+` : 'any paid order'}.`
               ) : (
@@ -319,13 +458,13 @@ export default function Settings() {
               <div className="rounded-2xl bg-brand-soft px-3.5 py-3">
                 <p className="text-xs text-slate-500">Successful referrals</p>
                 <p className="mt-1 text-xl font-bold text-slate-900">
-                  {isDataLoading ? <CustomerInlineSkeleton className="w-8" /> : dataLoadError ? '—' : successfulReferrals}
+                  {isReferralDataLoading ? <CustomerInlineSkeleton className="w-8" /> : referralDataError ? '—' : successfulReferrals}
                 </p>
               </div>
               <div className="rounded-2xl bg-slate-50 px-3.5 py-3">
                 <p className="text-xs text-slate-500">Referral history</p>
                 <p className="mt-1 text-xl font-bold text-slate-900">
-                  {isDataLoading ? <CustomerInlineSkeleton className="w-8" /> : dataLoadError ? '—' : referrals.length}
+                  {isReferralDataLoading ? <CustomerInlineSkeleton className="w-8" /> : referralDataError ? '—' : referralCount}
                 </p>
               </div>
             </div>
@@ -354,11 +493,21 @@ export default function Settings() {
                 {referralMessage}
               </p>
             )}
-            {isDataLoading ? (
-              <CustomerSectionSkeleton rows={2} />
-            ) : dataLoadError ? (
-              <p className="text-sm text-slate-500">Referral history is unavailable.</p>
-            ) : referrals.length > 0 ? (
+            {referralDataError && (
+              <div role="alert" className="flex items-center justify-between gap-3 text-sm text-red-700">
+                <span>{referralDataError}</span>
+                <button
+                  type="button"
+                  onClick={retryReferralData}
+                  disabled={referralFetcher.state !== 'idle'}
+                  className="shrink-0 rounded-lg border border-red-300 px-3 py-1.5 font-semibold disabled:opacity-50"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+            {isReferralDataLoading && <CustomerSectionSkeleton rows={2} />}
+            {!isReferralDataLoading && !referralDataError && referrals.length > 0 && (
               <div className="divide-y divide-slate-100 rounded-2xl border border-slate-100 px-3.5">
                 {referrals.slice(0, 4).map((referral) => (
                   <div key={referral.id} className="flex items-center justify-between gap-3 py-3 text-sm">
@@ -374,7 +523,7 @@ export default function Settings() {
                   </div>
                 ))}
               </div>
-            ) : null}
+            )}
           </div>
         </div>
 

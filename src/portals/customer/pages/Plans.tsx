@@ -320,6 +320,8 @@ export default function Plans() {
 
   return (
     <div className="space-y-6 pb-8">
+      {currentPlan && <PlanEndingBanner planName={`${currentPlan.name} ${currentPlan.billingPeriod}`} endDate={subscriptionEndDate} />}
+
       <header className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
         <h2 className="mt-1 text-2xl font-bold tracking-tight text-[#121212] lg:hidden">Plans</h2>
         <p className="text-sm text-slate-500">Choose a plan that fits your routine</p>
@@ -364,8 +366,6 @@ export default function Plans() {
           </div>
         </section>
       )}
-
-      {currentPlan && <PlanEndingBanner planName={`${currentPlan.name} ${currentPlan.billingPeriod}`} endDate={subscriptionEndDate} />}
 
       <section className="flex flex-col gap-4 border-b border-[#e7e7e7] pb-4 sm:flex-row sm:items-center sm:justify-between">
         <div>

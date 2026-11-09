@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Printer } from 'lucide-react'
-import { data, Link } from 'react-router'
+import { data, Link, useSearchParams } from 'react-router'
 import type { Route } from './+types/Invoice'
 import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
 import { useCustomerStore } from '../customer-store-hook'
@@ -39,10 +39,19 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function Invoice() {
-  const { invoices, orders, isDataLoading, dataLoadError } = useCustomerStore()
+  const { invoices, orders, invoicePagination, isDataLoading, dataLoadError } = useCustomerStore()
   const [selectedInvoiceId, setSelectedInvoiceId] = useState(invoices[0]?.id ?? '')
+  const [, setSearchParams] = useSearchParams()
   const invoice = invoices.find((item) => item.id === selectedInvoiceId) ?? invoices[0] ?? null
   const selectedOrder = invoice ? (orders.find((order) => order.id === invoice.orderId) ?? null) : null
+  const updateInvoicePage = (page: number) => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      if (page <= 1) next.delete('page')
+      else next.set('page', String(page))
+      return next
+    })
+  }
   if (!invoice && (isDataLoading || dataLoadError)) {
     return (
       <div className="space-y-5 pb-8">
@@ -105,7 +114,7 @@ export default function Invoice() {
 
       <section className="print:hidden rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-100 sm:p-5">
         <label className="block">
-          <span className="mb-2 block text-sm font-semibold text-slate-700">Select order</span>
+          <span className="mb-2 block text-sm font-semibold text-slate-700">Select invoice</span>
           <select
             value={invoice.id}
             onChange={(event) => setSelectedInvoiceId(event.target.value)}
@@ -118,6 +127,36 @@ export default function Invoice() {
             ))}
           </select>
         </label>
+        {invoicePagination && invoicePagination.totalCount > invoicePagination.pageSize && (
+          <div className="mt-4 flex flex-col gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-slate-500">
+              Showing {(invoicePagination.page - 1) * invoicePagination.pageSize + 1}–
+              {Math.min(invoicePagination.page * invoicePagination.pageSize, invoicePagination.totalCount)} of{' '}
+              {invoicePagination.totalCount.toLocaleString()} invoices
+            </p>
+            <div className="flex items-center justify-between gap-3 sm:justify-end">
+              <button
+                type="button"
+                onClick={() => updateInvoicePage(invoicePagination.page - 1)}
+                disabled={invoicePagination.page <= 1 || isDataLoading}
+                className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Previous
+              </button>
+              <span className="whitespace-nowrap text-sm text-slate-600">
+                Page {invoicePagination.page} of {Math.ceil(invoicePagination.totalCount / invoicePagination.pageSize)}
+              </span>
+              <button
+                type="button"
+                onClick={() => updateInvoicePage(invoicePagination.page + 1)}
+                disabled={invoicePagination.page >= Math.ceil(invoicePagination.totalCount / invoicePagination.pageSize) || isDataLoading}
+                className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
       </section>
 
       <section className="rounded-[28px] bg-gradient-to-br from-brand-primary via-brand-primary to-brand-primary-hover p-5 text-white shadow-lg shadow-brand-border sm:p-6">
@@ -374,14 +413,6 @@ export default function Invoice() {
             </Link>
           )}
 
-          <Link
-            to="/otp"
-            prefetch="intent"
-            className={`mt-3 block w-full rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3 text-center text-sm font-semibold text-violet-700 transition hover:bg-violet-100 ${invoice.status !== 'Paid' ? 'pointer-events-none opacity-50' : ''}`}
-            aria-disabled={invoice.status !== 'Paid'}
-          >
-            Continue to delivery OTP
-          </Link>
         </div>
       </section>
 

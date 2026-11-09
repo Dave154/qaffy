@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { buildSettlementVendorPreviews } from './rate-card.ts'
+import { buildSettlementVendorPreviews, summarizeSettlementVendorTotals } from './rate-card.ts'
 import { createBulkSettlementBatches } from './settlement-batches.ts'
 
 const vendors = [
@@ -52,8 +52,22 @@ test('keeps paid dispatched orders eligible for payout while excluding unpaid di
       { id: 'dispatched-unpaid', vendor_id: 'vendor-a', status: 'out_for_delivery', clothes_count_vendor: 1, invoice_status: 'unpaid' },
     ],
     [
-      { id: 'item-dispatched-paid', order_id: 'dispatched-paid', category_id: 'shirts', confirmed_quantity: 1, service: 'wash', unit_price: 99 },
-      { id: 'item-dispatched-unpaid', order_id: 'dispatched-unpaid', category_id: 'shirts', confirmed_quantity: 5, service: 'wash', unit_price: 99 },
+      {
+        id: 'item-dispatched-paid',
+        order_id: 'dispatched-paid',
+        category_id: 'shirts',
+        confirmed_quantity: 1,
+        service: 'wash',
+        unit_price: 99,
+      },
+      {
+        id: 'item-dispatched-unpaid',
+        order_id: 'dispatched-unpaid',
+        category_id: 'shirts',
+        confirmed_quantity: 5,
+        service: 'wash',
+        unit_price: 99,
+      },
     ],
     rates,
     [],
@@ -83,6 +97,35 @@ test('marks vendors with unverified payout accounts ineligible', () => {
 
   assert.equal(previews[0].eligible, false)
   assert.match(previews[0].reason, /Verify the vendor payout account/)
+})
+
+test('preserves row-based eligibility and reason output when summarizing database totals', () => {
+  const previewVendors = [
+    { ...vendors[0], payoutAccountReady: true },
+    { ...vendors[1], payoutAccountReady: false },
+  ]
+  const rowBased = buildSettlementVendorPreviews(previewVendors, orders, items, rates, ['already-settled-a'])
+  const summaries = summarizeSettlementVendorTotals(
+    rowBased.map(({ vendorId, vendorName, orderCount, amount }) => ({
+      vendorId,
+      vendorName,
+      orderCount,
+      amount,
+      payoutAccountReady: previewVendors.find((vendor) => vendor.vendorId === vendorId)?.payoutAccountReady ?? true,
+    })),
+  )
+
+  assert.deepEqual(
+    summaries,
+    rowBased.map(({ vendorId, vendorName, orderCount, amount, eligible, reason }) => ({
+      vendorId,
+      vendorName,
+      orderCount,
+      amount,
+      eligible,
+      reason,
+    })),
+  )
 })
 
 test('uses a zero vendor rate instead of falling back to the customer item price', () => {

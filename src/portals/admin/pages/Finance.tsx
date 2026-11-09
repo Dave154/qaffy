@@ -1,18 +1,31 @@
-import { ArrowRight, Banknote, CheckCircle2, CircleDollarSign, Eye, Loader2, MoreVertical, Plus, RefreshCw, TrendingUp, X } from 'lucide-react'
+import {
+  ArrowRight,
+  Banknote,
+  CheckCircle2,
+  CircleDollarSign,
+  Eye,
+  Loader2,
+  MoreVertical,
+  Plus,
+  RefreshCw,
+  TrendingUp,
+  X,
+} from 'lucide-react'
 import { createPortal } from 'react-dom'
-import { data, useFetcher, useLoaderData, useRevalidator, type ShouldRevalidateFunctionArgs } from 'react-router'
+import { data, useFetcher, useLoaderData, useRevalidator, useSearchParams, type ShouldRevalidateFunctionArgs } from 'react-router'
 import { useEffect, useRef, useState } from 'react'
 import type { Route } from './+types/Finance'
 import { requireRole } from '../../../lib/auth.server'
 import { sql } from '../../../lib/db.server'
 import { toast } from '../../../lib/toast'
-import { buildSettlementVendorPreviews } from '../../../lib/rate-card'
-import type { SettlementCandidateItem, SettlementCandidateOrder } from '../../../lib/rate-card'
+import { summarizeSettlementVendorTotals } from '../../../lib/rate-card'
 import { reconcileSettlement, releaseSettlement } from '../../../lib/payouts.server'
 import { createBulkSettlements } from '../../../lib/settlements.server'
 import { releaseCreatedSettlements, summarizeSettlementPayouts } from '../../../lib/settlement-payouts'
 import AdminSideDrawer from '../../../components/AdminSideDrawer'
 import { supabase } from '../../../lib/supabase.client'
+
+const settlementPageSize = 20
 
 type SettlementRow = {
   id: string
@@ -100,13 +113,16 @@ export async function loader({ request }: Route.LoaderArgs) {
         },
         vendors: [],
         settlements: [],
+        settlementPagination: { page: 1, pageSize: settlementPageSize, totalCount: 0, pageCount: 1 },
       },
       { status: 200 },
     )
   }
 
   const { headers } = auth
-  const [reportRows, settlementRows] = await Promise.all([
+  const requestedPage = Number.parseInt(new URL(request.url).searchParams.get('page') ?? '1', 10)
+  const safeRequestedPage = Number.isSafeInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1
+  const [reportRows, settlementCountRows] = await Promise.all([
     sql<{ report: { summary: Record<string, number>; vendors: Array<Record<string, string | number>> } }[]>`
       with item_payouts as (
         select item.order_id,
@@ -204,7 +220,14 @@ export async function loader({ request }: Route.LoaderArgs) {
         'vendors', coalesce((select jsonb_agg(to_jsonb(vendor_rows) order by vendor_name) from vendor_rows), '[]'::jsonb)
       ) as report
     `,
-    sql`
+    sql<{ total_count: number }[]>`
+      select count(*)::int as total_count from vendor_settlements
+    `,
+  ])
+  const totalCount = Number(settlementCountRows[0]?.total_count ?? 0)
+  const pageCount = Math.max(1, Math.ceil(totalCount / settlementPageSize))
+  const page = Math.min(safeRequestedPage, pageCount)
+  const settlementRows = await sql`
       select settlement.id, settlement.vendor_id,
         coalesce(vendor.business_name, 'Vendor') as vendor_name,
         settlement.period_start, settlement.period_end, settlement.amount_due,
@@ -221,9 +244,10 @@ export async function loader({ request }: Route.LoaderArgs) {
       left join invoices invoice on invoice.order_id = membership.order_id
       left join vendor_settlement_transfers transfer on transfer.settlement_id = settlement.id
       group by settlement.id, vendor.id, transfer.id
-      order by settlement.created_at desc
-    `,
-  ])
+      order by settlement.created_at desc, settlement.id desc
+      limit ${settlementPageSize}
+      offset ${(page - 1) * settlementPageSize}
+    `
   const report = reportRows[0]?.report
   if (!report) throw new Error('Finance report could not be calculated.')
 
@@ -270,6 +294,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       },
       vendors: vendorSummaries,
       settlements: mappedSettlementRows,
+      settlementPagination: { page, pageSize: settlementPageSize, totalCount, pageCount },
     },
     { headers, status: 200 },
   )
@@ -288,7 +313,7 @@ export async function action({ request }: Route.ActionArgs) {
 
   const formData = await request.formData()
   const intent = String(formData.get('intent') ?? '')
-  const { supabase, headers } = auth
+  const { headers } = auth
 
   if (intent === 'load-paystack-balance') {
     return data(await fetchPaystackBalance(process.env.PAYSTACK_SECRET_KEY ?? ''), { headers, status: 200 })
@@ -320,10 +345,7 @@ export async function action({ request }: Route.ActionArgs) {
       `
     } catch (error) {
       console.error('Admin Finance settlement details query failed:', error)
-      return data(
-        { intent, settlementId, error: 'Settlement details could not be loaded.' },
-        { headers, status: 500 },
-      )
+      return data({ intent, settlementId, error: 'Settlement details could not be loaded.' }, { headers, status: 500 })
     }
     return data(
       {
@@ -365,10 +387,7 @@ export async function action({ request }: Route.ActionArgs) {
   }
 
   if (intent === 'record-withdrawal')
-    return data(
-      { error: 'Platform withdrawals are unavailable until a real payout flow is implemented.' },
-      { headers, status: 410 },
-    )
+    return data({ error: 'Platform withdrawals are unavailable until a real payout flow is implemented.' }, { headers, status: 410 })
 
   if (intent === 'preview-bulk-settlement') {
     const periodStart = String(formData.get('periodStart') ?? '')
@@ -376,89 +395,68 @@ export async function action({ request }: Route.ActionArgs) {
     if (!isValidSettlementPeriod(periodStart, periodEnd))
       return data({ error: 'Choose a valid settlement date range.' }, { headers, status: 400 })
 
-    const [{ data: approvedVendors, error: vendorError }, { data: rates, error: ratesError }] = await Promise.all([
-      supabase
-        .from('vendors')
-        .select('id, business_name, payout_account_status, payout_recipient_code')
-        .eq('status', 'approved')
-        .order('business_name'),
-      supabase.from('cloth_category_rates').select('category_id, vendor_wash_price, vendor_iron_price, vendor_wash_iron_price'),
-    ])
-    if (vendorError || ratesError)
-      return data(
-        { error: vendorError?.message ?? ratesError?.message ?? 'Settlement preview could not be loaded.' },
-        { headers, status: 400 },
-      )
-    const vendorIds = (approvedVendors ?? []).map((vendor) => vendor.id)
-    if (vendorIds.length === 0) return data({ ok: true, periodStart, periodEnd, vendors: [] }, { headers, status: 200 })
-
-    const { data: queriedOrders, error: ordersError } = await supabase
-      .from('orders')
-      .select('id, vendor_id, status, clothes_count_vendor')
-      .in('vendor_id', vendorIds)
-      .gte('created_at', new Date(`${periodStart}T00:00:00.000Z`).toISOString())
-      .lte('created_at', new Date(`${periodEnd}T23:59:59.999Z`).toISOString())
-    if (ordersError) return data({ error: ordersError.message }, { headers, status: 400 })
-    const orders = (queriedOrders ?? []).filter(
-      (order) => order.vendor_id && order.status !== 'cancelled' && order.clothes_count_vendor !== null,
-    )
-    const candidateOrderIds = orders.map((order) => order.id)
-    const [{ data: paidInvoices, error: invoiceError }, { data: existingMappings, error: mappingError }] = await Promise.all([
-      candidateOrderIds.length
-        ? supabase.from('invoices').select('order_id').in('order_id', candidateOrderIds).eq('status', 'paid')
-        : Promise.resolve({ data: [], error: null }),
-      candidateOrderIds.length
-        ? supabase.from('vendor_settlement_orders').select('order_id').in('order_id', candidateOrderIds)
-        : Promise.resolve({ data: [], error: null }),
-    ])
-    if (invoiceError || mappingError)
-      return data(
-        { error: invoiceError?.message ?? mappingError?.message ?? 'Settlement eligibility could not be loaded.' },
-        { headers, status: 400 },
-      )
-    const paidOrderIds = new Set((paidInvoices ?? []).map((invoice) => invoice.order_id))
-    const alreadySettledOrderIds = new Set((existingMappings ?? []).map((mapping) => mapping.order_id))
-    const payableOrderIds = candidateOrderIds.filter((orderId) => paidOrderIds.has(orderId) && !alreadySettledOrderIds.has(orderId))
-    const { data: previewItems, error: itemsError } = payableOrderIds.length
-      ? await supabase
-          .from('order_items')
-          .select('id, order_id, category_id, confirmed_quantity, service, unit_price')
-          .in('order_id', payableOrderIds)
-      : { data: [], error: null }
-    if (itemsError) return data({ error: itemsError.message }, { headers, status: 400 })
-
-    const invoiceStatusByOrderId = new Map((paidInvoices ?? []).map((invoice) => [invoice.order_id, 'paid']))
-    const settlementOrders: SettlementCandidateOrder[] = orders.map((order) => ({
-      id: order.id,
-      vendor_id: order.vendor_id!,
-      status: order.status,
-      clothes_count_vendor: order.clothes_count_vendor,
-      invoice_status: invoiceStatusByOrderId.get(order.id) ?? null,
-    }))
-    const previews = buildSettlementVendorPreviews(
-      (approvedVendors ?? []).map((vendor) => ({
-        vendorId: vendor.id,
+    const previewRows = await sql<
+      {
+        vendor_id: string
+        business_name: string | null
+        payout_account_status: string
+        payout_recipient_code: string | null
+        order_count: number
+        amount: number | string
+      }[]
+    >`
+      select
+        vendor.id::text as vendor_id,
+        vendor.business_name,
+        vendor.payout_account_status,
+        vendor.payout_recipient_code,
+        count(distinct order_row.id)::int as order_count,
+        coalesce(sum(
+          coalesce(case item.service
+            when 'wash' then rate.vendor_wash_price
+            when 'iron' then rate.vendor_iron_price
+            when 'wash_iron' then rate.vendor_wash_iron_price
+            else 0
+          end, 0) * item.confirmed_quantity
+        ), 0) as amount
+      from vendors vendor
+      left join orders order_row
+        on order_row.vendor_id = vendor.id
+        and order_row.created_at >= ${new Date(`${periodStart}T00:00:00.000Z`).toISOString()}::timestamptz
+        and order_row.created_at <= ${new Date(`${periodEnd}T23:59:59.999Z`).toISOString()}::timestamptz
+        and order_row.status <> 'cancelled'
+        and order_row.clothes_count_vendor is not null
+        and exists (
+          select 1 from invoices invoice
+          where invoice.order_id = order_row.id and invoice.status = 'paid'
+        )
+        and not exists (
+          select 1 from vendor_settlement_orders settlement_order
+          where settlement_order.order_id = order_row.id
+        )
+      left join order_items item
+        on item.order_id = order_row.id
+        and item.confirmed_quantity is not null
+      left join cloth_category_rates rate on rate.category_id = item.category_id
+      where vendor.status = 'approved'
+      group by vendor.id
+      order by vendor.business_name
+    `
+    const vendors = summarizeSettlementVendorTotals(
+      previewRows.map((vendor) => ({
+        vendorId: vendor.vendor_id,
         vendorName: vendor.business_name || 'Vendor',
         payoutAccountReady: vendor.payout_account_status === 'verified' && Boolean(vendor.payout_recipient_code),
+        orderCount: Number(vendor.order_count),
+        amount: Number(vendor.amount),
       })),
-      settlementOrders,
-      (previewItems ?? []) as SettlementCandidateItem[],
-      rates ?? [],
-      alreadySettledOrderIds,
     )
     return data(
       {
         ok: true,
         periodStart,
         periodEnd,
-        vendors: previews.map(({ vendorId, vendorName, orderCount, amount, eligible, reason }) => ({
-          vendorId,
-          vendorName,
-          orderCount,
-          amount,
-          eligible,
-          reason,
-        })),
+        vendors,
       },
       { headers, status: 200 },
     )
@@ -507,15 +505,15 @@ export async function action({ request }: Route.ActionArgs) {
 
 // eslint-disable-next-line react-refresh/only-export-components
 export function shouldRevalidate({ formMethod, actionResult, defaultShouldRevalidate }: ShouldRevalidateFunctionArgs) {
-  const actionIntent =
-    actionResult && typeof actionResult === 'object' && 'intent' in actionResult ? String(actionResult.intent) : ''
+  const actionIntent = actionResult && typeof actionResult === 'object' && 'intent' in actionResult ? String(actionResult.intent) : ''
   const readOnlyFinanceAction = actionIntent === 'load-paystack-balance' || actionIntent === 'load-settlement-orders'
   return formMethod?.toUpperCase() === 'POST' && readOnlyFinanceAction ? false : defaultShouldRevalidate
 }
 
 export default function Finance() {
-  const { summary, vendors, settlements } = useLoaderData<typeof loader>()
+  const { summary, vendors, settlements, settlementPagination } = useLoaderData<typeof loader>()
   const revalidator = useRevalidator()
+  const [, setSearchParams] = useSearchParams()
   const vendorsWithBalance = vendors.filter((vendor) => vendor.vendorPayout > 0)
   const owedVendorCount = vendorsWithBalance.length
   const fetcher = useFetcher<typeof action>()
@@ -536,6 +534,14 @@ export default function Finance() {
   const [isCreateDrawerOpen, setIsCreateDrawerOpen] = useState(false)
   const handledPayoutResponse = useRef<unknown>(null)
   const handledCreationResponse = useRef<unknown>(null)
+  const changeSettlementPage = (page: number) => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      if (page <= 1) next.delete('page')
+      else next.set('page', String(page))
+      return next
+    })
+  }
 
   const loadPaystackBalance = paystackFetcher.submit
   useEffect(() => {
@@ -544,15 +550,9 @@ export default function Finance() {
 
   const openSettlementDetails = (settlement: SettlementRow) => {
     setSelectedSettlement(settlement)
-    settlementDetailsFetcher.submit(
-      { intent: 'load-settlement-orders', settlementId: settlement.id },
-      { method: 'post' },
-    )
+    settlementDetailsFetcher.submit({ intent: 'load-settlement-orders', settlementId: settlement.id }, { method: 'post' })
   }
-  const paystackBalance =
-    paystackFetcher.data && 'amount' in paystackFetcher.data
-      ? paystackFetcher.data
-      : null
+  const paystackBalance = paystackFetcher.data && 'amount' in paystackFetcher.data ? paystackFetcher.data : null
   const selectedSettlementOrders =
     settlementDetailsFetcher.data &&
     'orders' in settlementDetailsFetcher.data &&
@@ -983,7 +983,7 @@ export default function Finance() {
           <div className="mb-4 flex items-center justify-between gap-3">
             <h3 className="text-lg font-bold text-slate-900">Settlement history</h3>
             <div className="flex shrink-0 items-center gap-2">
-              <span className="text-sm text-slate-500">{settlements.length} records</span>
+              <span className="text-sm text-slate-500">{settlementPagination.totalCount.toLocaleString()} records</span>
               <button
                 type="button"
                 aria-label="Refresh Finance data"
@@ -1053,12 +1053,12 @@ export default function Finance() {
                             {settlement.transferStatus === 'reversed'
                               ? 'reversed · review'
                               : settlement.status === 'paid'
-                              ? 'paid'
-                              : settlement.status === 'pending' && !settlement.eligibleForPayout
-                                ? 'payment pending'
-                                : settlement.transferStatus === 'processing' || settlement.transferStatus === 'queued'
-                                  ? 'pending'
-                                : (settlement.transferStatus ?? 'unreleased')}
+                                ? 'paid'
+                                : settlement.status === 'pending' && !settlement.eligibleForPayout
+                                  ? 'payment pending'
+                                  : settlement.transferStatus === 'processing' || settlement.transferStatus === 'queued'
+                                    ? 'pending'
+                                    : (settlement.transferStatus ?? 'unreleased')}
                           </span>
                           {settlement.status === 'pending' && settlement.eligibleForPayout && !settlement.payoutAccountReady && (
                             <span className="text-xs font-medium text-amber-700">Account not ready</span>
@@ -1070,7 +1070,7 @@ export default function Finance() {
                           {settlement.transferStatus === 'reversed' ? (
                             <span className="text-xs font-semibold text-red-700">Review reversal</span>
                           ) : settlement.status === 'pending' &&
-                          (settlement.transferStatus === 'queued' || settlement.transferStatus === 'processing') ? (
+                            (settlement.transferStatus === 'queued' || settlement.transferStatus === 'processing') ? (
                             <fetcher.Form method="post">
                               <input type="hidden" name="intent" value="reconcile-settlement" />
                               <input type="hidden" name="settlementId" value={settlement.id} />
@@ -1140,8 +1140,35 @@ export default function Finance() {
               </tbody>
             </table>
           </div>
+          <div className="flex items-center justify-between gap-3 border-t border-slate-200 px-4 py-3">
+            <p className="text-sm text-slate-500">
+              {settlementPagination.totalCount === 0
+                ? 'No settlements'
+                : `${(settlementPagination.page - 1) * settlementPagination.pageSize + 1}–${Math.min(
+                    settlementPagination.page * settlementPagination.pageSize,
+                    settlementPagination.totalCount,
+                  )} of ${settlementPagination.totalCount}`}
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => changeSettlementPage(settlementPagination.page - 1)}
+                disabled={settlementPagination.page <= 1}
+                className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                onClick={() => changeSettlementPage(settlementPagination.page + 1)}
+                disabled={settlementPagination.page >= settlementPagination.pageCount}
+                className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Next
+              </button>
+            </div>
+          </div>
         </div>
-
       </section>
 
       {openSettlementMenu &&
@@ -1214,10 +1241,10 @@ export default function Finance() {
                     {selectedSettlement.transferStatus === 'reversed'
                       ? 'Reversed · review'
                       : selectedSettlement.status === 'paid'
-                      ? 'Paid'
-                      : selectedSettlement.status === 'pending' && !selectedSettlement.eligibleForPayout
-                        ? 'Awaiting customer payment'
-                        : (selectedSettlement.transferStatus ?? 'Unreleased')}
+                        ? 'Paid'
+                        : selectedSettlement.status === 'pending' && !selectedSettlement.eligibleForPayout
+                          ? 'Awaiting customer payment'
+                          : (selectedSettlement.transferStatus ?? 'Unreleased')}
                   </span>
                 </div>
                 <p className="mt-2 text-sm text-slate-500">

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { data, useFetcher, useOutletContext, useRevalidator } from 'react-router'
+import { data, useFetcher, useOutletContext, useRevalidator, useSearchParams } from 'react-router'
 import { Search } from 'lucide-react'
 import { requireRole } from '../../../lib/auth.server'
 import { sql } from '../../../lib/db.server'
@@ -78,9 +78,7 @@ export async function action({ request }: { request: Request }) {
             orderId: order.id,
             payload: {
               title:
-                invoiceStatusByOrderId.get(order.id) === 'paid'
-                  ? 'Your order is ready for delivery'
-                  : 'Your order has been dispatched',
+                invoiceStatusByOrderId.get(order.id) === 'paid' ? 'Your order is ready for delivery' : 'Your order has been dispatched',
               body:
                 invoiceStatusByOrderId.get(order.id) === 'paid'
                   ? `Your clean laundry is on the way for ${order.public_order_number}.`
@@ -144,6 +142,12 @@ type VendorOrder = {
 type VendorLayoutData = {
   orders: VendorOrder[]
   rateCard: Array<{ name: string; wash: number | null; iron: number | null; wash_iron: number | null }>
+  ordersPagination: {
+    page: number
+    pageSize: number
+    totalCount: number
+    tabCounts: { unclaimed: number; processing: number; ready: number; dispatched: number; delivered: number }
+  } | null
 }
 
 const statusLabels: Record<VendorOrder['status'], string> = {
@@ -177,47 +181,93 @@ function formatDate(value: string | null) {
 }
 
 export default function Orders() {
-  const { orders, rateCard } = useOutletContext<VendorLayoutData>()
+  const { orders, rateCard, ordersPagination } = useOutletContext<VendorLayoutData>()
   const fetcher = useFetcher<typeof action>()
   const reviewFetcher = useFetcher<typeof vendorHomeAction>()
   const { revalidate } = useRevalidator()
   const handledFetcherData = useRef<typeof fetcher.data>(null)
   const handledReviewData = useRef<typeof reviewFetcher.data>(null)
-  const isDispatching = fetcher.state !== 'idle' && fetcher.formData?.get('intent') === 'dispatch'
-  const isClaimingOrder = (orderId: string) =>
-    fetcher.state !== 'idle' && fetcher.formData?.get('intent') === 'claim' && fetcher.formData?.get('orderId') === orderId
-  const [query, setQuery] = useState('')
-  const [activeTab, setActiveTab] = useState<'unclaimed' | 'processing' | 'ready' | 'dispatched' | 'delivered'>('processing')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const activeTab = (
+    ['unclaimed', 'processing', 'ready', 'dispatched', 'delivered'].includes(searchParams.get('tab') ?? '')
+      ? searchParams.get('tab')
+      : 'processing'
+  ) as 'unclaimed' | 'processing' | 'ready' | 'dispatched' | 'delivered'
+  const query = searchParams.get('search') ?? ''
+  const [searchDraft, setSearchDraft] = useState(query)
   const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([])
   const [reviewOrderId, setReviewOrderId] = useState<string | null>(null)
   const [received, setReceived] = useState<Record<string, Record<string, number | undefined>>>({})
-  const [reviewAddedItems, setReviewAddedItems] = useState<Array<{ categoryName: string; service: 'wash' | 'iron' | 'wash_iron'; quantity: number }>>([])
+  const [reviewAddedItems, setReviewAddedItems] = useState<
+    Array<{ categoryName: string; service: 'wash' | 'iron' | 'wash_iron'; quantity: number }>
+  >([])
   const [reviewNotes, setReviewNotes] = useState('')
-
+  useEffect(() => {
+    if (searchDraft === query) return
+    const timer = window.setTimeout(() => setSearchDraft(query), 0)
+    return () => window.clearTimeout(timer)
+  }, [query, searchDraft])
+  useEffect(() => {
+    if (searchDraft.trim() === query) return
+    const timer = window.setTimeout(() => {
+      setSelectedOrderIds([])
+      setSearchParams(
+        (current) => {
+          const next = new URLSearchParams(current)
+          const search = searchDraft.trim().slice(0, 100)
+          if (search) next.set('search', search)
+          else next.delete('search')
+          next.delete('page')
+          return next
+        },
+        { replace: true },
+      )
+    }, 300)
+    return () => window.clearTimeout(timer)
+  }, [query, searchDraft, setSearchParams])
+  const isDispatching = fetcher.state !== 'idle' && fetcher.formData?.get('intent') === 'dispatch'
+  const isClaimingOrder = (orderId: string) =>
+    fetcher.state !== 'idle' && fetcher.formData?.get('intent') === 'claim' && fetcher.formData?.get('orderId') === orderId
   useEffect(() => {
     if (!fetcher.data || handledFetcherData.current === fetcher.data) return
     handledFetcherData.current = fetcher.data
     if (fetcher.data.ok) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedOrderIds([])
-      if ('intent' in fetcher.data && fetcher.data.intent === 'claim') setActiveTab('processing')
+      if ('intent' in fetcher.data && fetcher.data.intent === 'claim') {
+        setSearchParams((current) => {
+          const next = new URLSearchParams(current)
+          next.set('tab', 'processing')
+          next.delete('page')
+          return next
+        })
+      }
       revalidate()
     }
-  }, [fetcher.data, revalidate])
+  }, [fetcher.data, revalidate, setSearchParams])
 
   useEffect(() => {
     if (!reviewFetcher.data || handledReviewData.current === reviewFetcher.data) return
     handledReviewData.current = reviewFetcher.data
     if (reviewFetcher.data.ok && 'amount' in reviewFetcher.data) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setReviewOrderId(null)
       setReviewAddedItems([])
       setReviewNotes('')
       toast.success('Order review submitted.')
-      if ('invoiceStatus' in reviewFetcher.data && reviewFetcher.data.invoiceStatus === 'paid') setActiveTab('ready')
+      if ('invoiceStatus' in reviewFetcher.data && reviewFetcher.data.invoiceStatus === 'paid') {
+        setSearchParams((current) => {
+          const next = new URLSearchParams(current)
+          next.set('tab', 'ready')
+          next.delete('page')
+          return next
+        })
+      }
       revalidate()
     } else if ('message' in reviewFetcher.data) {
       toast.error(String(reviewFetcher.data.message))
     }
-  }, [reviewFetcher.data, revalidate])
+  }, [reviewFetcher.data, revalidate, setSearchParams])
 
   const rows = useMemo(
     () =>
@@ -233,11 +283,12 @@ export default function Orders() {
   )
 
   const orderCounts = {
-    available: rows.filter((order) => order.status === 'picked_up').length,
-    processing: rows.filter((order) => ['at_vendor', 'invoiced', 'paid'].includes(order.status)).length,
-    ready: rows.filter((order) => isReadyForDispatch(order.status, order.invoice?.status)).length,
-    dispatched: rows.filter((order) => order.status === 'out_for_delivery').length,
-    delivered: rows.filter((order) => order.status === 'delivered').length,
+    available: ordersPagination?.tabCounts.unclaimed ?? rows.filter((order) => order.status === 'picked_up').length,
+    processing:
+      ordersPagination?.tabCounts.processing ?? rows.filter((order) => ['at_vendor', 'invoiced', 'paid'].includes(order.status)).length,
+    ready: ordersPagination?.tabCounts.ready ?? rows.filter((order) => isReadyForDispatch(order.status, order.invoice?.status)).length,
+    dispatched: ordersPagination?.tabCounts.dispatched ?? rows.filter((order) => order.status === 'out_for_delivery').length,
+    delivered: ordersPagination?.tabCounts.delivered ?? rows.filter((order) => order.status === 'delivered').length,
   }
 
   const reviewOrder = useMemo<VendorReviewOrder | null>(() => {
@@ -269,21 +320,7 @@ export default function Orders() {
     }
   }, [orders, reviewOrderId])
 
-  const filteredOrders = rows.filter((order) => {
-    const searchText =
-      `${order.publicOrderNumber} ${order.customer} ${order.customerId} ${order.location} ${orderTypeLabels[order.order_type]}`.toLowerCase()
-    const inTab =
-      activeTab === 'unclaimed'
-        ? order.status === 'picked_up'
-        : activeTab === 'processing'
-          ? ['at_vendor', 'invoiced', 'paid'].includes(order.status)
-          : activeTab === 'ready'
-            ? isReadyForDispatch(order.status, order.invoice?.status)
-            : activeTab === 'dispatched'
-              ? order.status === 'out_for_delivery'
-              : order.status === 'delivered'
-    return searchText.includes(query.toLowerCase()) && inTab
-  })
+  const filteredOrders = rows
   const selectableOrders = filteredOrders.filter((order) => isReadyForDispatch(order.status, order.invoice?.status))
   const allSelectableOrdersSelected = selectableOrders.length > 0 && selectableOrders.every((order) => selectedOrderIds.includes(order.id))
 
@@ -348,9 +385,7 @@ export default function Orders() {
     formData.set('orderId', reviewOrder.id)
     formData.set(
       'receivedItems',
-      JSON.stringify(
-        Object.entries(received[reviewOrder.id] ?? {}).map(([itemId, quantity]) => ({ itemId, quantity })),
-      ),
+      JSON.stringify(Object.entries(received[reviewOrder.id] ?? {}).map(([itemId, quantity]) => ({ itemId, quantity }))),
     )
     formData.set('addedItems', JSON.stringify(reviewAddedItems))
     formData.set('mismatchDetail', reviewNotes)
@@ -362,11 +397,18 @@ export default function Orders() {
     (reviewOrder?.items.some((item) => {
       const receivedCount = reviewReceived[item.id]
       return receivedCount !== undefined && receivedCount !== item.quantity
-    }) ?? false) || reviewAddedItems.length > 0
+    }) ??
+      false) ||
+    reviewAddedItems.length > 0
 
   const changeTab = (tab: typeof activeTab) => {
-    setActiveTab(tab)
     setSelectedOrderIds([])
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      next.set('tab', tab)
+      next.delete('page')
+      return next
+    })
   }
 
   return (
@@ -395,8 +437,8 @@ export default function Orders() {
           <div className="relative w-full md:max-w-sm">
             <Search size={16} className="absolute left-3 top-3 text-slate-400" />
             <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              value={searchDraft}
+              onChange={(event) => setSearchDraft(event.target.value)}
               placeholder="Search orders or customers"
               className="h-10 w-full rounded-[8px] border border-[#dedede] pl-9 pr-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
             />
@@ -446,7 +488,7 @@ export default function Orders() {
                   aria-label="Select all orders ready for dispatch"
                   className="h-4 w-4 accent-brand-primary"
                 />
-                Select all ready for dispatch ({selectableOrders.length})
+                Select ready-to-dispatch orders on this page ({selectableOrders.length})
               </label>
               <button
                 type="button"
@@ -512,14 +554,14 @@ export default function Orders() {
                   ) : (
                     <div className="flex gap-2">
                       {order.status === 'picked_up' ? (
-                      <button
-                        type="button"
-                        onClick={() => fetcher.submit({ intent: 'claim', orderId: order.id }, { method: 'post' })}
-                        disabled={fetcher.state !== 'idle'}
-                        className="flex-1 rounded-[7px] border border-[#dedede] px-3 py-2.5 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary disabled:cursor-wait disabled:opacity-60"
-                      >
-                        {isClaimingOrder(order.id) ? 'Claiming...' : 'Claim'}
-                      </button>
+                        <button
+                          type="button"
+                          onClick={() => fetcher.submit({ intent: 'claim', orderId: order.id }, { method: 'post' })}
+                          disabled={fetcher.state !== 'idle'}
+                          className="flex-1 rounded-[7px] border border-[#dedede] px-3 py-2.5 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary disabled:cursor-wait disabled:opacity-60"
+                        >
+                          {isClaimingOrder(order.id) ? 'Claiming...' : 'Claim'}
+                        </button>
                       ) : isReadyForDispatch(order.status, order.invoice?.status) ? (
                         <button
                           type="button"
@@ -570,7 +612,7 @@ export default function Orders() {
                   onChange={toggleAllSelectableOrders}
                   className="h-4 w-4 accent-brand-primary"
                 />
-                Select orders ready for dispatch ({selectableOrders.length})
+                Select ready-to-dispatch orders on this page ({selectableOrders.length})
               </label>
               <button
                 type="button"
@@ -678,6 +720,49 @@ export default function Orders() {
           {filteredOrders.length === 0 && <p className="py-8 text-center text-sm text-slate-500">No matching orders.</p>}
         </div>
       </section>
+      {ordersPagination && (
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3">
+          <p className="text-sm text-slate-500">
+            {ordersPagination.totalCount === 0
+              ? 'No orders'
+              : `${(ordersPagination.page - 1) * ordersPagination.pageSize + 1}–${Math.min(ordersPagination.page * ordersPagination.pageSize, ordersPagination.totalCount)} of ${ordersPagination.totalCount}`}
+          </p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedOrderIds([])
+                setSearchParams((current) => {
+                  const next = new URLSearchParams(current)
+                  const page = Math.max(1, Number(next.get('page') ?? '1') - 1)
+                  if (page === 1) next.delete('page')
+                  else next.set('page', String(page))
+                  return next
+                })
+              }}
+              disabled={ordersPagination.page <= 1}
+              className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedOrderIds([])
+                setSearchParams((current) => {
+                  const next = new URLSearchParams(current)
+                  next.set('page', String(ordersPagination.page + 1))
+                  return next
+                })
+              }}
+              disabled={ordersPagination.page * ordersPagination.pageSize >= ordersPagination.totalCount}
+              className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
       {reviewOrder && (
         <VendorOrderReviewDialog
           order={reviewOrder}

@@ -1,5 +1,5 @@
 import { ArrowLeft, Copy, Pencil, Save, WalletCards } from 'lucide-react'
-import { data, Form, Link, useActionData, useFetcher, useLoaderData, useLocation, useNavigation } from 'react-router'
+import { data, Form, Link, redirect, useActionData, useFetcher, useLoaderData, useLocation, useNavigation } from 'react-router'
 import { useEffect, useRef, useState } from 'react'
 import type { Route } from './+types/UserDetails'
 import { requireRole } from '../../../lib/auth.server'
@@ -7,12 +7,10 @@ import { adjustWallet, creditAdminWallet } from '../../../lib/wallet.server'
 import { createManualSubscriptionWithSnapshot } from '../../../lib/subscriptions.server'
 import { sql } from '../../../lib/db.server'
 import { toast } from '../../../lib/toast'
-import { sumSuccessfulPlanPayments } from '../../../lib/revenue-reporting'
-import {
-  calculateSubscriptionAllowance,
-  calculateSubscriptionUnitsApplied,
-  calculateSubscriptionUnitsUsed,
-} from '../../../lib/subscription-week'
+import { calculateSubscriptionAllowance } from '../../../lib/subscription-week'
+import { getSubscriptionUsageTotals } from '../../../lib/subscription-usage.server'
+
+const userHistoryPageSize = 20
 
 type DetailOrder = {
   id: string
@@ -88,6 +86,13 @@ type UserDetailsData = {
   payments: DetailPayment[]
   transactions: DetailTransaction[]
   referrals: DetailReferral[]
+  pagination: {
+    orders: { page: number; pageSize: number; totalCount: number; pageCount: number }
+    subscriptions: { page: number; pageSize: number; totalCount: number; pageCount: number }
+    payments: { page: number; pageSize: number; totalCount: number; pageCount: number }
+    transactions: { page: number; pageSize: number; totalCount: number; pageCount: number }
+    referrals: { page: number; pageSize: number; totalCount: number; pageCount: number }
+  }
   semesterEndDate: string | null
   plans: Array<{
     id: string
@@ -119,23 +124,85 @@ function addMonth(value: string) {
   return dateInput(new Date(start.getFullYear(), start.getMonth() + 1, start.getDate()))
 }
 
+function HistoryPagination({
+  section,
+  pagination,
+  pathname,
+  search,
+}: {
+  section: keyof UserDetailsData['pagination']
+  pagination: UserDetailsData['pagination'][keyof UserDetailsData['pagination']]
+  pathname: string
+  search: string
+}) {
+  const toPage = (page: number) => {
+    const params = new URLSearchParams(search)
+    if (page === 1) params.delete(`${section}Page`)
+    else params.set(`${section}Page`, String(page))
+    const query = params.toString()
+    return `${pathname}${query ? `?${query}` : ''}`
+  }
+  const firstItem = pagination.totalCount === 0 ? 0 : (pagination.page - 1) * pagination.pageSize + 1
+  const lastItem = Math.min(pagination.page * pagination.pageSize, pagination.totalCount)
+
+  return (
+    <nav className="mt-4 flex items-center justify-between gap-3 text-xs text-slate-500" aria-label={`${section} pagination`}>
+      <span>
+        Showing {firstItem}-{lastItem} of {pagination.totalCount}
+      </span>
+      <div className="flex items-center gap-2">
+        {pagination.page > 1 ? (
+          <Link
+            to={toPage(pagination.page - 1)}
+            className="rounded-lg border border-slate-200 px-3 py-2 font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            Previous
+          </Link>
+        ) : (
+          <span className="rounded-lg border border-slate-100 px-3 py-2 text-slate-300">Previous</span>
+        )}
+        {pagination.page < pagination.pageCount ? (
+          <Link
+            to={toPage(pagination.page + 1)}
+            className="rounded-lg border border-slate-200 px-3 py-2 font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            Next
+          </Link>
+        ) : (
+          <span className="rounded-lg border border-slate-100 px-3 py-2 text-slate-300">Next</span>
+        )}
+      </div>
+    </nav>
+  )
+}
+
 // eslint-disable-next-line react-refresh/only-export-components
 export async function loader({ request, params }: Route.LoaderArgs) {
   const auth = await requireRole(request, 'admin')
   const customerId = params.id
   if (!auth || !customerId) return data<UserDetailsData | null>(null, { status: 404 })
   const { supabase, headers } = auth
+  const url = new URL(request.url)
+  const pageKeys = ['orders', 'subscriptions', 'payments', 'transactions', 'referrals'] as const
+  type PageKey = (typeof pageKeys)[number]
+  const requestedPages = Object.fromEntries(
+    pageKeys.map((key) => {
+      const requestedPage = Number.parseInt(url.searchParams.get(`${key}Page`) ?? '1', 10)
+      return [key, Number.isSafeInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1]
+    }),
+  ) as Record<PageKey, number>
+  const today = new Date().toISOString().slice(0, 10)
   const [
     { data: profile },
     { data: roles },
     { data: wallet },
-    { data: orders },
-    { data: invoices },
-    { data: subscriptions },
+    { data: orders, count: orderCount, error: ordersError },
+    { data: subscriptions, count: subscriptionCount, error: subscriptionsError },
+    { data: activeSubscription },
     { data: plans },
-    { data: payments },
-    { data: transactions },
-    { data: referrals },
+    { data: payments, count: paymentCount, error: paymentsError },
+    { data: transactions, count: transactionCount, error: transactionsError },
+    { data: referrals, count: referralCount, error: referralsError },
   ] = await Promise.all([
     supabase.from('profiles').select('id, qaffy_id, name, email, phone, created_at').eq('id', customerId).maybeSingle(),
     supabase.from('profile_roles').select('role').eq('profile_id', customerId).eq('status', 'approved'),
@@ -143,42 +210,99 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     supabase
       .from('orders')
       .select(
-        'id, public_order_number, status, clothes_count_customer, clothes_count_vendor, created_at, subscription_id, subscription_allowance_subscription_id, is_subscription_order, subscription_units_applied, subscription_units_applied_at',
+        'id, public_order_number, status, clothes_count_vendor, created_at',
+        { count: 'exact' },
       )
       .eq('customer_id', customerId)
-      .order('created_at', { ascending: false }),
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range((requestedPages.orders - 1) * userHistoryPageSize, requestedPages.orders * userHistoryPageSize - 1),
     supabase
-      .from('invoices')
-      .select('order_id, amount, status')
-      .in('order_id', (await supabase.from('orders').select('id').eq('customer_id', customerId)).data?.map((order) => order.id) ?? []),
+      .from('subscriptions')
+      .select('id, plan_id, status, start_date, end_date, created_at', { count: 'exact' })
+      .eq('customer_id', customerId)
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range(
+        (requestedPages.subscriptions - 1) * userHistoryPageSize,
+        requestedPages.subscriptions * userHistoryPageSize - 1,
+      ),
     supabase
       .from('subscriptions')
       .select('id, plan_id, status, start_date, end_date, weekly_limit_snapshot, created_at')
       .eq('customer_id', customerId)
-      .order('created_at', { ascending: false }),
+      .eq('status', 'active')
+      .or(`end_date.is.null,end_date.gte.${today}`)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
     supabase.from('plans').select('id, name, type, semester_end_date, active').order('created_at', { ascending: false }),
     supabase
       .from('payments')
-      .select('id, provider, reference, amount, status, plan_id, created_at, succeeded_at')
+      .select('id, provider, reference, amount, status, plan_id, created_at, succeeded_at', { count: 'exact' })
       .eq('customer_id', customerId)
-      .order('created_at', { ascending: false }),
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range((requestedPages.payments - 1) * userHistoryPageSize, requestedPages.payments * userHistoryPageSize - 1),
     supabase
       .from('wallet_transactions')
-      .select('id, balance_type, txn_type, amount, balance_after, created_at')
+      .select('id, balance_type, txn_type, amount, balance_after, created_at', { count: 'exact' })
       .eq('customer_id', customerId)
-      .order('created_at', { ascending: false }),
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range(
+        (requestedPages.transactions - 1) * userHistoryPageSize,
+        requestedPages.transactions * userHistoryPageSize - 1,
+      ),
     supabase
       .from('referrals')
-      .select('id, referred_id, status, reward_type, reward_value, created_at')
+      .select('id, referred_id, status, reward_type, reward_value, created_at', { count: 'exact' })
       .eq('referrer_id', customerId)
-      .order('created_at', { ascending: false }),
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range((requestedPages.referrals - 1) * userHistoryPageSize, requestedPages.referrals * userHistoryPageSize - 1),
   ])
+  const historyQueryError =
+    ordersError ?? subscriptionsError ?? paymentsError ?? transactionsError ?? referralsError
+  if (historyQueryError) throw new Error(`Customer history could not be loaded: ${historyQueryError.message}`)
+  const countByKey: Record<PageKey, number> = {
+    orders: orderCount ?? 0,
+    subscriptions: subscriptionCount ?? 0,
+    payments: paymentCount ?? 0,
+    transactions: transactionCount ?? 0,
+    referrals: referralCount ?? 0,
+  }
+  const pagination = Object.fromEntries(
+    pageKeys.map((key) => {
+      const totalCount = countByKey[key]
+      const pageCount = Math.max(1, Math.ceil(totalCount / userHistoryPageSize))
+      return [key, { page: Math.min(requestedPages[key], pageCount), pageSize: userHistoryPageSize, totalCount, pageCount }]
+    }),
+  ) as UserDetailsData['pagination']
+  if (pageKeys.some((key) => pagination[key].page !== requestedPages[key])) {
+    for (const key of pageKeys) {
+      if (pagination[key].page <= 1) url.searchParams.delete(`${key}Page`)
+      else url.searchParams.set(`${key}Page`, String(pagination[key].page))
+    }
+    throw redirect(`${url.pathname}${url.search}`, { headers })
+  }
+
   const orderIds = (orders ?? []).map((order) => order.id)
   const { data: orderItems, error: orderItemsError } =
     orderIds.length > 0
       ? await supabase.from('order_items').select('order_id, quantity').in('order_id', orderIds)
       : { data: [], error: null }
   if (orderItemsError) throw new Error(`Customer order items could not be loaded: ${orderItemsError.message}`)
+  const { data: invoices, error: invoicesError } =
+    orderIds.length > 0
+      ? await supabase
+          .from('invoices')
+          .select('order_id, amount, status, created_at, id')
+          .in('order_id', orderIds)
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false })
+      : { data: [], error: null }
+  if (invoicesError) throw new Error(`Customer invoices could not be loaded: ${invoicesError.message}`)
   const itemCountByOrder = new Map<string, number>()
   for (const item of orderItems ?? []) {
     itemCountByOrder.set(item.order_id, (itemCountByOrder.get(item.order_id) ?? 0) + item.quantity)
@@ -191,20 +315,24 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   `
   if (!profile) return data<UserDetailsData | null>(null, { headers, status: 404 })
   const planById = new Map((plans ?? []).map((plan) => [plan.id, plan]))
-  const invoiceByOrder = new Map((invoices ?? []).map((invoice) => [invoice.order_id, invoice]))
-  const today = new Date().toISOString().slice(0, 10)
-  const activeSubscription = (subscriptions ?? []).find(
-    (subscription) => subscription.status === 'active' && (!subscription.end_date || subscription.end_date >= today),
-  )
+  const invoiceByOrder = new Map<string, (typeof invoices)[number]>()
+  for (const invoice of invoices ?? []) {
+    if (!invoiceByOrder.has(invoice.order_id)) invoiceByOrder.set(invoice.order_id, invoice)
+  }
   const allowanceReference = new Date()
-  const totalSubscriptionUnitsUsed = activeSubscription
-    ? calculateSubscriptionUnitsApplied(orders ?? [], {
-        id: activeSubscription.id,
-        startDate: activeSubscription.start_date,
-        endDate: activeSubscription.end_date,
-      })
-    : 0
-  const subscriptionUnitsUsedThisWeek = calculateSubscriptionUnitsUsed(orders ?? [], allowanceReference)
+  const subscriptionUsage = activeSubscription
+    ? await getSubscriptionUsageTotals(
+        {
+          customerId,
+          subscription: {
+            id: activeSubscription.id,
+            startDate: activeSubscription.start_date,
+            endDate: activeSubscription.end_date,
+          },
+        },
+        allowanceReference,
+      )
+    : { usedUnits: 0, usedThisWeek: 0 }
   const activeSubscriptionAllowance = activeSubscription
     ? calculateSubscriptionAllowance(
         {
@@ -212,20 +340,44 @@ export async function loader({ request, params }: Route.LoaderArgs) {
           startDate: activeSubscription.start_date,
           startAt: activeSubscription.created_at,
           endDate: activeSubscription.end_date,
-          usedUnits: totalSubscriptionUnitsUsed,
+          usedUnits: subscriptionUsage.usedUnits,
         },
         allowanceReference,
       )
     : null
   const stats = {
-    totalOrders: orders?.length ?? 0,
-    completedOrders: (orders ?? []).filter((order) => order.status === 'delivered').length,
-    cancelledOrders: (orders ?? []).filter((order) => order.status === 'cancelled').length,
-    totalSpent:
-      (invoices ?? []).filter((invoice) => invoice.status === 'paid').reduce((sum, invoice) => sum + Number(invoice.amount), 0) +
-      sumSuccessfulPlanPayments(payments ?? []),
-    activeSubscriptions: (subscriptions ?? []).filter((subscription) => subscription.status === 'active').length,
+    totalOrders: 0,
+    completedOrders: 0,
+    cancelledOrders: 0,
+    totalSpent: 0,
+    activeSubscriptions: 0,
   }
+  const [allTimeStats] = await sql<
+    {
+      total_orders: number
+      completed_orders: number
+      cancelled_orders: number
+      paid_invoice_total: number
+      plan_payment_total: number
+      active_subscriptions: number
+    }[]
+  >`
+    select
+      (select count(*)::int from orders where customer_id = ${customerId}::uuid) as total_orders,
+      (select count(*)::int from orders where customer_id = ${customerId}::uuid and status = 'delivered') as completed_orders,
+      (select count(*)::int from orders where customer_id = ${customerId}::uuid and status = 'cancelled') as cancelled_orders,
+      (select coalesce(sum(invoice.amount), 0) from invoices invoice
+        join orders order_row on order_row.id = invoice.order_id
+        where order_row.customer_id = ${customerId}::uuid and invoice.status = 'paid') as paid_invoice_total,
+      (select coalesce(sum(amount), 0) from payments
+        where customer_id = ${customerId}::uuid and status = 'success' and plan_id is not null) as plan_payment_total,
+      (select count(*)::int from subscriptions where customer_id = ${customerId}::uuid and status = 'active') as active_subscriptions
+  `
+  stats.totalOrders = Number(allTimeStats?.total_orders ?? 0)
+  stats.completedOrders = Number(allTimeStats?.completed_orders ?? 0)
+  stats.cancelledOrders = Number(allTimeStats?.cancelled_orders ?? 0)
+  stats.totalSpent = Number(allTimeStats?.paid_invoice_total ?? 0) + Number(allTimeStats?.plan_payment_total ?? 0)
+  stats.activeSubscriptions = Number(allTimeStats?.active_subscriptions ?? 0)
   return data<UserDetailsData>(
     {
       profile: {
@@ -246,8 +398,8 @@ export async function loader({ request, params }: Route.LoaderArgs) {
         ? {
             weeklyUnits: Number(activeSubscription?.weekly_limit_snapshot ?? 0),
             availableUnits: Math.max(0, activeSubscriptionAllowance.balance),
-            usedThisWeek: subscriptionUnitsUsedThisWeek,
-            totalUnitsUsed: totalSubscriptionUnitsUsed,
+            usedThisWeek: subscriptionUsage.usedThisWeek,
+            totalUnitsUsed: subscriptionUsage.usedUnits,
             reservedUnits: Math.max(0, -activeSubscriptionAllowance.balance),
           }
         : null,
@@ -295,6 +447,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
         rewardValue: referral.reward_value === null ? null : Number(referral.reward_value),
         createdAt: referral.created_at,
       })),
+      pagination,
       semesterEndDate: dateOnly(semesterSettings?.semester_end_date),
       plans: (plans ?? []).map((plan) => ({
         id: plan.id,
@@ -800,6 +953,12 @@ export default function UserDetails() {
           </table>
           {details.subscriptions.length === 0 && <p className="text-sm text-slate-500">No subscriptions recorded.</p>}
         </div>
+        <HistoryPagination
+          section="subscriptions"
+          pagination={details.pagination.subscriptions}
+          pathname={location.pathname}
+          search={location.search}
+        />
       </section>
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <h3 className="font-bold text-slate-900">Orders and invoices</h3>
@@ -840,6 +999,12 @@ export default function UserDetails() {
           </table>
           {details.orders.length === 0 && <p className="text-sm text-slate-500">No orders recorded.</p>}
         </div>
+        <HistoryPagination
+          section="orders"
+          pagination={details.pagination.orders}
+          pathname={location.pathname}
+          search={location.search}
+        />
       </section>
       <section className="grid gap-5 lg:grid-cols-3">
         <div className="rounded-2xl border border-slate-200 bg-white p-5">
@@ -868,6 +1033,12 @@ export default function UserDetails() {
               ))
             )}
           </div>
+          <HistoryPagination
+            section="payments"
+            pagination={details.pagination.payments}
+            pathname={location.pathname}
+            search={location.search}
+          />
         </div>
         <div className="rounded-2xl border border-slate-200 bg-white p-5">
           <h3 className="font-bold text-slate-900">Wallet ledger</h3>
@@ -887,6 +1058,12 @@ export default function UserDetails() {
               ))
             )}
           </div>
+          <HistoryPagination
+            section="transactions"
+            pagination={details.pagination.transactions}
+            pathname={location.pathname}
+            search={location.search}
+          />
         </div>
         <div className="rounded-2xl border border-slate-200 bg-white p-5">
           <h3 className="font-bold text-slate-900">Referrals</h3>
@@ -905,6 +1082,12 @@ export default function UserDetails() {
               ))
             )}
           </div>
+          <HistoryPagination
+            section="referrals"
+            pagination={details.pagination.referrals}
+            pathname={location.pathname}
+            search={location.search}
+          />
         </div>
       </section>
     </div>

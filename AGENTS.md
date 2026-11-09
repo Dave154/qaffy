@@ -535,7 +535,7 @@ The customer portal is the current completion target. Do not move to another por
 - `src/portals/customer/pages/Invoice.tsx` shows only the latest invoice. Invoice history and invoice/order selection are incomplete.
 - `src/portals/customer/pages/Transactions.tsx` renders filter buttons without filtering; transaction status is always `Successful`; there is no loading/error state.
 - `src/portals/customer/pages/Settings.tsx` contains a hardcoded renewal date, read-only phone/email fields, a `Coming soon` referral value, and a hardcoded empty recent-payments section.
-- `src/portals/customer/pages/OtpFlow.tsx` uses the first order rather than selecting an active order, so OTP details are wrong when multiple active orders exist.
+- Customer OTPs are shown in order views; there is no dedicated OTP page.
 - Customer order mapping uses `pickup_location_id` as the display value instead of the pickup location name.
 
 ### Completion order

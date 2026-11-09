@@ -34,12 +34,18 @@ import PwaInstallLink from '../../components/PwaInstallLink'
 import { isSupabaseServerConfigured, getSupabaseServerClient } from '../../lib/supabase.server'
 import { supabase } from '../../lib/supabase.client'
 import { CustomerStoreProvider } from './customer-store'
-import type { CustomerReferral, MismatchLine, PersistedOrderItem, PickupLocationOption } from './customer-store'
+import type { MismatchLine, PersistedOrderItem, PickupLocationOption } from './customer-store'
 import { useCustomerStore } from './customer-store-hook'
 import type { Invoice, Order, Payment, Plan, Subscription, Wallet, WalletTransaction } from '../../types/database.types'
 import { ensurePushSubscription, savePushSubscription } from '../../lib/push.client'
-import { calculateSubscriptionAllowance, calculateSubscriptionUnitsApplied } from '../../lib/subscription-week'
+import {
+  calculateSubscriptionAllowance,
+  calculateSubscriptionUnitsApplied,
+  type SubscriptionUsageOrder,
+} from '../../lib/subscription-week'
 import { CustomerInlineSkeleton } from '../../components/customer/CustomerDataSkeleton'
+import { sql } from '../../lib/db.server'
+import { getSubscriptionUsageTotals } from '../../lib/subscription-usage.server'
 
 const navItems = [
   { to: '/', label: 'Overview', icon: Home, end: true },
@@ -49,6 +55,14 @@ const navItems = [
   { to: '/plans', label: 'Plans', icon: Sparkles },
   { to: '/settings', label: 'Settings', icon: Settings },
 ]
+
+function getCustomerDataScope(pathname: string) {
+  if (pathname === '/') return 'overview'
+  if (pathname === '/orders') return 'orders'
+  if (pathname === '/invoice') return 'invoice'
+  if (pathname === '/transactions') return 'transactions'
+  return ['/plans', '/settings', '/notifications'].some((path) => pathname === path || pathname.startsWith(`${path}/`)) ? 'summary' : 'full'
+}
 
 function subscribeToNetworkStatus(callback: () => void) {
   window.addEventListener('online', callback)
@@ -87,10 +101,426 @@ async function loadCustomerLayoutData(request: Request) {
     throw redirect('/login', { headers })
   }
 
-  const loadCustomerData = async () => {
-    const campaignCheckTime = new Date().toISOString()
+  const requestUrl = new URL(request.url)
+  const isCustomerDataRequest = requestUrl.searchParams.get('customerData') === '1'
+  const customerDataRequestId = isCustomerDataRequest ? requestUrl.searchParams.get('requestId') : null
+  const requestedScope = requestUrl.searchParams.get('scope')
+  const customerDataScope = isCustomerDataRequest
+    ? requestedScope === 'summary' ||
+      requestedScope === 'overview' ||
+      requestedScope === 'orders' ||
+      requestedScope === 'invoice' ||
+      requestedScope === 'transactions'
+      ? requestedScope
+      : 'full'
+    : getCustomerDataScope(requestUrl.pathname)
+
+  const loadCustomerData = async (scope: 'summary' | 'overview' | 'orders' | 'invoice' | 'transactions' | 'full') => {
+    const isSummaryScope = scope === 'summary'
+    const isOverviewScope = scope === 'overview'
+    const isOrdersScope = scope === 'orders'
+    const isInvoiceScope = scope === 'invoice'
+    const isTransactionsScope = scope === 'transactions'
+    const requestedOrderPage = Number.parseInt(requestUrl.searchParams.get('page') ?? '1', 10)
+    const orderPage = Number.isSafeInteger(requestedOrderPage) && requestedOrderPage > 0 ? requestedOrderPage : 1
+    const orderPageSize = 10
+    const transactionPageSize = 20
+    const requestedTransactionFilter = requestUrl.searchParams.get('filter') ?? 'All activity'
+    const allowedTransactionFilters = ['All activity', 'Top ups', 'Payments', 'Rewards']
+    const transactionFilter = allowedTransactionFilters.includes(requestedTransactionFilter) ? requestedTransactionFilter : 'All activity'
+    const [transactionPageSummary] = isTransactionsScope
+      ? await sql<
+          {
+            transactions: {
+              id: string
+              created_at: string
+              title: string
+              reference: string
+              order_reference: string | null
+              amount: number
+              direction: 'credit' | 'debit'
+              category: 'topup' | 'payment' | 'reward'
+              status: 'Successful' | 'Failed' | 'Pending'
+            }[]
+            total_count: number
+            page: number
+          }[]
+        >`
+          with plan_purchases as (
+            select
+              (array_agg(id order by created_at desc, id desc))[1]::text as id,
+              related_subscription_id,
+              sum(amount)::numeric as amount,
+              max(created_at) as created_at
+            from wallet_transactions
+            where customer_id = ${userData.user.id}
+              and related_subscription_id is not null
+            group by related_subscription_id
+          ),
+          all_transactions as (
+            select
+              payment.id::text as id,
+              payment.created_at,
+              case when payment.plan_id is not null then 'Subscription payment' else 'Wallet top up' end as title,
+              payment.reference,
+              null::text as order_reference,
+              payment.amount::numeric as amount,
+              'credit'::text as direction,
+              'topup'::text as category,
+              case payment.status
+                when 'success' then 'Successful'
+                when 'failed' then 'Failed'
+                else 'Pending'
+              end as status
+            from payments payment
+            where payment.customer_id = ${userData.user.id}
+
+            union all
+
+            select
+              transaction.id::text,
+              transaction.created_at,
+              case
+                when transaction.txn_type = 'topup' and transaction.balance_type = 'subscription'
+                  then 'Admin top-up applied to subscription debt'
+                when transaction.txn_type = 'topup' then 'Admin wallet top-up'
+                when transaction.txn_type = 'cashback' then 'Cashback earned'
+                when transaction.txn_type = 'referral_reward_expiry' then 'Promotional credit expired'
+                when transaction.txn_type = 'referral_reward' then 'Referral reward'
+                else 'Order payment'
+              end,
+              case
+                when transaction.txn_type = 'topup' then 'Admin credit • ' || left(transaction.id::text, 8)
+                when transaction.related_referral_reward_id is not null
+                  then 'Referral • ' || left(transaction.related_referral_reward_id::text, 8)
+                when transaction.related_invoice_id is not null
+                  then 'Invoice • ' || left(transaction.related_invoice_id::text, 8)
+                when transaction.txn_type = 'cashback'
+                  then 'Cashback • ' || left(transaction.id::text, 8)
+                else 'Wallet • ' || left(transaction.id::text, 8)
+              end,
+              order_row.public_order_number,
+              abs(transaction.amount)::numeric,
+              case
+                when transaction.txn_type in ('topup', 'cashback', 'referral_reward') then 'credit'
+                else 'debit'
+              end,
+              case
+                when transaction.txn_type in ('cashback', 'referral_reward', 'referral_reward_expiry') then 'reward'
+                when transaction.txn_type = 'topup' then 'topup'
+                else 'payment'
+              end,
+              'Successful'::text
+            from wallet_transactions transaction
+            left join invoices invoice on invoice.id = transaction.related_invoice_id
+            left join orders order_row on order_row.id = invoice.order_id
+            where transaction.customer_id = ${userData.user.id}
+              and transaction.related_subscription_id is null
+              and (transaction.txn_type <> 'topup' or transaction.related_payment_id is null)
+
+            union all
+
+            select
+              plan.id,
+              plan.created_at,
+              'Plan purchase',
+              'Wallet plan • ' || left(plan.related_subscription_id::text, 8),
+              null::text,
+              abs(plan.amount),
+              'debit'::text,
+              'payment'::text,
+              'Successful'::text
+            from plan_purchases plan
+
+            union all
+
+            select
+              ('offline-invoice-' || invoice.id::text),
+              coalesce(invoice.paid_at, invoice.created_at),
+              'Offline order payment',
+              'Offline payment • ' || upper(left(invoice.id::text, 8)),
+              order_row.public_order_number,
+              abs(invoice.amount)::numeric,
+              'debit'::text,
+              'payment'::text,
+              'Successful'::text
+            from invoices invoice
+            join orders order_row on order_row.id = invoice.order_id
+            where order_row.customer_id = ${userData.user.id}
+              and invoice.status = 'paid'
+              and invoice.payment_method = 'offline'
+          ),
+          filtered_transactions as (
+            select *
+            from all_transactions
+            where ${transactionFilter} = 'All activity'
+              or (${transactionFilter} = 'Top ups' and category = 'topup')
+              or (${transactionFilter} = 'Payments' and category = 'payment')
+              or (${transactionFilter} = 'Rewards' and category = 'reward')
+          ),
+          total as (
+            select count(*)::int as total_count from filtered_transactions
+          ),
+          page_info as (
+            select case
+              when total.total_count = 0 then 1
+              else least(${orderPage}, ceil(total.total_count::numeric / ${transactionPageSize})::int)
+            end as page
+            from total
+          ),
+          page_rows as (
+            select *
+            from filtered_transactions
+            order by created_at desc, id desc
+            offset ((select page from page_info) - 1) * ${transactionPageSize}
+            limit ${transactionPageSize}
+          )
+          select
+            coalesce((select jsonb_agg(to_jsonb(page_rows) order by created_at desc, id desc) from page_rows), '[]'::jsonb)
+              as transactions,
+            total.total_count,
+            page_info.page
+          from total, page_info
+        `
+      : []
+    const [invoicePageSummary] = isInvoiceScope
+      ? await sql<
+          {
+            page_invoice_ids: string[]
+            page_order_ids: string[]
+            total_count: number
+            page: number
+          }[]
+        >`
+          with invoice_count as (
+            select count(*)::int as total_count
+            from invoices invoice
+            join orders order_row on order_row.id = invoice.order_id
+            where order_row.customer_id = ${userData.user.id}
+              and order_row.status <> 'cancelled'
+          ),
+          page_info as (
+            select case
+              when invoice_count.total_count = 0 then 1
+              else least(${orderPage}, ceil(invoice_count.total_count::numeric / ${orderPageSize})::int)
+            end as page
+            from invoice_count
+          ),
+          paged_invoices as (
+            select invoice.id, invoice.order_id
+            from invoices invoice
+            join orders order_row on order_row.id = invoice.order_id
+            where order_row.customer_id = ${userData.user.id}
+              and order_row.status <> 'cancelled'
+            order by invoice.created_at desc, invoice.id desc
+            offset ((select page from page_info) - 1) * ${orderPageSize}
+            limit ${orderPageSize}
+          )
+          select
+            coalesce(array(select id from paged_invoices), '{}'::uuid[]) as page_invoice_ids,
+            coalesce(array(select distinct order_id from paged_invoices), '{}'::uuid[]) as page_order_ids,
+            invoice_count.total_count,
+            page_info.page
+          from invoice_count, page_info
+        `
+      : []
+    const orderFilter = requestUrl.searchParams.get('filter') ?? 'All orders'
+    const allowedOrderFilters = ['All orders', 'Active', 'Delivered', 'Pending payment', 'Needs attention']
+    const activeOrderFilter = allowedOrderFilters.includes(orderFilter) ? orderFilter : 'All orders'
+    const orderSearch = (requestUrl.searchParams.get('search') ?? '').trim().slice(0, 100)
+    const requestedOrderReference = requestUrl.searchParams.get('order')
+    const [orderPageSummary] = isOrdersScope
+      ? await sql<
+          {
+            page_order_ids: string[]
+            filtered_count: number
+            page: number
+            total_count: number
+            active_count: number
+            delivered_count: number
+          }[]
+        >`
+          with customer_orders as (
+            select order_row.id, order_row.created_at
+            from orders order_row
+            where order_row.customer_id = ${userData.user.id}
+              and order_row.status <> 'cancelled'
+              and (
+                ${activeOrderFilter} = 'All orders'
+                or (${activeOrderFilter} = 'Active' and order_row.status <> 'delivered')
+                or (${activeOrderFilter} = 'Delivered' and order_row.status = 'delivered')
+                or (
+                  ${activeOrderFilter} = 'Pending payment'
+                  and (
+                    (
+                      select status
+                      from invoices
+                      where order_id = order_row.id
+                      order by created_at desc
+                      limit 1
+                    ) = 'unpaid'
+                    or (
+                      not exists (select 1 from invoices where order_id = order_row.id)
+                      and order_row.status not in ('paid', 'out_for_delivery', 'delivered')
+                    )
+                  )
+                )
+                or (
+                  ${activeOrderFilter} = 'Needs attention'
+                  and exists (select 1 from mismatches where order_id = order_row.id)
+                  and (
+                    (
+                      select status
+                      from invoices
+                      where order_id = order_row.id
+                      order by created_at desc
+                      limit 1
+                    ) = 'unpaid'
+                    or (
+                      not exists (select 1 from invoices where order_id = order_row.id)
+                      and order_row.status not in ('paid', 'out_for_delivery', 'delivered')
+                    )
+                  )
+                )
+              )
+              and (
+                ${orderSearch} = ''
+                or position(
+                  lower(${orderSearch}) in lower(concat_ws(
+                    ' ',
+                    order_row.public_order_number,
+                    case order_row.order_type
+                      when 'wash' then 'Wash only'
+                      when 'wash_iron' then 'Wash + Iron'
+                      else 'Mixed service'
+                    end,
+                    case order_row.status
+                      when 'pending_pickup' then 'Awaiting pickup'
+                      when 'picked_up' then 'Picked up'
+                      when 'at_vendor' then 'In progress'
+                      when 'invoiced' then 'Pending payment'
+                      when 'paid' then 'Ready for delivery'
+                      when 'out_for_delivery' then 'Ready for delivery'
+                      when 'delivered' then 'Delivered'
+                      else ''
+                    end,
+                    case when order_row.status = 'pending_pickup' then 'Pickup pending' else 'Pickup confirmed' end
+                  ))
+                ) > 0
+                or exists (
+                  select 1
+                  from pickup_locations pickup_location
+                  where pickup_location.id = order_row.pickup_location_id
+                    and position(lower(${orderSearch}) in lower(pickup_location.name)) > 0
+                )
+              )
+          ),
+          counts as (
+            select count(*)::int as filtered_count from customer_orders
+          ),
+          all_counts as (
+            select
+              count(*)::int as total_count,
+              count(*) filter (where status <> 'delivered')::int as active_count,
+              count(*) filter (where status = 'delivered')::int as delivered_count
+            from orders
+            where customer_id = ${userData.user.id}
+              and status <> 'cancelled'
+          ),
+          page_info as (
+            select case
+              when counts.filtered_count = 0 then 1
+              else least(${orderPage}, ceil(counts.filtered_count::numeric / ${orderPageSize})::int)
+            end as page
+            from counts
+          )
+          select
+            coalesce(
+              array(
+                select customer_orders.id
+                from customer_orders
+                order by customer_orders.created_at desc, customer_orders.id desc
+                offset ((page_info.page - 1) * ${orderPageSize})
+                limit ${orderPageSize}
+              ),
+              '{}'::uuid[]
+            ) as page_order_ids,
+            counts.filtered_count,
+            page_info.page,
+            all_counts.total_count,
+            all_counts.active_count,
+            all_counts.delivered_count
+          from counts, page_info, all_counts
+        `
+      : []
+    const requestedOrderId =
+      isOrdersScope && requestedOrderReference
+        ? await sql<{ id: string }[]>`
+            select id
+            from orders
+            where customer_id = ${userData.user.id}
+              and status <> 'cancelled'
+              and (id::text = ${requestedOrderReference} or public_order_number = ${requestedOrderReference})
+            limit 1
+          `
+        : []
+    const overviewSummaryPromise = isOverviewScope
+      ? sql<
+          {
+            active_order_count: number
+            pending_payment_total: number
+            has_pending_invoice_order: boolean
+            mismatch_count: number
+            latest_mismatch_detail: string | null
+          }[]
+        >`
+          select
+            count(*) filter (where order_row.status <> 'delivered')::int as active_order_count,
+            coalesce(sum(coalesce(invoice.amount, order_row.billed_extra_amount, 0)) filter (
+              where (invoice.status is null or invoice.status = 'unpaid')
+                and order_row.status <> 'delivered'
+            ), 0) as pending_payment_total,
+            bool_or(order_row.status = 'invoiced') as has_pending_invoice_order,
+            count(*) filter (
+              where (invoice.status is null or invoice.status = 'unpaid')
+                and exists (select 1 from mismatches mismatch where mismatch.order_id = order_row.id)
+            )::int as mismatch_count,
+            (
+              select mismatch.detail
+              from orders mismatch_order
+              left join lateral (
+                select status
+                from invoices
+                where order_id = mismatch_order.id
+                order by created_at desc
+                limit 1
+              ) mismatch_invoice on true
+              join lateral (
+                select detail, created_at
+                from mismatches
+                where order_id = mismatch_order.id
+                order by created_at desc
+                limit 1
+              ) mismatch on true
+              where mismatch_order.customer_id = ${userData.user.id}
+                and mismatch_order.status <> 'cancelled'
+                and (mismatch_invoice.status is null or mismatch_invoice.status = 'unpaid')
+              order by mismatch_order.created_at desc
+              limit 1
+            ) as latest_mismatch_detail
+          from orders order_row
+          left join lateral (
+            select amount, status
+            from invoices
+            where order_id = order_row.id
+            order by created_at desc
+            limit 1
+          ) invoice on true
+          where order_row.customer_id = ${userData.user.id}
+            and order_row.status <> 'cancelled'
+        `
+      : Promise.resolve([])
     const [
-      { data: activeReferralCampaign, error: referralCampaignError },
       { count: unreadNotificationCount },
       { data: orders },
       { data: pickupLocations },
@@ -98,86 +528,115 @@ async function loadCustomerLayoutData(request: Request) {
       { data: walletTransactions },
       { data: payments, error: paymentsError },
       { data: subscription },
-      { data: referredRows, error: referredRowsError },
-      { data: referrerRows, error: referrerRowsError },
     ] = await Promise.all([
-      serverSupabase
-        .from('referral_campaigns')
-        .select('referrer_reward_value, referred_reward_value, minimum_order_amount')
-        .eq('status', 'active')
-        .or(`starts_at.is.null,starts_at.lte.${campaignCheckTime}`)
-        .or(`ends_at.is.null,ends_at.gt.${campaignCheckTime}`)
-        .order('starts_at', { ascending: false, nullsFirst: false })
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle(),
       serverSupabase
         .from('notification_events')
         .select('id', { count: 'exact', head: true })
         .eq('customer_id', userData.user.id)
         .is('read_at', null),
-      serverSupabase
-        .from('orders')
-        .select(
-          'id, public_order_number, customer_id, subscription_id, subscription_allowance_subscription_id, order_type, clothes_count_customer, clothes_count_vendor, subscription_units_applied, subscription_units_applied_at, status, pickup_otp, delivery_otp, pickup_location_id, notes, is_subscription_order, billed_extra_amount, picked, picked_up_date, created_at',
-        )
-        .eq('customer_id', userData.user.id)
-        .neq('status', 'cancelled')
-        .order('created_at', { ascending: false }),
+      isSummaryScope
+        ? Promise.resolve({ data: [] })
+        : isInvoiceScope
+          ? invoicePageSummary?.page_order_ids.length
+            ? serverSupabase
+                .from('orders')
+                .select(
+                  'id, public_order_number, customer_id, subscription_id, subscription_allowance_subscription_id, order_type, clothes_count_customer, clothes_count_vendor, subscription_units_applied, subscription_units_applied_at, status, pickup_otp, delivery_otp, pickup_location_id, notes, is_subscription_order, billed_extra_amount, picked, picked_up_date, created_at',
+                )
+                .eq('customer_id', userData.user.id)
+                .in('id', invoicePageSummary.page_order_ids)
+            : Promise.resolve({ data: [] })
+          : isOrdersScope
+              ? (() => {
+                  const orderIds = [
+                    ...new Set([...(orderPageSummary?.page_order_ids ?? []), ...(requestedOrderId.map((order) => order.id) ?? [])]),
+                  ]
+                  return orderIds.length > 0
+                    ? serverSupabase
+                        .from('orders')
+                        .select(
+                          'id, public_order_number, customer_id, subscription_id, subscription_allowance_subscription_id, order_type, clothes_count_customer, clothes_count_vendor, subscription_units_applied, subscription_units_applied_at, status, pickup_otp, delivery_otp, pickup_location_id, notes, is_subscription_order, billed_extra_amount, picked, picked_up_date, created_at',
+                        )
+                        .eq('customer_id', userData.user.id)
+                        .in('id', orderIds)
+                    : Promise.resolve({ data: [] })
+                })()
+              : (() => {
+                  let query = serverSupabase
+                    .from('orders')
+                    .select(
+                      'id, public_order_number, customer_id, subscription_id, subscription_allowance_subscription_id, order_type, clothes_count_customer, clothes_count_vendor, subscription_units_applied, subscription_units_applied_at, status, pickup_otp, delivery_otp, pickup_location_id, notes, is_subscription_order, billed_extra_amount, picked, picked_up_date, created_at',
+                    )
+                    .eq('customer_id', userData.user.id)
+                    .neq('status', 'cancelled')
+                    .order('created_at', { ascending: false })
+                  if (isOverviewScope) query = query.limit(2)
+                  return query
+                })(),
       serverSupabase.from('pickup_locations').select('id, name, address').eq('active', true).order('name'),
-      serverSupabase.from('wallets').select('*').eq('customer_id', userData.user.id).maybeSingle(),
       serverSupabase
-        .from('wallet_transactions')
-        .select('*')
+        .from('wallets')
+        .select('customer_id, one_off_balance, subscription_balance, promotional_balance, updated_at')
         .eq('customer_id', userData.user.id)
-        .order('created_at', { ascending: false })
-        .limit(20),
-      serverSupabase
-        .from('payments')
-        .select('*')
-        .eq('customer_id', userData.user.id)
-        .order('created_at', { ascending: false })
-        .limit(20),
+        .maybeSingle(),
+      isTransactionsScope
+        ? Promise.resolve({ data: [] as WalletTransaction[] })
+        : serverSupabase
+            .from('wallet_transactions')
+            .select(
+              'id, customer_id, balance_type, txn_type, amount, related_invoice_id, related_payment_id, related_referral_reward_id, related_subscription_id, created_at',
+            )
+            .eq('customer_id', userData.user.id)
+            .order('created_at', { ascending: false })
+            .limit(20),
+      isTransactionsScope
+        ? Promise.resolve({ data: [] as Payment[], error: null })
+        : serverSupabase
+            .from('payments')
+            .select('id, reference, amount, plan_id, status, created_at')
+            .eq('customer_id', userData.user.id)
+            .order('created_at', { ascending: false })
+            .limit(20),
       serverSupabase
         .from('subscriptions')
-        .select('*')
+        .select(
+          'id, customer_id, plan_id, start_date, end_date, weekly_limit_snapshot, covers_wash_snapshot, covers_iron_snapshot, created_at',
+        )
         .eq('customer_id', userData.user.id)
         .eq('status', 'active')
         .or(`end_date.is.null,end_date.gte.${new Date().toISOString().slice(0, 10)}`)
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle(),
-      serverSupabase
-        .from('referrals')
-        .select('id, referrer_id, referred_id, status, qualified_at, created_at')
-        .eq('referred_id', userData.user.id)
-        .order('created_at', { ascending: false }),
-      serverSupabase
-        .from('referrals')
-        .select('id, referrer_id, referred_id, status, qualified_at, created_at')
-        .eq('referrer_id', userData.user.id)
-        .order('created_at', { ascending: false }),
     ])
-
-    if (referralCampaignError) throw new Error(`Referral campaign details could not be loaded: ${referralCampaignError.message}`)
-    if (referredRowsError || referrerRowsError) {
-      console.error('[referral] Referral history query failed', {
-        side: referredRowsError && referrerRowsError ? 'both' : referredRowsError ? 'referred' : 'referrer',
-        errorCode: referredRowsError?.code ?? referrerRowsError?.code ?? 'unknown',
-      })
-      throw new Error('Referral history could not be loaded.')
-    }
+    const [overviewSummaryRow] = await overviewSummaryPromise
 
     const orderIds = (orders ?? []).map((order) => order.id)
-    const referralRows = [...(referredRows ?? []), ...(referrerRows ?? [])].filter(
-      (row, index, rows) => rows.findIndex((candidate) => candidate.id === row.id) === index,
-    )
-    const referralIds = referralRows.map((row) => row.id)
+    const subscriptionUsageReference = new Date()
+    const subscriptionUsageTotalsQuery =
+      (isSummaryScope || isOverviewScope || isInvoiceScope) && subscription
+        ? getSubscriptionUsageTotals(
+            {
+              customerId: userData.user.id,
+              subscription: {
+                id: subscription.id,
+                startDate: subscription.start_date,
+                endDate: subscription.end_date,
+              },
+            },
+            subscriptionUsageReference,
+          )
+        : Promise.resolve(null)
+    const subscriptionUsageOrdersQuery =
+      !(isSummaryScope || isOverviewScope || isInvoiceScope) || !subscription
+        ? Promise.resolve((orders ?? []) as SubscriptionUsageOrder[])
+        : Promise.resolve(null)
     const [
       { data: orderItems },
       { data: invoiceRows, error: invoiceRowsError },
       { data: subscriptionPlan },
-      { data: referralRewards, error: referralRewardsError },
+      subscriptionUsageTotalsRows,
+      subscriptionUsageOrders,
     ] = await Promise.all([
       orderIds.length > 0
         ? serverSupabase
@@ -185,21 +644,30 @@ async function loadCustomerLayoutData(request: Request) {
             .select('id, order_id, category_id, quantity, confirmed_quantity, service, unit_price, subscription_units_snapshot')
             .in('order_id', orderIds)
         : Promise.resolve({ data: [] }),
-      orderIds.length > 0
+      isInvoiceScope && invoicePageSummary?.page_invoice_ids.length
         ? serverSupabase
             .from('invoices')
-            .select('*')
-            .in('order_id', orderIds)
+            .select('id, order_id, amount, status, payment_method, billing_breakdown, paid_at, created_at')
+            .in('id', invoicePageSummary.page_invoice_ids)
             .order('created_at', { ascending: false })
-        : Promise.resolve({ data: [], error: null }),
-      subscription ? serverSupabase.from('plans').select('*').eq('id', subscription.plan_id).maybeSingle() : Promise.resolve({ data: null }),
-      referralIds.length > 0
+            .order('id', { ascending: false })
+        : orderIds.length > 0
+          ? serverSupabase
+              .from('invoices')
+              .select('id, order_id, amount, status, payment_method, billing_breakdown, paid_at, created_at')
+              .in('order_id', orderIds)
+              .order('created_at', { ascending: false })
+              .order('id', { ascending: false })
+          : Promise.resolve({ data: [], error: null }),
+      subscription
         ? serverSupabase
-            .from('referral_rewards')
-            .select('referral_id, recipient_id, reward_value, status, expires_at')
-            .in('referral_id', referralIds)
-            .eq('recipient_id', userData.user.id)
-        : Promise.resolve({ data: [], error: null }),
+            .from('plans')
+            .select('id, name, type, weekly_limit, covers_wash, covers_iron')
+            .eq('id', subscription.plan_id)
+            .maybeSingle()
+        : Promise.resolve({ data: null }),
+      subscriptionUsageTotalsQuery,
+      subscriptionUsageOrdersQuery,
     ])
 
     const categoryIds = [...new Set((orderItems ?? []).map((item) => item.category_id))]
@@ -267,35 +735,17 @@ async function loadCustomerLayoutData(request: Request) {
               startDate: subscription.start_date,
               startAt: subscription.created_at,
               endDate: subscription.end_date,
-              usedUnits: calculateSubscriptionUnitsApplied(orders ?? [], {
-                id: subscription.id,
-                startDate: subscription.start_date,
-                endDate: subscription.end_date,
-              }),
+              usedUnits:
+                subscriptionUsageTotalsRows?.usedUnits ??
+                calculateSubscriptionUnitsApplied(subscriptionUsageOrders ?? [], {
+                  id: subscription.id,
+                  startDate: subscription.start_date,
+                  endDate: subscription.end_date,
+                }),
             },
-            new Date(),
+            subscriptionUsageReference,
           )
         : null
-
-    if (referralRewardsError) {
-      console.error('[referral] Referral reward history query failed', {
-        errorCode: referralRewardsError.code ?? 'unknown',
-      })
-      throw new Error('Referral reward history could not be loaded.')
-    }
-    const persistedReferrals: CustomerReferral[] = referralRows.map((row) => {
-      const reward = (referralRewards ?? []).find((candidate) => candidate.referral_id === row.id)
-      return {
-        id: row.id,
-        status: row.status,
-        createdAt: row.created_at,
-        qualifiedAt: row.qualified_at,
-        isReferrer: row.referrer_id === userData.user.id,
-        rewardStatus: reward?.status ?? null,
-        rewardValue: reward ? Number(reward.reward_value) : null,
-        rewardExpiresAt: reward?.expires_at ?? null,
-      }
-    })
 
     return {
       user: userData.user,
@@ -310,25 +760,55 @@ async function loadCustomerLayoutData(request: Request) {
       walletTransactions: walletTransactions ?? [],
       payments: payments ?? [],
       transactionError: [paymentsError?.message, invoiceRowsError?.message].filter(Boolean).join(' ') || null,
+      customerTransactions: isTransactionsScope
+        ? (transactionPageSummary?.transactions ?? []).map((transaction) => ({
+            ...transaction,
+            date: new Date(transaction.created_at).toLocaleString(),
+            sortDate: transaction.created_at,
+            amount: `${transaction.direction === 'credit' ? '+' : '-'}₦${Number(transaction.amount).toLocaleString()}`,
+          }))
+        : null,
+      transactionPagination: isTransactionsScope
+        ? {
+            page: Number(transactionPageSummary?.page ?? 1),
+            pageSize: transactionPageSize,
+            totalCount: Number(transactionPageSummary?.total_count ?? 0),
+          }
+        : null,
       invoices: invoicesWithDetails,
       orderMismatches,
       unreadNotificationCount: unreadNotificationCount ?? 0,
       subscription,
       subscriptionPlan: subscriptionPlanSnapshot,
-      persistedReferrals,
-      referralCampaignBenefit: activeReferralCampaign
+      overviewSummary: overviewSummaryRow
         ? {
-            referrerRewardValue: Number(activeReferralCampaign.referrer_reward_value),
-            referredRewardValue: Number(activeReferralCampaign.referred_reward_value),
-            minimumOrderAmount: Number(activeReferralCampaign.minimum_order_amount),
+            activeOrderCount: Number(overviewSummaryRow.active_order_count),
+            pendingPaymentTotal: Number(overviewSummaryRow.pending_payment_total),
+            hasPendingInvoiceOrder: Boolean(overviewSummaryRow.has_pending_invoice_order),
+            mismatchCount: Number(overviewSummaryRow.mismatch_count),
+            latestMismatchDetail: overviewSummaryRow.latest_mismatch_detail,
+          }
+        : null,
+      ordersPagination: isOrdersScope
+        ? {
+            page: Number(orderPageSummary?.page ?? 1),
+            pageSize: orderPageSize,
+            totalCount: Number(orderPageSummary?.total_count ?? 0),
+            filteredCount: Number(orderPageSummary?.filtered_count ?? 0),
+            activeCount: Number(orderPageSummary?.active_count ?? 0),
+            deliveredCount: Number(orderPageSummary?.delivered_count ?? 0),
+            pageOrderIds: orderPageSummary?.page_order_ids ?? [],
+          }
+        : null,
+      invoicePagination: isInvoiceScope
+        ? {
+            page: Number(invoicePageSummary?.page ?? 1),
+            pageSize: orderPageSize,
+            totalCount: Number(invoicePageSummary?.total_count ?? 0),
           }
         : null,
     }
   }
-
-  const requestUrl = new URL(request.url)
-  const isCustomerDataRequest = requestUrl.searchParams.get('customerData') === '1'
-  const customerDataRequestId = isCustomerDataRequest ? requestUrl.searchParams.get('requestId') : null
 
   if (!isCustomerDataRequest) {
     return data(
@@ -345,15 +825,19 @@ async function loadCustomerLayoutData(request: Request) {
         walletTransactions: [],
         payments: [],
         transactionError: null,
+        customerTransactions: null,
+        transactionPagination: null,
         invoices: [],
         orderMismatches: [],
         unreadNotificationCount: 0,
         subscription: null,
         subscriptionPlan: null,
-        persistedReferrals: [],
-        referralCampaignBenefit: null,
+        overviewSummary: null,
+        ordersPagination: null,
+        invoicePagination: null,
         customerDataLoading: true,
         customerDataRequestId: crypto.randomUUID(),
+        customerDataScope,
         customerDataError: null,
       },
       { headers },
@@ -361,12 +845,13 @@ async function loadCustomerLayoutData(request: Request) {
   }
 
   try {
-    const loadedCustomerData = await loadCustomerData()
+    const loadedCustomerData = await loadCustomerData(customerDataScope)
     return data(
       {
         ...loadedCustomerData,
         customerDataLoading: false,
         customerDataRequestId: customerDataRequestId,
+        customerDataScope,
         customerDataError: null,
       },
       { headers },
@@ -388,15 +873,19 @@ async function loadCustomerLayoutData(request: Request) {
         walletTransactions: [],
         payments: [],
         transactionError: null,
+        customerTransactions: null,
+        transactionPagination: null,
         invoices: [],
         orderMismatches: [],
         unreadNotificationCount: 0,
         subscription: null,
         subscriptionPlan: null,
-        persistedReferrals: [],
-        referralCampaignBenefit: null,
+        overviewSummary: null,
+        ordersPagination: null,
+        invoicePagination: null,
         customerDataLoading: false,
         customerDataRequestId: customerDataRequestId,
+        customerDataScope,
         customerDataError: 'Your account data could not be loaded. Please try again.',
       },
       { headers, status: 500 },
@@ -490,26 +979,46 @@ export default function CustomerLayout() {
   const loaderData = useLoaderData<typeof loader>()
   const { revalidate } = useRevalidator()
   const customerDataFetcher = useFetcher<typeof loader>()
+  const activeCustomerDataScope = getCustomerDataScope(location.pathname)
   const customerDataRequestId = loaderData?.customerDataRequestId
-  const shouldLoadCustomerData = Boolean(loaderData?.customerDataLoading)
+    ? `${loaderData.customerDataRequestId}:${activeCustomerDataScope}${
+        activeCustomerDataScope === 'orders' || activeCustomerDataScope === 'invoice' || activeCustomerDataScope === 'transactions'
+          ? location.search
+          : ''
+      }`
+    : null
+  const shouldLoadCustomerData =
+    Boolean(loaderData?.customerDataLoading) || Boolean(loaderData?.profile && loaderData.customerDataScope !== activeCustomerDataScope)
   const loadCustomerData = customerDataFetcher.load
   const fetcherData = customerDataFetcher.data
   const [startedCustomerDataRequestId, setStartedCustomerDataRequestId] = useState<string | null>(null)
   useEffect(() => {
     if (!shouldLoadCustomerData || !customerDataRequestId) return
-    if (fetcherData?.customerDataRequestId === customerDataRequestId && fetcherData.customerDataLoading === false) return
-    loadCustomerData(`/?index&customerData=1&requestId=${encodeURIComponent(customerDataRequestId)}`)
-  }, [shouldLoadCustomerData, customerDataRequestId, fetcherData, loadCustomerData])
+    if (
+      fetcherData?.customerDataRequestId === customerDataRequestId &&
+      fetcherData.customerDataScope === activeCustomerDataScope &&
+      fetcherData.customerDataLoading === false
+    )
+      return
+    const requestParams = new URLSearchParams(location.search)
+    requestParams.set('customerData', '1')
+    requestParams.set('requestId', customerDataRequestId)
+    requestParams.set('scope', activeCustomerDataScope)
+    loadCustomerData(`/?index&${requestParams.toString()}`)
+  }, [shouldLoadCustomerData, customerDataRequestId, activeCustomerDataScope, fetcherData, loadCustomerData, location.search])
   useEffect(() => {
     if (customerDataFetcher.state === 'idle' || !customerDataRequestId) return
     const timer = window.setTimeout(() => setStartedCustomerDataRequestId(customerDataRequestId), 0)
     return () => window.clearTimeout(timer)
   }, [customerDataFetcher.state, customerDataRequestId])
   const loadedCustomerData =
-    fetcherData && fetcherData.customerDataRequestId === customerDataRequestId && fetcherData.customerDataLoading === false
+    fetcherData &&
+    fetcherData.customerDataRequestId === customerDataRequestId &&
+    fetcherData.customerDataScope === activeCustomerDataScope &&
+    fetcherData.customerDataLoading === false
       ? fetcherData
       : null
-  const customerData = shouldLoadCustomerData ? (loadedCustomerData ?? loaderData) : loaderData
+  const customerData = loadedCustomerData ?? loaderData
   const customerDataRequestFailed =
     shouldLoadCustomerData &&
     startedCustomerDataRequestId === customerDataRequestId &&
@@ -517,11 +1026,10 @@ export default function CustomerLayout() {
     !loadedCustomerData
   const isCustomerDataLoading =
     shouldLoadCustomerData && !loadedCustomerData && !loaderData?.customerDataError && !customerDataRequestFailed
-  const customerDataError = shouldLoadCustomerData
-    ? (loadedCustomerData?.customerDataError ??
-      loaderData?.customerDataError ??
-      (customerDataRequestFailed ? 'Your account data could not be loaded. Please try again.' : null))
-    : null
+  const customerDataError =
+    loadedCustomerData?.customerDataError ??
+    loaderData?.customerDataError ??
+    (customerDataRequestFailed ? 'Your account data could not be loaded. Please try again.' : null)
   const referralCode = loaderData?.profile?.referral_code ?? null
   const [showReferralModal, setShowReferralModal] = useState(false)
   const unreadNotificationCount = customerData?.unreadNotificationCount ?? 0
@@ -546,9 +1054,7 @@ export default function CustomerLayout() {
         ? 'Notifications'
         : location.pathname.startsWith('/invoice')
           ? 'Invoice'
-          : location.pathname.startsWith('/otp')
-            ? 'OTP'
-            : (navItems.find((item) => item.to !== '/' && location.pathname.startsWith(item.to))?.label ?? 'Overview')
+          : (navItems.find((item) => item.to !== '/' && location.pathname.startsWith(item.to))?.label ?? 'Overview')
 
   const closeMobileMenu = () => setMobileMenuOpen(false)
 
@@ -642,7 +1148,7 @@ export default function CustomerLayout() {
 
   return (
     <CustomerStoreProvider
-      key={`${customerData?.profile?.id ?? 'customer'}:${customerData?.profile?.name ?? ''}:${customerData?.profile?.phone ?? ''}:${customerData?.profile?.referral_code ?? ''}:${customerData?.profile?.pickup_location_id ?? ''}:${customerData?.wallet?.updated_at ?? 'no-wallet'}:${customerData?.subscription?.id ?? 'no-subscription'}:${customerData?.subscription?.end_date ?? ''}:${(customerData?.orders ?? []).map((order) => `${order.id}-${order.status}-${order.pickup_otp ?? ''}-${order.delivery_otp ?? ''}-${order.clothes_count_vendor ?? ''}`).join('|')}:${(customerData?.payments ?? []).map((payment) => `${payment.id}-${payment.status}`).join('|')}:${(customerData?.invoices ?? []).map((invoice) => `${invoice.id}-${invoice.payment_method ?? ''}-${invoice.paid_at ?? ''}`).join('|')}:${(customerData?.persistedReferrals ?? []).map((referral) => `${referral.id}-${referral.status}-${referral.rewardStatus ?? ''}`).join('|')}`}
+      key={`${customerData?.profile?.id ?? 'customer'}:${customerData?.profile?.name ?? ''}:${customerData?.profile?.phone ?? ''}:${customerData?.profile?.referral_code ?? ''}:${customerData?.profile?.pickup_location_id ?? ''}:${customerData?.wallet?.updated_at ?? 'no-wallet'}:${customerData?.subscription?.id ?? 'no-subscription'}:${customerData?.subscription?.end_date ?? ''}:${customerData?.ordersPagination?.page ?? ''}:${(customerData?.ordersPagination?.pageOrderIds ?? []).join('|')}:${customerData?.invoicePagination?.page ?? ''}:${customerData?.transactionPagination?.page ?? ''}:${(customerData?.customerTransactions ?? []).map((transaction) => `${transaction.id}-${transaction.title}-${transaction.amount}-${transaction.status}`).join('|')}:${(customerData?.orders ?? []).map((order) => `${order.id}-${order.status}-${order.pickup_otp ?? ''}-${order.delivery_otp ?? ''}-${order.clothes_count_vendor ?? ''}`).join('|')}:${(customerData?.payments ?? []).map((payment) => `${payment.id}-${payment.status}`).join('|')}:${(customerData?.invoices ?? []).map((invoice) => `${invoice.id}-${invoice.payment_method ?? ''}-${invoice.paid_at ?? ''}`).join('|')}`}
       profile={loaderData?.profile ?? undefined}
       persistedOrders={customerData ? (customerData.orders as Order[]) : undefined}
       persistedUnpaidInvoiceOrderIds={customerData?.unpaidInvoiceOrderIds as string[] | undefined}
@@ -654,12 +1160,15 @@ export default function CustomerLayout() {
           Array<{ id: string; order_id: string; direction: 'over' | 'under'; detail: string | null; details: MismatchLine[] }> | undefined
       }
       persistedSubscriptionAllowance={customerData?.subscriptionAllowance}
+      persistedOverviewSummary={customerData?.overviewSummary}
+      persistedOrdersPagination={customerData?.ordersPagination}
+      persistedInvoicePagination={customerData?.invoicePagination}
       persistedWallet={customerData?.wallet as Wallet | null | undefined}
       persistedWalletTransactions={customerData?.walletTransactions as WalletTransaction[] | undefined}
       persistedPayments={customerData?.payments as Payment[] | undefined}
-      persistedReferrals={customerData?.persistedReferrals as CustomerReferral[] | undefined}
-      referralCampaignBenefit={customerData?.referralCampaignBenefit}
       persistedTransactionError={customerData?.transactionError as string | null | undefined}
+      persistedTransactions={customerData?.customerTransactions ?? undefined}
+      persistedTransactionPagination={customerData?.transactionPagination}
       persistedInvoices={
         customerData?.invoices as
           | Array<

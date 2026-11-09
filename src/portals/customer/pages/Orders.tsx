@@ -84,22 +84,30 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function Orders() {
-  const { orders, balance, invoices, isDataLoading, dataLoadError } = useCustomerStore()
+  const { orders, balance, invoices, isDataLoading, dataLoadError, ordersPagination } = useCustomerStore()
   const cancelFetcher = useFetcher<typeof action>()
   const handledCancelResponse = useRef<typeof cancelFetcher.data>(null)
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false)
   const [selectedOrder, setSelectedOrder] = useState<CustomerOrder | null>(null)
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
-  const [activeFilter, setActiveFilter] = useState(() => searchParams.get('filter') ?? 'All orders')
-  const searchQuery = (searchParams.get('search') ?? '').trim().toLowerCase()
-  const visibleOrders = orders.filter((order) => order.status !== 'Cancelled')
+  const filterParam = searchParams.get('filter') ?? 'All orders'
+  const activeFilter = ['All orders', 'Active', 'Delivered', 'Pending payment', 'Needs attention'].includes(filterParam)
+    ? filterParam
+    : 'All orders'
+  const pageOrders = ordersPagination
+    ? ordersPagination.pageOrderIds.flatMap((id) => {
+        const order = orders.find((candidate) => candidate.id === id)
+        return order ? [order] : []
+      })
+    : orders
+  const visibleOrders = pageOrders.filter((order) => order.status !== 'Cancelled')
   const requestedOrderId = searchParams.get('order')
   const returnTo = searchParams.get('returnTo') ?? '/orders'
   const requestedOrder = requestedOrderId
-    ? (visibleOrders.find((order) => order.publicOrderNumber === requestedOrderId || order.id === requestedOrderId) ?? null)
+    ? (orders.find((order) => order.publicOrderNumber === requestedOrderId || order.id === requestedOrderId) ?? null)
     : null
-  const currentSelectedOrder = selectedOrder ? (visibleOrders.find((order) => order.id === selectedOrder.id) ?? null) : null
+  const currentSelectedOrder = selectedOrder ? (orders.find((order) => order.id === selectedOrder.id) ?? null) : null
   const orderDetails = requestedOrder ?? currentSelectedOrder
 
   const closeOrderDetails = () => {
@@ -128,31 +136,34 @@ export default function Orders() {
     }
   }
 
-  const filteredOrders = visibleOrders.filter((order) => {
-    const matchesFilter =
-      activeFilter === 'Active'
-        ? order.status !== 'Delivered'
-        : activeFilter === 'Delivered'
-          ? order.status === 'Delivered'
-          : activeFilter === 'Pending payment'
-            ? order.paymentStatus === 'Pending'
-            : activeFilter === 'Needs attention'
-              ? Boolean(order.mismatch) && order.paymentStatus === 'Pending'
-              : true
-    if (!matchesFilter) return false
-    if (!searchQuery) return true
-    return [order.publicOrderNumber, order.title, order.pickup, order.status].some((value) => value.toLowerCase().includes(searchQuery))
-  })
+  const filteredOrders = visibleOrders
 
   const stats = [
-    { label: 'Total orders', value: String(visibleOrders.length), helper: 'In your history' },
+    { label: 'Total orders', value: String(ordersPagination?.totalCount ?? visibleOrders.length), helper: 'In your history' },
     {
       label: 'Active',
-      value: String(visibleOrders.filter((order) => order.status !== 'Delivered').length).padStart(2, '0'),
+      value: String(ordersPagination?.activeCount ?? visibleOrders.filter((order) => order.status !== 'Delivered').length).padStart(2, '0'),
       helper: 'In progress',
     },
-    { label: 'Delivered', value: String(visibleOrders.filter((order) => order.status === 'Delivered').length), helper: 'Completed' },
+    {
+      label: 'Delivered',
+      value: String(ordersPagination?.deliveredCount ?? visibleOrders.filter((order) => order.status === 'Delivered').length),
+      helper: 'Completed',
+    },
   ]
+
+  const updateOrdersUrl = (updates: { filter?: string; page?: number }) => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      if (updates.filter !== undefined) {
+        if (updates.filter === 'All orders') next.delete('filter')
+        else next.set('filter', updates.filter)
+        next.delete('page')
+      }
+      if (updates.page !== undefined) next.set('page', String(updates.page))
+      return next
+    })
+  }
 
   const getAmountLabel = (order: (typeof orders)[number]) => {
     if (order.paymentStatus === 'Pending' && order.total > 0) return `Payment due · ₦${order.total.toLocaleString()}`
@@ -215,7 +226,7 @@ export default function Orders() {
               <button
                 key={filter}
                 type="button"
-                onClick={() => setActiveFilter(filter)}
+                onClick={() => updateOrdersUrl({ filter })}
                 aria-pressed={activeFilter === filter}
                 className={`inline-flex shrink-0 items-center gap-2 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium transition ${
                   activeFilter === filter
@@ -271,7 +282,7 @@ export default function Orders() {
                         amount={order.total}
                         walletBalance={balance}
                         invoiceId={invoices.find((invoice) => invoice.orderId === order.id && invoice.status === 'Awaiting payment')?.id}
-                        onClick={() => navigate('/?topup=1')}
+                        onClick={(suggestedAmount) => navigate(`/?topup=1&amount=${suggestedAmount}`)}
                       />
                     ) : order.paymentStatus === 'Paid' && order.status !== 'Delivered' && !order.deliveryOtp ? (
                       <DeliveryOtpStatus />
@@ -335,6 +346,36 @@ export default function Orders() {
             <p className="rounded-2xl bg-slate-50 p-6 text-center text-sm text-slate-500">No orders match this filter.</p>
           )}
         </div>
+        {ordersPagination && ordersPagination.filteredCount > ordersPagination.pageSize && (
+          <div className="mt-4 flex flex-col gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-slate-500">
+              Showing {(ordersPagination.page - 1) * ordersPagination.pageSize + 1}–
+              {Math.min(ordersPagination.page * ordersPagination.pageSize, ordersPagination.filteredCount)} of{' '}
+              {ordersPagination.filteredCount.toLocaleString()} orders
+            </p>
+            <div className="flex items-center justify-between gap-3 sm:justify-end">
+              <button
+                type="button"
+                onClick={() => updateOrdersUrl({ page: ordersPagination.page - 1 })}
+                disabled={ordersPagination.page <= 1 || isDataLoading}
+                className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Previous
+              </button>
+              <span className="whitespace-nowrap text-sm text-slate-600">
+                Page {ordersPagination.page} of {Math.ceil(ordersPagination.filteredCount / ordersPagination.pageSize)}
+              </span>
+              <button
+                type="button"
+                onClick={() => updateOrdersUrl({ page: ordersPagination.page + 1 })}
+                disabled={ordersPagination.page >= Math.ceil(ordersPagination.filteredCount / ordersPagination.pageSize) || isDataLoading}
+                className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
       </section>
 
       {isOrderModalOpen && <NewOrder onClose={() => setIsOrderModalOpen(false)} />}
