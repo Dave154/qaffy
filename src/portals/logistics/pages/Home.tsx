@@ -19,7 +19,7 @@ export async function action({ request }: Route.ActionArgs) {
   const formData = await request.formData()
   const orderId = String(formData.get('orderId') ?? '')
   const otp = String(formData.get('otp') ?? '')
-    .replace(/\D/g, '')
+    .replace(/\D/g, '') 
     .slice(-4)
   const intent = String(formData.get('intent') ?? 'pickup')
 
