@@ -240,7 +240,6 @@ export default function VendorSettings() {
   }, [resolveFetcher.data])
 
   useEffect(() => {
-    console.log(saveFetcher, "saveFetcher.data")
     if (saveFetcher.data && !saveFetcher.data.ok && 'message' in saveFetcher.data) toast.error(String(saveFetcher.data.message))
     if (saveFetcher.data?.ok && 'accountName' in saveFetcher.data) toast.success(`Saved and verified as ${saveFetcher.data.accountName}.`)
   }, [saveFetcher.data])

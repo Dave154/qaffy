@@ -512,7 +512,7 @@ export function shouldRevalidate({ formMethod, actionResult, defaultShouldRevali
 
 export default function Finance() {
   const { summary, vendors, settlements, settlementPagination } = useLoaderData<typeof loader>()
-  const revalidator = useRevalidator()
+  const { revalidate, state: revalidationState } = useRevalidator()
   const [, setSearchParams] = useSearchParams()
   const vendorsWithBalance = vendors.filter((vendor) => vendor.vendorPayout > 0)
   const owedVendorCount = vendorsWithBalance.length
@@ -629,7 +629,7 @@ export default function Finance() {
   useEffect(() => {
     const supabaseClient = supabase
     if (!supabaseClient) return
-    const refreshFinance = () => revalidator.revalidate()
+    const refreshFinance = () => revalidate()
     const channel = supabaseClient
       .channel('admin-finance-settlement-updates')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'vendor_settlements' }, refreshFinance)
@@ -638,7 +638,7 @@ export default function Finance() {
     return () => {
       void supabaseClient.removeChannel(channel)
     }
-  }, [revalidator])
+  }, [revalidate])
 
   const submitSettlementPreview = previewFetcher.submit
   useEffect(() => {
@@ -988,11 +988,11 @@ export default function Finance() {
                 type="button"
                 aria-label="Refresh Finance data"
                 title="Refresh Finance data"
-                onClick={() => revalidator.revalidate()}
-                disabled={revalidator.state !== 'idle'}
+                onClick={() => revalidate()}
+                disabled={revalidationState !== 'idle'}
                 className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-brand-primary hover:text-brand-primary disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <RefreshCw size={16} className={revalidator.state !== 'idle' ? 'animate-spin' : ''} />
+                <RefreshCw size={16} className={revalidationState !== 'idle' ? 'animate-spin' : ''} />
               </button>
             </div>
           </div>

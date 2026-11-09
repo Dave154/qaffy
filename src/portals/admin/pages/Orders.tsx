@@ -913,7 +913,7 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
   const allowancePreviewFetcher = useFetcher<typeof action>()
   const allowancePreviewSequence = useRef(0)
   const location = useLocation()
-  const revalidator = useRevalidator()
+  const { revalidate } = useRevalidator()
   const [confirmOfflinePayment, setConfirmOfflinePayment] = useState(false)
   const [applySubscriptionAllowance, setApplySubscriptionAllowance] = useState(false)
   const [activeAllowancePreviewId, setActiveAllowancePreviewId] = useState<string | null>(null)
@@ -968,8 +968,8 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
     const completedIntent = 'intent' in result ? result.intent : ''
     if (completedIntent === 'record-offline-payment-and-complete') onClose()
     toast.success(successMessages[completedIntent] ?? 'Order updated.')
-    revalidator.revalidate()
-  }, [workflowFetcher.data, workflowFetcher.state, onClose, revalidator])
+    revalidate()
+  }, [workflowFetcher.data, workflowFetcher.state, onClose, revalidate])
 
   const submitWorkflowAction = (intent: 'mark-picked-up' | 'dispatch-order' | 'mark-delivered') => {
     if (intent === 'dispatch-order' && confirmOfflinePayment) {
@@ -1664,7 +1664,7 @@ function OrdersPage({ pageData }: { pageData: OrdersData }) {
   const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
   const navigation = useNavigation()
-  const revalidator = useRevalidator()
+  const { revalidate, state: revalidationState } = useRevalidator()
   const location = useLocation()
   const [isFilterOpen, setIsFilterOpen] = useState(false)
   const [draftStatusFilter, setDraftStatusFilter] = useState(statusFilter)
@@ -1868,13 +1868,13 @@ function OrdersPage({ pageData }: { pageData: OrdersData }) {
               </button>
               <button
                 type="button"
-                onClick={() => revalidator.revalidate()}
-                disabled={revalidator.state !== 'idle'}
+                onClick={() => revalidate()}
+                disabled={revalidationState !== 'idle'}
                 aria-label="Refresh orders"
                 title="Refresh orders"
                 className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-slate-200 text-slate-600 transition hover:border-brand-primary hover:text-brand-primary disabled:cursor-wait disabled:opacity-50"
               >
-                <RefreshCw className={`h-4 w-4 ${revalidator.state !== 'idle' ? 'animate-spin' : ''}`} />
+                <RefreshCw className={`h-4 w-4 ${revalidationState !== 'idle' ? 'animate-spin' : ''}`} />
               </button>
               <button
                 type="button"

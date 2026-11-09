@@ -211,7 +211,7 @@ export default function Plans() {
     isDataLoading,
   } = useCustomerStore()
   const fetcher = useFetcher<typeof action>()
-  const revalidator = useRevalidator()
+  const { revalidate } = useRevalidator()
   const location = useLocation()
   useEffect(() => {
     if (!loaderData.loading || isDataLoading || plansRequestStarted || plansFetcher.state !== 'idle') return
@@ -265,11 +265,11 @@ export default function Plans() {
     let attempts = 0
     const refreshTimer = window.setInterval(() => {
       attempts += 1
-      revalidator.revalidate()
+      revalidate()
       if (attempts >= 15) window.clearInterval(refreshTimer)
     }, 2000)
     return () => window.clearInterval(refreshTimer)
-  }, [activePlan, location.search, revalidator])
+  }, [activePlan, location.search, revalidate])
 
   const isSubscribing = fetcher.state !== 'idle'
   const submittingIntent = isSubscribing ? String(fetcher.formData?.get('intent') ?? 'choose') : ''
@@ -289,9 +289,9 @@ export default function Plans() {
           ? 'Plan purchased with your wallet.'
           : 'Subscription payment completed.',
       )
-      revalidator.revalidate()
+      revalidate()
     }
-  }, [fetcher.data, revalidator])
+  }, [fetcher.data, revalidate])
   const isLatestPaymentResponse =
     fetcher.data &&
     'requestId' in fetcher.data &&

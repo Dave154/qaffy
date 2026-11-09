@@ -207,7 +207,7 @@ export function shouldRevalidate({ formData, defaultShouldRevalidate }: ShouldRe
 export default function LogisticsLayout() {
   const loaderData = useLoaderData<typeof loader>()
   const navigate = useNavigate()
-  const revalidator = useRevalidator()
+  const { revalidate } = useRevalidator()
   const currentAgent = loaderData?.agent ?? { id: null, name: 'Logistics agent', email: null, qaffyId: null }
 
   useEffect(() => {
@@ -216,14 +216,14 @@ export default function LogisticsLayout() {
 
     const channel = client
       .channel('logistics-order-feed')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => revalidator.revalidate())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_logistics_events' }, () => revalidator.revalidate())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => revalidate())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_logistics_events' }, () => revalidate())
       .subscribe()
 
     let refreshVisibleState: number | null = null
     const startFallbackRefresh = () => {
       if (refreshVisibleState !== null) return
-      refreshVisibleState = window.setInterval(() => revalidator.revalidate(), 30_000)
+      refreshVisibleState = window.setInterval(() => revalidate(), 30_000)
     }
     const stopFallbackRefresh = () => {
       if (refreshVisibleState === null) return
@@ -232,7 +232,7 @@ export default function LogisticsLayout() {
     }
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        revalidator.revalidate()
+        revalidate()
         startFallbackRefresh()
       } else {
         stopFallbackRefresh()
@@ -247,7 +247,7 @@ export default function LogisticsLayout() {
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       void client.removeChannel(channel)
     }
-  }, [revalidator])
+  }, [revalidate])
   const handleLogout = async () => {
     if (supabase) await supabase.auth.signOut()
     navigate('/logistics/login', { replace: true })

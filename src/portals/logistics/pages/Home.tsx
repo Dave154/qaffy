@@ -414,7 +414,7 @@ export default function Home() {
     historyPagination: { page: number; pageSize: number; totalCount: number; pageCount: number }
   }>()
   const lookupFetcher = useFetcher<typeof action>()
-  const revalidator = useRevalidator()
+  const { revalidate } = useRevalidator()
   const [searchParams, setSearchParams] = useSearchParams()
   const requestedRange = searchParams.get('range') ?? 'Today'
   const selectedRange = (
@@ -445,13 +445,13 @@ export default function Home() {
           : current.map((entry) => (entry.orderId === orderId ? { ...entry, ...result } : entry)),
       )
       if (result.status === 'confirmed') {
-        revalidator.revalidate()
+        revalidate()
         toast.success('Handoff confirmed.')
       } else {
         toast.error(result.message ?? 'Handoff could not be confirmed.')
       }
     },
-    [revalidator],
+    [revalidate],
   )
 
   const enteredOtp = otp.join('').trim()

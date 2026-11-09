@@ -403,7 +403,7 @@ export default function VendorLayout() {
 
     const refreshVisibleState = window.setInterval(() => {
       if (document.visibilityState === 'visible') revalidate()
-    }, 5000)
+    }, 30_000)
 
     return () => {
       window.clearInterval(refreshVisibleState)
