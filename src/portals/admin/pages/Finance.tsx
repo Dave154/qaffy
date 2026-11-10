@@ -24,6 +24,7 @@ import { createBulkSettlements } from '../../../lib/settlements.server'
 import { releaseCreatedSettlements, summarizeSettlementPayouts } from '../../../lib/settlement-payouts'
 import AdminSideDrawer from '../../../components/AdminSideDrawer'
 import { supabase } from '../../../lib/supabase.client'
+import { createRefreshScheduler } from '../../../lib/live-refresh.client'
 
 const settlementPageSize = 20
 
@@ -629,13 +630,15 @@ export default function Finance() {
   useEffect(() => {
     const supabaseClient = supabase
     if (!supabaseClient) return
-    const refreshFinance = () => revalidate()
+    // A payout run updates settlements and transfers together; coalesce into one revalidation.
+    const refresher = createRefreshScheduler(revalidate, { disconnectedPollMs: 0 })
     const channel = supabaseClient
       .channel('admin-finance-settlement-updates')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'vendor_settlements' }, refreshFinance)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'vendor_settlement_transfers' }, refreshFinance)
-      .subscribe()
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'vendor_settlements' }, refresher.schedule)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'vendor_settlement_transfers' }, refresher.schedule)
+      .subscribe((status) => refresher.setChannelStatus(status))
     return () => {
+      refresher.dispose()
       void supabaseClient.removeChannel(channel)
     }
   }, [revalidate])

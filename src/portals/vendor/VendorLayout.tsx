@@ -5,6 +5,7 @@ import type { Route } from './+types/VendorLayout'
 import { Banknote, ClipboardList, History, LayoutDashboard, LogOut, Menu, Settings, X } from 'lucide-react'
 import QaffyLogo from '../../components/QaffyLogo'
 import { requireRole } from '../../lib/auth.server'
+import { changedRowStatus, createRefreshScheduler } from '../../lib/live-refresh.client'
 import { sql } from '../../lib/db.server'
 import { supabase } from '../../lib/supabase.client'
 
@@ -395,18 +396,21 @@ export default function VendorLayout() {
     const client = supabase
     if (!client) return
 
+    // Each revalidation re-runs the layout and page loaders (~15 Supabase requests), so events are
+    // debounced, skipped while the tab is hidden, and polling only runs while Realtime is down.
+    const refresher = createRefreshScheduler(revalidate, { connectedPollMs: 5 * 60_000 })
     const channel = client
       .channel('vendor-order-feed')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => revalidate())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_logistics_events' }, () => revalidate())
-      .subscribe()
-
-    const refreshVisibleState = window.setInterval(() => {
-      if (document.visibilityState === 'visible') revalidate()
-    }, 30_000)
+      // Logistics events are always written together with an order status change, so the orders
+      // feed alone covers them. Orders still awaiting pickup are never shown to vendors.
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
+        if (changedRowStatus(payload) === 'pending_pickup') return
+        refresher.schedule()
+      })
+      .subscribe((status) => refresher.setChannelStatus(status))
 
     return () => {
-      window.clearInterval(refreshVisibleState)
+      refresher.dispose()
       void client.removeChannel(channel)
     }
   }, [revalidate])
