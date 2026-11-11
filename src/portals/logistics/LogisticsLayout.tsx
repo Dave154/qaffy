@@ -4,6 +4,7 @@ import { LogOut } from 'lucide-react'
 import type { Route } from './+types/LogisticsLayout'
 import QaffyLogo from '../../components/QaffyLogo'
 import { requireRole } from '../../lib/auth.server'
+import { changedRowStatus, createRefreshScheduler } from '../../lib/live-refresh.client'
 import { sql } from '../../lib/db.server'
 import { supabase } from '../../lib/supabase.client'
 
@@ -204,6 +205,9 @@ export function shouldRevalidate({ formData, defaultShouldRevalidate }: ShouldRe
   return formData?.get('intent') === 'search' ? false : defaultShouldRevalidate
 }
 
+// Statuses that affect logistics OTP search, summary counts, or event history.
+const logisticsRelevantStatuses = new Set(['pending_pickup', 'picked_up', 'out_for_delivery', 'delivered', 'cancelled'])
+
 export default function LogisticsLayout() {
   const loaderData = useLoaderData<typeof loader>()
   const navigate = useNavigate()
@@ -214,38 +218,28 @@ export default function LogisticsLayout() {
     const client = supabase
     if (!client) return
 
+    // Each revalidation re-runs the layout and page loaders, so events are debounced, skipped while
+    // the tab is hidden, and polling only runs while Realtime is down.
+    const refresher = createRefreshScheduler(revalidate, { connectedPollMs: 5 * 60_000 })
     const channel = client
       .channel('logistics-order-feed')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => revalidate())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_logistics_events' }, () => revalidate())
+      // Logistics events are always written together with an order status change, so the orders
+      // feed alone covers them. Vendor-stage changes do not affect logistics data.
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
+        const status = changedRowStatus(payload)
+        if (status && !logisticsRelevantStatuses.has(status)) return
+        refresher.schedule()
+      })
+      .subscribe((status) => refresher.setChannelStatus(status))
+    const paymentChannel = client
+      .channel('logistics:invoice-payment', { config: { private: true } })
+      .on('broadcast', { event: 'invoice_paid' }, () => refresher.schedule())
       .subscribe()
 
-    let refreshVisibleState: number | null = null
-    const startFallbackRefresh = () => {
-      if (refreshVisibleState !== null) return
-      refreshVisibleState = window.setInterval(() => revalidate(), 30_000)
-    }
-    const stopFallbackRefresh = () => {
-      if (refreshVisibleState === null) return
-      window.clearInterval(refreshVisibleState)
-      refreshVisibleState = null
-    }
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        revalidate()
-        startFallbackRefresh()
-      } else {
-        stopFallbackRefresh()
-      }
-    }
-
-    if (document.visibilityState === 'visible') startFallbackRefresh()
-    document.addEventListener('visibilitychange', handleVisibilityChange)
-
     return () => {
-      stopFallbackRefresh()
-      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      refresher.dispose()
       void client.removeChannel(channel)
+      void client.removeChannel(paymentChannel)
     }
   }, [revalidate])
   const handleLogout = async () => {

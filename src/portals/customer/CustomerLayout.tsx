@@ -31,7 +31,8 @@ import {
 } from 'lucide-react'
 import QaffyLogo from '../../components/QaffyLogo'
 import PwaInstallLink from '../../components/PwaInstallLink'
-import { isSupabaseServerConfigured, getSupabaseServerClient } from '../../lib/supabase.server'
+import { isSupabaseServerConfigured, getSupabaseServerClient, getClaimsUser } from '../../lib/supabase.server'
+import { createRefreshScheduler } from '../../lib/live-refresh.client'
 import { supabase } from '../../lib/supabase.client'
 import { CustomerStoreProvider } from './customer-store'
 import type { MismatchLine, PersistedOrderItem, PickupLocationOption } from './customer-store'
@@ -85,11 +86,12 @@ async function loadCustomerLayoutData(request: Request) {
   if (!isSupabaseServerConfigured) return null
 
   const { supabase: serverSupabase, headers } = getSupabaseServerClient(request)
-  const { data: userData } = await serverSupabase.auth.getUser()
+  const claimsUser = await getClaimsUser(serverSupabase)
 
-  if (!userData.user) {
+  if (!claimsUser) {
     throw redirect('/login', { headers })
   }
+  const userData = { user: claimsUser }
 
   const { data: profile } = await serverSupabase
     .from('profiles')
@@ -1068,57 +1070,46 @@ export default function CustomerLayout() {
     const client = supabase
     if (!client || !loaderData?.profile?.id) return
 
-    let hasConnected = false
-    let connectionWasInterrupted = false
+    // One lifecycle change (e.g. vendor confirmation) touches orders, invoices, wallets, ledger and
+    // notifications at once. Coalesce those events into a single revalidation, defer refreshes while
+    // the tab is hidden, and only refresh on focus when the data is actually stale.
+    const refresher = createRefreshScheduler(revalidate, { debounceMs: 800, disconnectedPollMs: 0 })
     const channel = client
       .channel(`customer-wallet-${loaderData.profile.id}`)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'wallets', filter: `customer_id=eq.${loaderData.profile.id}` },
-        revalidate,
+        refresher.schedule,
       )
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'wallet_transactions', filter: `customer_id=eq.${loaderData.profile.id}` },
-        revalidate,
+        refresher.schedule,
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'subscriptions', filter: `customer_id=eq.${loaderData.profile.id}` },
-        revalidate,
+        refresher.schedule,
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'orders', filter: `customer_id=eq.${loaderData.profile.id}` },
-        revalidate,
+        refresher.schedule,
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'payments', filter: `customer_id=eq.${loaderData.profile.id}` },
-        revalidate,
+        refresher.schedule,
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'notification_events', filter: `customer_id=eq.${loaderData.profile.id}` },
-        revalidate,
+        refresher.schedule,
       )
-      .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          if (hasConnected || connectionWasInterrupted) revalidate()
-          hasConnected = true
-          connectionWasInterrupted = false
-        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-          connectionWasInterrupted = true
-        }
-      })
-
-    const refreshWhenVisible = () => {
-      if (document.visibilityState === 'visible') revalidate()
-    }
-    document.addEventListener('visibilitychange', refreshWhenVisible)
+      .subscribe((status) => refresher.setChannelStatus(status))
 
     return () => {
-      document.removeEventListener('visibilitychange', refreshWhenVisible)
+      refresher.dispose()
       void client.removeChannel(channel)
     }
   }, [loaderData?.profile?.id, revalidate])

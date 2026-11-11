@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { data, Link, useFetcher, useLoaderData } from 'react-router'
 import type { Route } from './+types/Notifications'
-import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
+import { getClaimsUser, getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
 import type { NotificationEvent } from '../../../types/database.types'
 import { CustomerSectionSkeleton } from '../../../components/customer/CustomerDataSkeleton'
 import { useCustomerStore } from '../customer-store-hook'
@@ -74,8 +74,8 @@ export async function loader({ request }: Route.LoaderArgs) {
     })
 
   const { supabase, headers } = getSupabaseServerClient(request)
-  const { data: userData } = await supabase.auth.getUser()
-  if (!userData.user)
+  const claimsUser = await getClaimsUser(supabase)
+  if (!claimsUser)
     return data(
       {
         notifications: [],
@@ -89,6 +89,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       },
       { status: 401, headers },
     )
+  const userData = { user: claimsUser }
 
   const [{ data: notifications, count: totalCount, error }, { count: unreadCount, error: unreadCountError }] = await Promise.all([
     supabase

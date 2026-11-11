@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ensurePushSubscription, getPushSubscription, removePushSubscription, savePushSubscription } from '../../../lib/push.client'
 import { toast } from '../../../lib/toast'
 import { CustomerInlineSkeleton, CustomerSectionSkeleton } from '../../../components/customer/CustomerDataSkeleton'
-import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
+import { getClaimsUser, getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
 import type { CustomerReferral, ReferralCampaignBenefit } from '../customer-store'
 
 // eslint-disable-next-line react-refresh/only-export-components
@@ -28,10 +28,11 @@ export async function loader({ request }: Route.LoaderArgs) {
   }
 
   const { supabase, headers } = getSupabaseServerClient(request)
-  const { data: userData } = await supabase.auth.getUser()
-  if (!userData.user) {
+  const claimsUser = await getClaimsUser(supabase)
+  if (!claimsUser) {
     return data({ ...emptyData, error: 'Please sign in again.', loading: false, requestId }, { status: 401, headers })
   }
+  const userData = { user: claimsUser }
 
   const campaignCheckTime = new Date().toISOString()
   const [
