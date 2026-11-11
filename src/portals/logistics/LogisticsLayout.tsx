@@ -231,10 +231,15 @@ export default function LogisticsLayout() {
         refresher.schedule()
       })
       .subscribe((status) => refresher.setChannelStatus(status))
+    const paymentChannel = client
+      .channel('logistics:invoice-payment', { config: { private: true } })
+      .on('broadcast', { event: 'invoice_paid' }, () => refresher.schedule())
+      .subscribe()
 
     return () => {
       refresher.dispose()
       void client.removeChannel(channel)
+      void client.removeChannel(paymentChannel)
     }
   }, [revalidate])
   const handleLogout = async () => {
