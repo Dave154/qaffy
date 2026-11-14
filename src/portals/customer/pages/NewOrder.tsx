@@ -663,7 +663,8 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
                 </div>
               </div>
             )}
-            {order?.paymentStatus === 'Paid' &&
+            {order?.status !== 'Awaiting pickup' &&
+              order?.paymentStatus === 'Paid' &&
               order.status !== 'Delivered' &&
               (order.deliveryOtp ? (
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm sm:p-5">

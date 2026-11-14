@@ -1139,7 +1139,7 @@ export default function CustomerLayout() {
 
   return (
     <CustomerStoreProvider
-      key={`${customerData?.profile?.id ?? 'customer'}:${customerData?.profile?.name ?? ''}:${customerData?.profile?.phone ?? ''}:${customerData?.profile?.referral_code ?? ''}:${customerData?.profile?.pickup_location_id ?? ''}:${customerData?.wallet?.updated_at ?? 'no-wallet'}:${customerData?.subscription?.id ?? 'no-subscription'}:${customerData?.subscription?.end_date ?? ''}:${customerData?.ordersPagination?.page ?? ''}:${(customerData?.ordersPagination?.pageOrderIds ?? []).join('|')}:${customerData?.invoicePagination?.page ?? ''}:${customerData?.transactionPagination?.page ?? ''}:${(customerData?.customerTransactions ?? []).map((transaction) => `${transaction.id}-${transaction.title}-${transaction.amount}-${transaction.status}`).join('|')}:${(customerData?.orders ?? []).map((order) => `${order.id}-${order.status}-${order.pickup_otp ?? ''}-${order.delivery_otp ?? ''}-${order.clothes_count_vendor ?? ''}`).join('|')}:${(customerData?.payments ?? []).map((payment) => `${payment.id}-${payment.status}`).join('|')}:${(customerData?.invoices ?? []).map((invoice) => `${invoice.id}-${invoice.payment_method ?? ''}-${invoice.paid_at ?? ''}`).join('|')}`}
+      key={loaderData?.profile?.id ?? 'customer'}
       profile={loaderData?.profile ?? undefined}
       persistedOrders={customerData ? (customerData.orders as Order[]) : undefined}
       persistedUnpaidInvoiceOrderIds={customerData?.unpaidInvoiceOrderIds as string[] | undefined}

@@ -200,6 +200,7 @@ export type CustomerStore = {
 }
 
 const initialOrders: CustomerOrder[] = []
+const initialOrderMismatches: NonNullable<CustomerStoreProviderProps['persistedOrderMismatches']> = []
 
 function formatOrderDateTime(value: string) {
   const formatted = new Intl.DateTimeFormat('en-GB', {
@@ -544,7 +545,7 @@ export function CustomerStoreProvider({
   persistedSubscription,
   persistedPickupLocations,
   persistedOrderItems,
-  persistedOrderMismatches = [],
+  persistedOrderMismatches,
   persistedSubscriptionAllowance = null,
   persistedOverviewSummary = null,
   persistedOrdersPagination = null,
@@ -552,29 +553,52 @@ export function CustomerStoreProvider({
   isDataLoading = false,
   dataLoadError = null,
 }: CustomerStoreProviderProps) {
-  const unpaidInvoiceOrderIds = new Set(persistedUnpaidInvoiceOrderIds)
-  const orderReferenceByInvoiceId = new Map(
-    (persistedInvoices ?? []).map((invoice) => [invoice.id, invoice.order_reference ?? invoice.order_id]),
+  const unpaidInvoiceOrderIds = useMemo(() => new Set(persistedUnpaidInvoiceOrderIds), [persistedUnpaidInvoiceOrderIds])
+  const orderMismatches = persistedOrderMismatches ?? initialOrderMismatches
+  const orderReferenceByInvoiceId = useMemo(
+    () => new Map((persistedInvoices ?? []).map((invoice) => [invoice.id, invoice.order_reference ?? invoice.order_id])),
+    [persistedInvoices],
   )
-  const [orders, setOrders] = useState(() =>
-    persistedOrders
-      ? persistedOrders.map((order) =>
-          mapDatabaseOrder(
-            order,
-            persistedOrderItems,
-            unpaidInvoiceOrderIds,
-            invoiceAmountsByOrderId,
-            persistedPickupLocations,
-            persistedOrderMismatches,
-          ),
-        )
-      : initialOrders,
+  const persistedOrdersMapped = useMemo(
+    () =>
+      persistedOrders
+        ? persistedOrders.map((order) =>
+            mapDatabaseOrder(
+              order,
+              persistedOrderItems,
+              unpaidInvoiceOrderIds,
+              invoiceAmountsByOrderId,
+              persistedPickupLocations,
+              orderMismatches,
+            ),
+          )
+        : initialOrders,
+    [
+      persistedOrders,
+      persistedOrderItems,
+      unpaidInvoiceOrderIds,
+      invoiceAmountsByOrderId,
+      persistedPickupLocations,
+      orderMismatches,
+    ],
   )
-  const [savedPickupLocationId, setSavedPickupLocationId] = useState(profile?.pickup_location_id ?? null)
-  const [oneOffBalance, setOneOffBalance] = useState(persistedWallet?.one_off_balance ?? 0)
-  const [subscriptionBalance, setSubscriptionBalance] = useState(persistedWallet?.subscription_balance ?? 0)
-  const [promotionalBalance] = useState(persistedWallet?.promotional_balance ?? 0)
-  const [transactions] = useState(
+  const [optimisticOrders, setOptimisticOrders] = useState<CustomerOrder[]>([])
+  const persistedOrderIds = useMemo(() => new Set(persistedOrdersMapped.map((order) => order.id)), [persistedOrdersMapped])
+  const orders = useMemo(
+    () => [...optimisticOrders.filter((order) => !persistedOrderIds.has(order.id)), ...persistedOrdersMapped],
+    [optimisticOrders, persistedOrderIds, persistedOrdersMapped],
+  )
+  const walletSourceKey = `${persistedWallet?.updated_at ?? 'no-wallet'}:${persistedWallet?.one_off_balance ?? 0}:${persistedWallet?.subscription_balance ?? 0}`
+  const [optimisticWallet, setOptimisticWallet] = useState<{
+    source: string
+    oneOffBalance: number
+    subscriptionBalance: number
+  } | null>(null)
+  const walletOverride = optimisticWallet?.source === walletSourceKey ? optimisticWallet : null
+  const oneOffBalance = walletOverride?.oneOffBalance ?? persistedWallet?.one_off_balance ?? 0
+  const subscriptionBalance = walletOverride?.subscriptionBalance ?? persistedWallet?.subscription_balance ?? 0
+  const promotionalBalance = persistedWallet?.promotional_balance ?? 0
+  const transactions = useMemo(
     () =>
       persistedTransactions ??
       [
@@ -598,8 +622,9 @@ export function CustomerStoreProvider({
             }
           }),
       ].sort((left, right) => new Date(right.sortDate).getTime() - new Date(left.sortDate).getTime()),
+    [persistedTransactions, persistedPayments, persistedWalletTransactions, persistedInvoices, orderReferenceByInvoiceId],
   )
-  const [invoices] = useState(() => (persistedInvoices ?? []).map(mapDatabaseInvoice))
+  const invoices = useMemo(() => (persistedInvoices ?? []).map(mapDatabaseInvoice), [persistedInvoices])
   const invoice = invoices[0] ?? null
   const subscriptionAvailableUnits = persistedSubscription ? (persistedSubscriptionAllowance?.balance ?? 0) : null
   const subscriptionBorrowedUnits = Math.max(0, -(subscriptionAvailableUnits ?? 0))
@@ -612,7 +637,8 @@ export function CustomerStoreProvider({
     const subscription = persistedSubscription
       ? { name: persistedSubscription.plan.name, billingPeriod: persistedSubscription.plan.type }
       : null
-    const preferredPickupLocation = persistedPickupLocations?.find((location) => location.id === savedPickupLocationId) ?? null
+    const preferredPickupLocation =
+      persistedPickupLocations?.find((location) => location.id === (profile?.pickup_location_id ?? null)) ?? null
 
     return {
       customerId: profile?.qaffy_id ?? 'Not available',
@@ -654,11 +680,13 @@ export function CustomerStoreProvider({
       invoices,
       topUpWallet: async (amount) => {
         if (amount <= 0) throw new Error('Enter a valid top-up amount.')
-        setSubscriptionBalance((currentBalance) => {
-          if (currentBalance >= 0) return currentBalance
-          return Math.min(0, currentBalance + amount)
+        const subscriptionDebt = Math.max(0, -subscriptionBalance)
+        setOptimisticWallet({
+          source: walletSourceKey,
+          oneOffBalance: oneOffBalance + Math.max(0, amount - subscriptionDebt),
+          subscriptionBalance:
+            subscriptionBalance < 0 ? Math.min(0, subscriptionBalance + amount) : subscriptionBalance,
         })
-        setOneOffBalance((currentBalance) => currentBalance + Math.max(0, amount - Math.max(0, -subscriptionBalance)))
         toast.success(`₦${amount.toLocaleString()} added to your wallet.`)
       },
       addOrder: async ({ items, notes, pickupLocation, subscriptionBorrowConsentUnits }) => {
@@ -702,7 +730,7 @@ export function CustomerStoreProvider({
 
         if (supabase && profile?.id) {
           const selectedLocation = persistedPickupLocations?.find((location) => location.name === pickupLocation)
-          if (!savedPickupLocationId && selectedLocation) {
+          if (!profile?.pickup_location_id && selectedLocation) {
             const { error: profileLocationError } = await supabase
               .from('profiles')
               .update({ pickup_location_id: selectedLocation.id })
@@ -711,7 +739,6 @@ export function CustomerStoreProvider({
               toast.error(`Pickup location could not be saved: ${profileLocationError.message}`)
               throw profileLocationError
             }
-            setSavedPickupLocationId(selectedLocation.id)
           }
           const { data: categoryRows, error: categoryError } = await supabase
             .from('cloth_categories')
@@ -772,14 +799,14 @@ export function CustomerStoreProvider({
           savedPublicOrderNumber = insertedOrder.public_order_number
         }
 
-        setOrders((currentOrders) => [
+        setOptimisticOrders((currentOrders) => [
           {
             ...order,
             id: savedOrderId ?? order.id,
             publicOrderNumber: savedPublicOrderNumber ?? order.publicOrderNumber,
             pickupOtp: savedPickupOtp ?? order.pickupOtp,
           },
-          ...currentOrders,
+          ...currentOrders.filter((currentOrder) => currentOrder.id !== (savedOrderId ?? order.id)),
         ])
         return order
       },
@@ -797,7 +824,7 @@ export function CustomerStoreProvider({
     persistedSubscription,
     subscriptionBorrowableUnits,
     promotionalBalance,
-    savedPickupLocationId,
+    walletSourceKey,
     subscriptionBalance,
     persistedSubscriptionAllowance,
     persistedOverviewSummary,

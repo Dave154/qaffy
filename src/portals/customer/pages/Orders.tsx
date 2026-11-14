@@ -166,6 +166,7 @@ export default function Orders() {
   }
 
   const getAmountLabel = (order: (typeof orders)[number]) => {
+    if (order.status === 'Awaiting pickup') return 'Pickup OTP pending'
     if (order.paymentStatus === 'Pending' && order.total > 0) return `Payment due · ₦${order.total.toLocaleString()}`
     if (order.total > 0) return `₦${order.total.toLocaleString()}`
     if (order.status === 'In progress') return 'Final billing pending'
@@ -277,14 +278,14 @@ export default function Orders() {
                   </div>
 
                   <div className="shrink-0 sm:ml-2">
-                    {order.paymentStatus === 'Pending' && order.total > 0 ? (
+                    {order.status !== 'Awaiting pickup' && order.paymentStatus === 'Pending' && order.total > 0 ? (
                       <DeliveryOtpPaywall
                         amount={order.total}
                         walletBalance={balance}
                         invoiceId={invoices.find((invoice) => invoice.orderId === order.id && invoice.status === 'Awaiting payment')?.id}
                         onClick={(suggestedAmount) => navigate(`/?topup=1&amount=${suggestedAmount}`)}
                       />
-                    ) : order.paymentStatus === 'Paid' && order.status !== 'Delivered' && !order.deliveryOtp ? (
+                    ) : order.status !== 'Awaiting pickup' && order.paymentStatus === 'Paid' && order.status !== 'Delivered' && !order.deliveryOtp ? (
                       <DeliveryOtpStatus />
                     ) : getVisibleOtp(order) ? (
                       <div className="flex items-start gap-3 sm:flex-col sm:items-end">
