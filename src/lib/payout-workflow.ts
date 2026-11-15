@@ -14,7 +14,7 @@ export type StoredTransferStatus = 'queued' | TransferProviderStatus | 'rejected
 export type PayoutSettlement = {
   id: string
   amount: number
-  status: 'pending' | 'paid'
+  status: 'pending' | 'paid' | 'cancelled'
   vendorName: string
   vendorStatus: string
   payoutAccountStatus: string
@@ -57,7 +57,7 @@ export type PayoutWorkflowTransaction = {
   }): Promise<ReservedTransfer>
   getReconciliationTarget(settlementId: string): Promise<{
     transfer: StoredTransfer
-    settlementStatus: 'pending' | 'paid'
+    settlementStatus: 'pending' | 'paid' | 'cancelled'
   } | null>
   updateTransfer(transferId: string, update: TransferUpdate): Promise<void>
   confirmTransfer(input: {
@@ -102,6 +102,7 @@ export async function releaseSettlementWithStore(
       const settlement = await tx.getSettlement(settlementId)
       if (!settlement) throw new PayoutError('rejected', 'Settlement could not be found.')
       if (settlement.status === 'paid') throw new PayoutError('already-paid', 'This settlement has already been paid.')
+      if (settlement.status === 'cancelled') throw new PayoutError('rejected', 'This settlement was cancelled and cannot be paid.')
 
       const orderEligibility = await tx.getOrderEligibility(settlementId)
       if (orderEligibility.totalOrders === 0 || orderEligibility.totalOrders !== orderEligibility.paidOrders) {
@@ -247,13 +248,16 @@ export async function reconcileSettlementWithStore(
   adminProfileId: string,
   provider: PayoutProvider,
 ): Promise<PayoutResult> {
-  let target: { transfer: StoredTransfer; settlementStatus: 'pending' | 'paid' }
+  let target: { transfer: StoredTransfer; settlementStatus: 'pending' | 'paid' | 'cancelled' }
   try {
     target = await store.transaction(async (tx) => {
       const current = await tx.getReconciliationTarget(settlementId)
       if (!current) throw new PayoutError('rejected', 'No payout transfer exists for this settlement.')
       if (current.settlementStatus === 'paid' || current.transfer.status === 'success') {
         throw new PayoutError('already-paid', 'This settlement has already been paid.')
+      }
+      if (current.settlementStatus === 'cancelled') {
+        throw new PayoutError('rejected', 'This settlement was cancelled and cannot be reconciled.')
       }
       if (!isActiveTransferStatus(current.transfer.status)) {
         throw new PayoutError('rejected', 'This payout does not need reconciliation.')

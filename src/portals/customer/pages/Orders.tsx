@@ -5,6 +5,7 @@ import CopyableOrderId from '../../../components/CopyableOrderId'
 import ProtectedOtp from '../../../components/ProtectedOtp'
 import DeliveryOtpPaywall from '../../../components/DeliveryOtpPaywall'
 import DeliveryOtpStatus from '../../../components/DeliveryOtpStatus'
+import RecoverableError from '../../../components/RecoverableError'
 import { type CustomerOrder } from '../customer-store'
 import { useCustomerStore } from '../customer-store-hook'
 import { data, useFetcher, useNavigate, useSearchParams } from 'react-router'
@@ -84,7 +85,7 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function Orders() {
-  const { orders, balance, invoices, isDataLoading, dataLoadError, ordersPagination } = useCustomerStore()
+  const { orders, balance, invoices, isDataLoading, dataLoadError, ordersPagination, retryDataLoad } = useCustomerStore()
   const cancelFetcher = useFetcher<typeof action>()
   const handledCancelResponse = useRef<typeof cancelFetcher.data>(null)
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false)
@@ -164,8 +165,18 @@ export default function Orders() {
       return next
     })
   }
+  const clearOrderFilters = () => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      next.delete('filter')
+      next.delete('page')
+      next.delete('search')
+      return next
+    })
+  }
 
   const getAmountLabel = (order: (typeof orders)[number]) => {
+    if (order.status === 'Awaiting pickup') return 'Pickup OTP pending'
     if (order.paymentStatus === 'Pending' && order.total > 0) return `Payment due · ₦${order.total.toLocaleString()}`
     if (order.total > 0) return `₦${order.total.toLocaleString()}`
     if (order.status === 'In progress') return 'Final billing pending'
@@ -212,7 +223,13 @@ export default function Orders() {
           <div key={stat.label} className="rounded-2xl border border-[#e7e7e7] bg-white p-4">
             <p className="text-[10px] font-semibold capitalize tracking-[0.16em] text-slate-400">{stat.label}</p>
             <p className="mt-3 text-2xl font-semibold text-slate-900">
-              {isDataLoading || dataLoadError ? <CustomerInlineSkeleton className="w-12" /> : stat.value}
+              {isDataLoading && !dataLoadError && !ordersPagination ? (
+                <CustomerInlineSkeleton className="w-12" />
+              ) : dataLoadError && !ordersPagination ? (
+                '—'
+              ) : (
+                stat.value
+              )}
             </p>
             <p className="mt-1 text-sm text-slate-500">{stat.helper}</p>
           </div>
@@ -242,11 +259,21 @@ export default function Orders() {
         </div>
 
         <div className="space-y-3">
-          {isDataLoading ? (
+          {dataLoadError ? (
+            <RecoverableError
+              title={ordersPagination ? 'Couldn’t refresh your orders' : 'We couldn’t load your orders'}
+              description={
+                ordersPagination
+                  ? 'You’re seeing your previously loaded orders. Check your connection and try again.'
+                  : 'Your orders are safe. Check your connection and try again.'
+              }
+              onRetry={retryDataLoad}
+              retrying={isDataLoading}
+            />
+          ) : null}
+          {!dataLoadError && isDataLoading && !ordersPagination ? (
             <CustomerOrderListSkeleton rows={3} />
-          ) : dataLoadError ? (
-            <p className="p-4 text-sm text-slate-500">Order details are unavailable.</p>
-          ) : (
+          ) : !dataLoadError || ordersPagination ? (
             filteredOrders.map((order) => (
               <article key={order.id} className="border-b border-[#eeeeee] bg-white p-4 last:border-b-0">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -277,14 +304,14 @@ export default function Orders() {
                   </div>
 
                   <div className="shrink-0 sm:ml-2">
-                    {order.paymentStatus === 'Pending' && order.total > 0 ? (
+                    {order.status !== 'Awaiting pickup' && order.paymentStatus === 'Pending' && order.total > 0 ? (
                       <DeliveryOtpPaywall
                         amount={order.total}
                         walletBalance={balance}
                         invoiceId={invoices.find((invoice) => invoice.orderId === order.id && invoice.status === 'Awaiting payment')?.id}
                         onClick={(suggestedAmount) => navigate(`/?topup=1&amount=${suggestedAmount}`)}
                       />
-                    ) : order.paymentStatus === 'Paid' && order.status !== 'Delivered' && !order.deliveryOtp ? (
+                    ) : order.status !== 'Awaiting pickup' && order.paymentStatus === 'Paid' && order.status !== 'Delivered' && !order.deliveryOtp ? (
                       <DeliveryOtpStatus />
                     ) : getVisibleOtp(order) ? (
                       <div className="flex items-start gap-3 sm:flex-col sm:items-end">
@@ -341,9 +368,35 @@ export default function Orders() {
                 </div>
               </article>
             ))
-          )}
-          {filteredOrders.length === 0 && (
-            <p className="rounded-2xl bg-slate-50 p-6 text-center text-sm text-slate-500">No orders match this filter.</p>
+          ) : null}
+          {!isDataLoading && !dataLoadError && filteredOrders.length === 0 && (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-center">
+              <p className="text-sm font-semibold text-slate-900">
+                {ordersPagination?.totalCount === 0 ? 'You haven’t placed an order yet.' : 'No orders match this filter.'}
+              </p>
+              <p className="mt-1 text-sm text-slate-600">
+                {ordersPagination?.totalCount === 0
+                  ? 'Place your first laundry order and it will appear here.'
+                  : 'Try another filter or view all of your orders.'}
+              </p>
+              {ordersPagination?.totalCount === 0 ? (
+                <button
+                  type="button"
+                  onClick={() => setIsOrderModalOpen(true)}
+                  className="mt-4 rounded-xl bg-brand-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-brand-primary-hover"
+                >
+                  Place an order
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={clearOrderFilters}
+                  className="mt-4 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+                >
+                  View all orders
+                </button>
+              )}
+            </div>
           )}
         </div>
         {ordersPagination && ordersPagination.filteredCount > ordersPagination.pageSize && (

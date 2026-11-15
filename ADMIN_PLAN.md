@@ -31,7 +31,7 @@ Settlement payout release through verified Paystack Transfers is complete. Stagi
 - Settlement reversal is most likely not allowed; do not implement reversal until explicitly approved.
 - Customer billing depends on vendor-confirmed item details. Vendor over-counts and under-counts change the final amount due, and the customer is billed accordingly.
 - Customer payments are Paystack transactions that top up the wallet. This is not a Paystack virtual-account flow.
-- Refunds are not a current feature. Any exceptional refund is handled manually by an admin; do not build automated refunds yet.
+- Admins may cancel any order that has not been delivered. Cancellation may optionally refund wallet-funded invoice payments to the wallet and independently decide whether the vendor remains settlement-eligible. Do not reverse a vendor transfer that has already been paid, and do not claw back referral rewards.
 - Subscription orders are included in vendor settlement calculations.
 - Extra clothes are billed to the customer. The vendor follows the normal receiving/review flow using the final paid item count.
 - Once an order has been paid for and settled, it cannot be edited.
@@ -100,7 +100,7 @@ This section retains the implementation checkpoints and separates completed capa
 - The order detail view can load an order by its internal ID even when it is not on the current result page.
 - Show an in-table loading state during same-route pagination/filter updates; do not display the global Qaffy loader for these transitions.
 - Keep export data aligned with the visible order table and avoid exporting internal OTPs or unnecessary sensitive fields.
-- **Order cancellation:** customers and admins may cancel an order only while it is awaiting pickup (`pending_pickup` and not picked up). Pickup makes cancellation unavailable. Cancellation changes only the order status to `cancelled`, sends no notification, and hides the order from customer, vendor, and logistics views while retaining it for admins. Apply `supabase/migrations/20261006110000_hide_cancelled_orders.sql` to enforce admin-only visibility through RLS.
+- **Order cancellation:** Admins may cancel any order that has not been delivered, including orders already picked up or out for delivery. The confirmation requires a reason, offers an optional wallet refund, and separately records whether an eligible vendor-confirmed order should remain in vendor settlement. Refunds restore the payment sources used; historical wallet allocations that cannot be verified fail closed. Subscription units are restored through cancelled-order usage accounting, regardless of the cash refund choice. Unpaid invoices are voided, OTPs are cleared, and the customer is notified. Physical recovery for an out-for-delivery order must be coordinated with Logistics manually. Paid vendor transfers cannot be reversed. Apply `supabase/migrations/20261114120000_admin_order_cancellations.sql` before using this flow.
 
 #### Admin Overview
 
@@ -252,7 +252,7 @@ Build after vendor ownership and auditability are in place:
 - Settlement review and paid status
 - CSV exports
 
-Do not implement a vendor payout rate until the product decision is provided. Do not implement automated refunds or settlement reversals.
+Do not implement a vendor payout rate until the product decision is provided. Do not implement settlement reversals.
 
 ### Mismatches
 

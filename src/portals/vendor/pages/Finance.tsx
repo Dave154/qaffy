@@ -11,7 +11,7 @@ type SettlementRow = {
   periodStart: string | null
   periodEnd: string | null
   amountDue: number
-  status: 'pending' | 'paid'
+  status: 'pending' | 'paid' | 'cancelled'
   createdAt: string | null
 }
 
@@ -104,11 +104,29 @@ export async function loader({ request }: Route.LoaderArgs) {
             ) * coalesce(item.confirmed_quantity, 0)
           ), 0) as amount
           from orders order_row
-          join invoices invoice on invoice.order_id = order_row.id and invoice.status = 'paid'
+          join invoices invoice on invoice.order_id = order_row.id
+            and (
+              invoice.status = 'paid'
+              or (
+                invoice.status = 'refunded'
+                and exists (
+                  select 1 from order_cancellations cancellation
+                  where cancellation.order_id = order_row.id
+                    and cancellation.include_in_vendor_settlement
+                )
+              )
+            )
           join order_items item on item.order_id = order_row.id
           left join cloth_category_rates rate on rate.category_id = item.category_id
           where order_row.vendor_id = ${vendor.id}
-            and order_row.status <> 'cancelled'
+            and (
+              order_row.status <> 'cancelled'
+              or exists (
+                select 1 from order_cancellations cancellation
+                where cancellation.order_id = order_row.id
+                  and cancellation.include_in_vendor_settlement
+              )
+            )
             and order_row.clothes_count_vendor is not null
             and not exists (
               select 1 from vendor_settlement_orders settled where settled.order_id = order_row.id
@@ -129,8 +147,15 @@ export async function loader({ request }: Route.LoaderArgs) {
                   from vendor_settlement_orders membership
                   join orders order_row on order_row.id = membership.order_id
                   left join invoices invoice on invoice.order_id = order_row.id
+                  left join order_cancellations cancellation on cancellation.order_id = order_row.id
                   where membership.settlement_id = settlement.id
-                    and invoice.status is distinct from 'paid'
+                    and not (
+                      coalesce(invoice.status = 'paid', false)
+                      or (
+                        coalesce(invoice.status = 'refunded', false)
+                        and coalesce(cancellation.include_in_vendor_settlement, false)
+                      )
+                    )
                 )
             ), 0) as pending_amount
           from vendor_settlements settlement
@@ -274,7 +299,13 @@ export default function VendorFinancePage() {
                     <td className="px-5 py-4 text-sm font-semibold text-slate-900">{money(settlement.amountDue)}</td>
                     <td className="px-5 py-4 text-sm">
                       <span
-                        className={`rounded-full px-2.5 py-1 text-[10px] font-semibold capitalize tracking-[0.12em] ${settlement.status === 'paid' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}
+                        className={`rounded-full px-2.5 py-1 text-[10px] font-semibold capitalize tracking-[0.12em] ${
+                          settlement.status === 'paid'
+                            ? 'bg-emerald-50 text-emerald-700'
+                            : settlement.status === 'cancelled'
+                              ? 'bg-slate-100 text-slate-600'
+                              : 'bg-amber-50 text-amber-700'
+                        }`}
                       >
                         {settlement.status}
                       </span>

@@ -248,9 +248,31 @@ export async function loader({ request }: Route.LoaderArgs) {
           left join cloth_category_rates r on r.category_id = i.category_id
           left join vendor_settlement_items si on si.order_item_id = i.id
           where o.vendor_id is not null
-            and o.status <> 'cancelled'
+            and (
+              o.status <> 'cancelled'
+              or exists (
+                select 1 from order_cancellations cancellation
+                where cancellation.order_id = o.id
+                  and cancellation.include_in_vendor_settlement
+              )
+            )
             and o.clothes_count_vendor is not null
-            and exists (select 1 from invoices inv where inv.order_id = o.id and inv.status = 'paid')
+            and exists (
+              select 1
+              from invoices inv
+              where inv.order_id = o.id
+                and (
+                  inv.status = 'paid'
+                  or (
+                    inv.status = 'refunded'
+                    and exists (
+                      select 1 from order_cancellations cancellation
+                      where cancellation.order_id = o.id
+                        and cancellation.include_in_vendor_settlement
+                    )
+                  )
+                )
+            )
             and not exists (
               select 1
               from vendor_settlement_orders so

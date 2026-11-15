@@ -1,7 +1,7 @@
 export type OrderLifecycleStatus =
   'pending_pickup' | 'picked_up' | 'at_vendor' | 'invoiced' | 'paid' | 'out_for_delivery' | 'delivered' | 'cancelled'
 
-export type OrderInvoiceStatus = 'unpaid' | 'paid' | null | undefined
+export type OrderInvoiceStatus = 'unpaid' | 'paid' | 'void' | 'refunded' | null | undefined
 
 export function isReadyForDispatch(status: OrderLifecycleStatus, invoiceStatus: OrderInvoiceStatus) {
   return (status === 'paid' && invoiceStatus === 'paid') || (status === 'invoiced' && invoiceStatus === 'unpaid')

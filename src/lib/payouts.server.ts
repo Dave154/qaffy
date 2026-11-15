@@ -109,7 +109,7 @@ const sqlPayoutStore: PayoutWorkflowStore = {
             ? {
                 id: row.id,
                 amount: Number(row.amount_due),
-                status: row.status as 'pending' | 'paid',
+                status: row.status as 'pending' | 'paid' | 'cancelled',
                 vendorName: row.business_name || 'Vendor',
                 vendorStatus: row.vendor_status,
                 payoutAccountStatus: row.payout_account_status,
@@ -120,9 +120,13 @@ const sqlPayoutStore: PayoutWorkflowStore = {
         async getOrderEligibility(settlementId) {
           const [row] = await tx`
             select count(*)::int as total_orders,
-              count(*) filter (where i.status = 'paid')::int as paid_orders
+              count(*) filter (
+                where i.status = 'paid'
+                  or (i.status = 'refunded' and cancellation.include_in_vendor_settlement)
+              )::int as paid_orders
             from vendor_settlement_orders so
             left join invoices i on i.order_id = so.order_id
+            left join order_cancellations cancellation on cancellation.order_id = so.order_id
             where so.settlement_id = ${settlementId}
           `
           return { totalOrders: Number(row.total_orders), paidOrders: Number(row.paid_orders) }
@@ -197,7 +201,7 @@ const sqlPayoutStore: PayoutWorkflowStore = {
                   reference: row.paystack_reference,
                   transferCode: row.paystack_transfer_code,
                 },
-                settlementStatus: row.settlement_status as 'pending' | 'paid',
+                settlementStatus: row.settlement_status as 'pending' | 'paid' | 'cancelled',
               }
             : null
         },

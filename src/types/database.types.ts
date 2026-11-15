@@ -19,9 +19,9 @@ export type OrderStatus =
   | 'delivered'
   | 'cancelled'
 export type MismatchDirection = 'over' | 'under'
-export type InvoiceStatus = 'unpaid' | 'paid'
+export type InvoiceStatus = 'unpaid' | 'paid' | 'void' | 'refunded'
 export type PaymentStatus = 'pending' | 'success' | 'failed'
-export type SettlementStatus = 'pending' | 'paid'
+export type SettlementStatus = 'pending' | 'paid' | 'cancelled'
 export type SettlementTransferStatus = 'queued' | 'processing' | 'success' | 'failed' | 'reversed' | 'rejected'
 export type ReferralStatus = 'pending' | 'qualified' | 'rewarded' | 'rejected' | 'expired' | 'reversed'
 export type ReferralCampaignStatus = 'draft' | 'active' | 'paused' | 'ended'
@@ -191,6 +191,7 @@ export interface WalletTransaction {
   related_invoice_id: string | null
   related_payment_id: string | null
   related_referral_reward_id: string | null
+  related_order_cancellation_id: string | null
   related_subscription_id: string | null
   created_at: string
 }
@@ -266,6 +267,28 @@ export interface Invoice {
   payment_method: 'wallet' | 'offline' | null
   billing_breakdown: { coveredUnits: number; subscriberAmount: number; regularAmount: number } | null
   paid_at: string | null
+  voided_at: string | null
+  refunded_at: string | null
+  created_at: string
+}
+
+export interface InvoicePaymentAllocation {
+  id: string
+  invoice_id: string
+  balance_type: WalletBalanceType
+  amount: number
+  related_referral_reward_id: string | null
+  created_at: string
+}
+
+export interface OrderCancellation {
+  order_id: string
+  cancelled_by: string
+  original_status: OrderStatus
+  reason: string
+  refund_requested: boolean
+  refund_amount: number
+  include_in_vendor_settlement: boolean
   created_at: string
 }
 
@@ -444,6 +467,8 @@ export interface Database {
       order_items: TableDef<OrderItem>
       mismatches: TableDef<Mismatch>
       invoices: TableDef<Invoice>
+      invoice_payment_allocations: TableDef<InvoicePaymentAllocation>
+      order_cancellations: TableDef<OrderCancellation>
       payments: TableDef<Payment>
       notification_events: TableDef<NotificationEvent>
       vendor_settlements: TableDef<VendorSettlement>

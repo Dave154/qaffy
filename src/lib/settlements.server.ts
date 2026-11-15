@@ -25,13 +25,35 @@ export async function createBulkSettlements(input: BulkSettlementInput) {
           const startAt = new Date(`${periodStart}T00:00:00.000Z`)
           const endAt = new Date(`${periodEnd}T23:59:59.999Z`)
           return tx`
-          select o.id, o.vendor_id, o.status, o.clothes_count_vendor, i.status as invoice_status
+          select o.id, o.vendor_id, o.status, o.clothes_count_vendor,
+            coalesce(cancellation.include_in_vendor_settlement, false) as include_in_vendor_settlement,
+            case when i.status = 'refunded' then 'paid' else i.status::text end as invoice_status
           from orders o
-          join invoices i on i.order_id = o.id and i.status = 'paid'
+          join invoices i on i.order_id = o.id
+            and (
+              i.status = 'paid'
+              or (
+                i.status = 'refunded'
+                and exists (
+                  select 1 from order_cancellations cancellation
+                  where cancellation.order_id = o.id
+                    and cancellation.include_in_vendor_settlement
+                )
+              )
+            )
+          left join order_cancellations cancellation on cancellation.order_id = o.id
           where o.vendor_id = ${vendorId}
             and o.created_at >= ${startAt.toISOString()}
             and o.created_at <= ${endAt.toISOString()}
-            and o.status <> 'cancelled'
+            and (
+              o.status <> 'cancelled'
+              or exists (
+                select 1
+                from order_cancellations cancellation
+                where cancellation.order_id = o.id
+                  and cancellation.include_in_vendor_settlement
+              )
+            )
             and o.clothes_count_vendor is not null
             and not exists (
               select 1 from vendor_settlement_orders so where so.order_id = o.id

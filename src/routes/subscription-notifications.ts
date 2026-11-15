@@ -7,13 +7,17 @@ export async function loader({ request }: { request: Request }) {
   const authorization = request.headers.get('authorization')
   if (!cronSecret || authorization !== `Bearer ${cronSecret}`) return data({ ok: false, message: 'Unauthorized.' }, { status: 401 })
 
-  const subscriptions = await sql<Array<{ id: string; customer_id: string; plan_name: string; end_date: string }>>`
-    select s.id, s.customer_id, p.name as plan_name, s.end_date
+  const subscriptions = await sql<Array<{ id: string; customer_id: string; plan_name: string; days_remaining: number }>>`
+    with calendar as (
+      select (now() at time zone 'Africa/Lagos')::date as today
+    )
+    select s.id, s.customer_id, p.name as plan_name, s.end_date - calendar.today as days_remaining
     from subscriptions s
     join plans p on p.id = s.plan_id
+    cross join calendar
     where s.status = 'active'
       and s.end_date is not null
-      and s.end_date <= current_date + 7
+      and s.end_date <= calendar.today + 7
   `
 
   let remindersSent = 0
@@ -21,17 +25,15 @@ export async function loader({ request }: { request: Request }) {
   const reminderDays = new Set([7, 3, 1])
 
   for (const subscription of subscriptions) {
-    const daysRemaining = Math.round(
-      (new Date(`${subscription.end_date}T00:00:00Z`).getTime() -
-        new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00Z').getTime()) /
-        86_400_000,
-    )
+    const daysRemaining = subscription.days_remaining
 
     if (daysRemaining < 0) {
       const [ended] = await sql`
         update subscriptions
         set status = 'ended'
-        where id = ${subscription.id} and status = 'active' and end_date < current_date
+        where id = ${subscription.id}
+          and status = 'active'
+          and end_date < (now() at time zone 'Africa/Lagos')::date
         returning id
       `
       if (ended) {

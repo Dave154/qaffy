@@ -60,7 +60,7 @@ export type CustomerTransaction = {
   sortDate: string
   amount: string
   direction: 'credit' | 'debit'
-  category: 'topup' | 'payment' | 'reward'
+  category: 'topup' | 'payment' | 'reward' | 'refund'
   status: string
 }
 
@@ -86,7 +86,7 @@ export type CustomerInvoice = {
   orderId: string
   orderReference: string
   reference: string
-  status: 'Paid' | 'Awaiting payment'
+  status: 'Paid' | 'Awaiting payment' | 'Refunded' | 'Cancelled'
   total: number
   dueDate: string
   items: Array<{ label: string; quantity: string; amount: number }>
@@ -188,6 +188,7 @@ export type CustomerStore = {
   transactionError: string | null
   isDataLoading: boolean
   dataLoadError: string | null
+  retryDataLoad: () => void
   invoice: CustomerInvoice | null
   invoices: CustomerInvoice[]
   topUpWallet: (amount: number) => Promise<void>
@@ -200,6 +201,7 @@ export type CustomerStore = {
 }
 
 const initialOrders: CustomerOrder[] = []
+const initialOrderMismatches: NonNullable<CustomerStoreProviderProps['persistedOrderMismatches']> = []
 
 function formatOrderDateTime(value: string) {
   const formatted = new Intl.DateTimeFormat('en-GB', {
@@ -251,7 +253,7 @@ function mapDatabaseTransaction(
     }
   }
 
-  const isCredit = ['cashback', 'referral_reward'].includes(transaction.txn_type)
+  const isCredit = ['cashback', 'referral_reward', 'refund'].includes(transaction.txn_type)
   const isReward = ['cashback', 'referral_reward', 'referral_reward_expiry'].includes(transaction.txn_type)
   const isRewardExpiry = transaction.txn_type === 'referral_reward_expiry'
   const amount = isRewardExpiry
@@ -265,10 +267,14 @@ function mapDatabaseTransaction(
         ? 'Cashback earned'
         : isRewardExpiry
           ? 'Promotional credit expired'
+          : transaction.txn_type === 'refund'
+            ? 'Order refund'
           : isReward
             ? 'Referral reward'
             : 'Order payment',
-    reference: transaction.related_referral_reward_id
+    reference: transaction.txn_type === 'refund'
+      ? `Refund • ${transaction.related_invoice_id ? transaction.related_invoice_id.slice(0, 8) : transaction.id.slice(0, 8)}`
+      : transaction.related_referral_reward_id
       ? `Referral • ${transaction.related_referral_reward_id.slice(0, 8)}`
       : transaction.related_invoice_id
         ? `Invoice • ${transaction.related_invoice_id.slice(0, 8)}`
@@ -280,7 +286,7 @@ function mapDatabaseTransaction(
     sortDate: transaction.created_at,
     amount,
     direction: isCredit ? 'credit' : 'debit',
-    category: isReward ? 'reward' : 'payment',
+    category: transaction.txn_type === 'refund' ? 'refund' : isReward ? 'reward' : 'payment',
     status: 'Successful',
   }
 }
@@ -337,7 +343,14 @@ function mapDatabaseInvoice(
     orderId: invoice.order_id,
     orderReference: invoice.order_reference ?? invoice.order_id,
     reference: `INV-${invoice.id.slice(0, 6).toUpperCase()}`,
-    status: invoice.status === 'paid' ? 'Paid' : 'Awaiting payment',
+    status:
+      invoice.status === 'paid'
+        ? 'Paid'
+        : invoice.status === 'refunded'
+          ? 'Refunded'
+          : invoice.status === 'void'
+            ? 'Cancelled'
+            : 'Awaiting payment',
     total: Number(invoice.amount),
     dueDate: invoice.paid_at ? new Date(invoice.paid_at).toLocaleDateString() : 'Due today',
     items: [
@@ -524,6 +537,7 @@ type CustomerStoreProviderProps = {
   persistedInvoicePagination?: CustomerInvoicePagination | null
   isDataLoading?: boolean
   dataLoadError?: string | null
+  retryDataLoad: () => void
 }
 
 export function CustomerStoreProvider({
@@ -544,37 +558,61 @@ export function CustomerStoreProvider({
   persistedSubscription,
   persistedPickupLocations,
   persistedOrderItems,
-  persistedOrderMismatches = [],
+  persistedOrderMismatches,
   persistedSubscriptionAllowance = null,
   persistedOverviewSummary = null,
   persistedOrdersPagination = null,
   persistedInvoicePagination = null,
   isDataLoading = false,
   dataLoadError = null,
+  retryDataLoad,
 }: CustomerStoreProviderProps) {
-  const unpaidInvoiceOrderIds = new Set(persistedUnpaidInvoiceOrderIds)
-  const orderReferenceByInvoiceId = new Map(
-    (persistedInvoices ?? []).map((invoice) => [invoice.id, invoice.order_reference ?? invoice.order_id]),
+  const unpaidInvoiceOrderIds = useMemo(() => new Set(persistedUnpaidInvoiceOrderIds), [persistedUnpaidInvoiceOrderIds])
+  const orderMismatches = persistedOrderMismatches ?? initialOrderMismatches
+  const orderReferenceByInvoiceId = useMemo(
+    () => new Map((persistedInvoices ?? []).map((invoice) => [invoice.id, invoice.order_reference ?? invoice.order_id])),
+    [persistedInvoices],
   )
-  const [orders, setOrders] = useState(() =>
-    persistedOrders
-      ? persistedOrders.map((order) =>
-          mapDatabaseOrder(
-            order,
-            persistedOrderItems,
-            unpaidInvoiceOrderIds,
-            invoiceAmountsByOrderId,
-            persistedPickupLocations,
-            persistedOrderMismatches,
-          ),
-        )
-      : initialOrders,
+  const persistedOrdersMapped = useMemo(
+    () =>
+      persistedOrders
+        ? persistedOrders.map((order) =>
+            mapDatabaseOrder(
+              order,
+              persistedOrderItems,
+              unpaidInvoiceOrderIds,
+              invoiceAmountsByOrderId,
+              persistedPickupLocations,
+              orderMismatches,
+            ),
+          )
+        : initialOrders,
+    [
+      persistedOrders,
+      persistedOrderItems,
+      unpaidInvoiceOrderIds,
+      invoiceAmountsByOrderId,
+      persistedPickupLocations,
+      orderMismatches,
+    ],
   )
-  const [savedPickupLocationId, setSavedPickupLocationId] = useState(profile?.pickup_location_id ?? null)
-  const [oneOffBalance, setOneOffBalance] = useState(persistedWallet?.one_off_balance ?? 0)
-  const [subscriptionBalance, setSubscriptionBalance] = useState(persistedWallet?.subscription_balance ?? 0)
-  const [promotionalBalance] = useState(persistedWallet?.promotional_balance ?? 0)
-  const [transactions] = useState(
+  const [optimisticOrders, setOptimisticOrders] = useState<CustomerOrder[]>([])
+  const persistedOrderIds = useMemo(() => new Set(persistedOrdersMapped.map((order) => order.id)), [persistedOrdersMapped])
+  const orders = useMemo(
+    () => [...optimisticOrders.filter((order) => !persistedOrderIds.has(order.id)), ...persistedOrdersMapped],
+    [optimisticOrders, persistedOrderIds, persistedOrdersMapped],
+  )
+  const walletSourceKey = `${persistedWallet?.updated_at ?? 'no-wallet'}:${persistedWallet?.one_off_balance ?? 0}:${persistedWallet?.subscription_balance ?? 0}`
+  const [optimisticWallet, setOptimisticWallet] = useState<{
+    source: string
+    oneOffBalance: number
+    subscriptionBalance: number
+  } | null>(null)
+  const walletOverride = optimisticWallet?.source === walletSourceKey ? optimisticWallet : null
+  const oneOffBalance = walletOverride?.oneOffBalance ?? persistedWallet?.one_off_balance ?? 0
+  const subscriptionBalance = walletOverride?.subscriptionBalance ?? persistedWallet?.subscription_balance ?? 0
+  const promotionalBalance = persistedWallet?.promotional_balance ?? 0
+  const transactions = useMemo(
     () =>
       persistedTransactions ??
       [
@@ -598,8 +636,9 @@ export function CustomerStoreProvider({
             }
           }),
       ].sort((left, right) => new Date(right.sortDate).getTime() - new Date(left.sortDate).getTime()),
+    [persistedTransactions, persistedPayments, persistedWalletTransactions, persistedInvoices, orderReferenceByInvoiceId],
   )
-  const [invoices] = useState(() => (persistedInvoices ?? []).map(mapDatabaseInvoice))
+  const invoices = useMemo(() => (persistedInvoices ?? []).map(mapDatabaseInvoice), [persistedInvoices])
   const invoice = invoices[0] ?? null
   const subscriptionAvailableUnits = persistedSubscription ? (persistedSubscriptionAllowance?.balance ?? 0) : null
   const subscriptionBorrowedUnits = Math.max(0, -(subscriptionAvailableUnits ?? 0))
@@ -612,7 +651,8 @@ export function CustomerStoreProvider({
     const subscription = persistedSubscription
       ? { name: persistedSubscription.plan.name, billingPeriod: persistedSubscription.plan.type }
       : null
-    const preferredPickupLocation = persistedPickupLocations?.find((location) => location.id === savedPickupLocationId) ?? null
+    const preferredPickupLocation =
+      persistedPickupLocations?.find((location) => location.id === (profile?.pickup_location_id ?? null)) ?? null
 
     return {
       customerId: profile?.qaffy_id ?? 'Not available',
@@ -650,15 +690,18 @@ export function CustomerStoreProvider({
       transactionError: persistedTransactionError,
       isDataLoading,
       dataLoadError,
+      retryDataLoad,
       invoice,
       invoices,
       topUpWallet: async (amount) => {
         if (amount <= 0) throw new Error('Enter a valid top-up amount.')
-        setSubscriptionBalance((currentBalance) => {
-          if (currentBalance >= 0) return currentBalance
-          return Math.min(0, currentBalance + amount)
+        const subscriptionDebt = Math.max(0, -subscriptionBalance)
+        setOptimisticWallet({
+          source: walletSourceKey,
+          oneOffBalance: oneOffBalance + Math.max(0, amount - subscriptionDebt),
+          subscriptionBalance:
+            subscriptionBalance < 0 ? Math.min(0, subscriptionBalance + amount) : subscriptionBalance,
         })
-        setOneOffBalance((currentBalance) => currentBalance + Math.max(0, amount - Math.max(0, -subscriptionBalance)))
         toast.success(`₦${amount.toLocaleString()} added to your wallet.`)
       },
       addOrder: async ({ items, notes, pickupLocation, subscriptionBorrowConsentUnits }) => {
@@ -702,7 +745,7 @@ export function CustomerStoreProvider({
 
         if (supabase && profile?.id) {
           const selectedLocation = persistedPickupLocations?.find((location) => location.name === pickupLocation)
-          if (!savedPickupLocationId && selectedLocation) {
+          if (!profile?.pickup_location_id && selectedLocation) {
             const { error: profileLocationError } = await supabase
               .from('profiles')
               .update({ pickup_location_id: selectedLocation.id })
@@ -711,7 +754,6 @@ export function CustomerStoreProvider({
               toast.error(`Pickup location could not be saved: ${profileLocationError.message}`)
               throw profileLocationError
             }
-            setSavedPickupLocationId(selectedLocation.id)
           }
           const { data: categoryRows, error: categoryError } = await supabase
             .from('cloth_categories')
@@ -772,14 +814,14 @@ export function CustomerStoreProvider({
           savedPublicOrderNumber = insertedOrder.public_order_number
         }
 
-        setOrders((currentOrders) => [
+        setOptimisticOrders((currentOrders) => [
           {
             ...order,
             id: savedOrderId ?? order.id,
             publicOrderNumber: savedPublicOrderNumber ?? order.publicOrderNumber,
             pickupOtp: savedPickupOtp ?? order.pickupOtp,
           },
-          ...currentOrders,
+          ...currentOrders.filter((currentOrder) => currentOrder.id !== (savedOrderId ?? order.id)),
         ])
         return order
       },
@@ -797,7 +839,7 @@ export function CustomerStoreProvider({
     persistedSubscription,
     subscriptionBorrowableUnits,
     promotionalBalance,
-    savedPickupLocationId,
+    walletSourceKey,
     subscriptionBalance,
     persistedSubscriptionAllowance,
     persistedOverviewSummary,
@@ -809,6 +851,7 @@ export function CustomerStoreProvider({
     transactions,
     isDataLoading,
     dataLoadError,
+    retryDataLoad,
   ])
 
   return <CustomerStoreContext.Provider value={store}>{children}</CustomerStoreContext.Provider>
