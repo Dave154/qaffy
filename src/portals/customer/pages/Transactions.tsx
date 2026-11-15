@@ -4,7 +4,7 @@ import { useCustomerStore } from '../customer-store-hook'
 import CopyableOrderId from '../../../components/CopyableOrderId'
 import { CustomerActivityListSkeleton } from '../../../components/customer/CustomerDataSkeleton'
 
-const filterItems = ['All activity', 'Top ups', 'Payments', 'Rewards']
+const filterItems = ['All activity', 'Top ups', 'Payments', 'Rewards', 'Refunds']
 
 export default function Transactions() {
   const { transactions, transactionError, transactionPagination, isDataLoading, dataLoadError } = useCustomerStore()
@@ -21,6 +21,8 @@ export default function Transactions() {
         ? transactions.filter((transaction) => transaction.category === 'payment')
         : activeFilter === 'Rewards'
           ? transactions.filter((transaction) => transaction.category === 'reward')
+          : activeFilter === 'Refunds'
+            ? transactions.filter((transaction) => transaction.category === 'refund')
           : transactions
   const totalCount = transactionPagination?.totalCount ?? filteredTransactions.length
   const pageCount = transactionPagination ? Math.max(1, Math.ceil(totalCount / transactionPagination.pageSize)) : 1

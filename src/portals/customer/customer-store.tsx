@@ -60,7 +60,7 @@ export type CustomerTransaction = {
   sortDate: string
   amount: string
   direction: 'credit' | 'debit'
-  category: 'topup' | 'payment' | 'reward'
+  category: 'topup' | 'payment' | 'reward' | 'refund'
   status: string
 }
 
@@ -86,7 +86,7 @@ export type CustomerInvoice = {
   orderId: string
   orderReference: string
   reference: string
-  status: 'Paid' | 'Awaiting payment'
+  status: 'Paid' | 'Awaiting payment' | 'Refunded' | 'Cancelled'
   total: number
   dueDate: string
   items: Array<{ label: string; quantity: string; amount: number }>
@@ -188,6 +188,7 @@ export type CustomerStore = {
   transactionError: string | null
   isDataLoading: boolean
   dataLoadError: string | null
+  retryDataLoad: () => void
   invoice: CustomerInvoice | null
   invoices: CustomerInvoice[]
   topUpWallet: (amount: number) => Promise<void>
@@ -252,7 +253,7 @@ function mapDatabaseTransaction(
     }
   }
 
-  const isCredit = ['cashback', 'referral_reward'].includes(transaction.txn_type)
+  const isCredit = ['cashback', 'referral_reward', 'refund'].includes(transaction.txn_type)
   const isReward = ['cashback', 'referral_reward', 'referral_reward_expiry'].includes(transaction.txn_type)
   const isRewardExpiry = transaction.txn_type === 'referral_reward_expiry'
   const amount = isRewardExpiry
@@ -266,10 +267,14 @@ function mapDatabaseTransaction(
         ? 'Cashback earned'
         : isRewardExpiry
           ? 'Promotional credit expired'
+          : transaction.txn_type === 'refund'
+            ? 'Order refund'
           : isReward
             ? 'Referral reward'
             : 'Order payment',
-    reference: transaction.related_referral_reward_id
+    reference: transaction.txn_type === 'refund'
+      ? `Refund • ${transaction.related_invoice_id ? transaction.related_invoice_id.slice(0, 8) : transaction.id.slice(0, 8)}`
+      : transaction.related_referral_reward_id
       ? `Referral • ${transaction.related_referral_reward_id.slice(0, 8)}`
       : transaction.related_invoice_id
         ? `Invoice • ${transaction.related_invoice_id.slice(0, 8)}`
@@ -281,7 +286,7 @@ function mapDatabaseTransaction(
     sortDate: transaction.created_at,
     amount,
     direction: isCredit ? 'credit' : 'debit',
-    category: isReward ? 'reward' : 'payment',
+    category: transaction.txn_type === 'refund' ? 'refund' : isReward ? 'reward' : 'payment',
     status: 'Successful',
   }
 }
@@ -338,7 +343,14 @@ function mapDatabaseInvoice(
     orderId: invoice.order_id,
     orderReference: invoice.order_reference ?? invoice.order_id,
     reference: `INV-${invoice.id.slice(0, 6).toUpperCase()}`,
-    status: invoice.status === 'paid' ? 'Paid' : 'Awaiting payment',
+    status:
+      invoice.status === 'paid'
+        ? 'Paid'
+        : invoice.status === 'refunded'
+          ? 'Refunded'
+          : invoice.status === 'void'
+            ? 'Cancelled'
+            : 'Awaiting payment',
     total: Number(invoice.amount),
     dueDate: invoice.paid_at ? new Date(invoice.paid_at).toLocaleDateString() : 'Due today',
     items: [
@@ -525,6 +537,7 @@ type CustomerStoreProviderProps = {
   persistedInvoicePagination?: CustomerInvoicePagination | null
   isDataLoading?: boolean
   dataLoadError?: string | null
+  retryDataLoad: () => void
 }
 
 export function CustomerStoreProvider({
@@ -552,6 +565,7 @@ export function CustomerStoreProvider({
   persistedInvoicePagination = null,
   isDataLoading = false,
   dataLoadError = null,
+  retryDataLoad,
 }: CustomerStoreProviderProps) {
   const unpaidInvoiceOrderIds = useMemo(() => new Set(persistedUnpaidInvoiceOrderIds), [persistedUnpaidInvoiceOrderIds])
   const orderMismatches = persistedOrderMismatches ?? initialOrderMismatches
@@ -676,6 +690,7 @@ export function CustomerStoreProvider({
       transactionError: persistedTransactionError,
       isDataLoading,
       dataLoadError,
+      retryDataLoad,
       invoice,
       invoices,
       topUpWallet: async (amount) => {
@@ -836,6 +851,7 @@ export function CustomerStoreProvider({
     transactions,
     isDataLoading,
     dataLoadError,
+    retryDataLoad,
   ])
 
   return <CustomerStoreContext.Provider value={store}>{children}</CustomerStoreContext.Provider>

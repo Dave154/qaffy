@@ -35,7 +35,7 @@ type SettlementRow = {
   periodStart: string
   periodEnd: string
   amountDue: number
-  status: 'pending' | 'paid'
+  status: 'pending' | 'paid' | 'cancelled'
   createdAt: string
   orderCount: number
   payoutAccountReady: boolean
@@ -142,7 +142,7 @@ export async function loader({ request }: Route.LoaderArgs) {
         group by item.order_id
       ),
       paid_orders as (
-        select order_row.id, order_row.vendor_id, invoice.amount as invoice_amount,
+        select order_row.id, order_row.vendor_id, invoice.amount as invoice_amount, invoice.status as invoice_status,
           coalesce(item_payouts.amount, 0) as payout_amount,
           exists (
             select 1 from vendor_settlement_orders membership
@@ -150,17 +150,35 @@ export async function loader({ request }: Route.LoaderArgs) {
             where membership.order_id = order_row.id and paid_settlement.status = 'paid'
           ) as already_paid
         from orders order_row
-        join invoices invoice on invoice.order_id = order_row.id and invoice.status = 'paid'
+        join invoices invoice on invoice.order_id = order_row.id
+          and (
+            invoice.status = 'paid'
+            or (
+              invoice.status = 'refunded'
+              and exists (
+                select 1 from order_cancellations cancellation
+                where cancellation.order_id = order_row.id
+                  and cancellation.include_in_vendor_settlement
+              )
+            )
+          )
         left join item_payouts on item_payouts.order_id = order_row.id
         where order_row.vendor_id is not null
-          and order_row.status <> 'cancelled'
+          and (
+            order_row.status <> 'cancelled'
+            or exists (
+              select 1 from order_cancellations cancellation
+              where cancellation.order_id = order_row.id
+                and cancellation.include_in_vendor_settlement
+            )
+          )
           and order_row.clothes_count_vendor is not null
       ),
       vendor_totals as (
         select vendor_id,
           count(*) filter (where not already_paid)::int as outstanding_order_count,
-          coalesce(sum(invoice_amount) filter (where not already_paid), 0) as outstanding_collected,
-          coalesce(sum(invoice_amount), 0) as total_collected,
+          coalesce(sum(invoice_amount) filter (where not already_paid and invoice_status = 'paid'), 0) as outstanding_collected,
+          coalesce(sum(invoice_amount) filter (where invoice_status = 'paid'), 0) as total_collected,
           coalesce(sum(payout_amount), 0) as total_vendor_payout,
           coalesce(sum(payout_amount) filter (where not already_paid), 0) as vendor_payout
         from paid_orders
@@ -200,7 +218,15 @@ export async function loader({ request }: Route.LoaderArgs) {
               and not exists (
                 select 1 from vendor_settlement_orders membership
                 left join invoices invoice on invoice.order_id = membership.order_id
-                where membership.settlement_id = settlement.id and invoice.status is distinct from 'paid'
+                left join order_cancellations cancellation on cancellation.order_id = membership.order_id
+                where membership.settlement_id = settlement.id
+                  and not (
+                    coalesce(invoice.status = 'paid', false)
+                    or (
+                      coalesce(invoice.status = 'refunded', false)
+                      and coalesce(cancellation.include_in_vendor_settlement, false)
+                    )
+                  )
               )
           ) as pending_settlements,
           (select coalesce(sum(settlement.amount_due), 0) from vendor_settlements settlement
@@ -209,7 +235,15 @@ export async function loader({ request }: Route.LoaderArgs) {
               and not exists (
                 select 1 from vendor_settlement_orders membership
                 left join invoices invoice on invoice.order_id = membership.order_id
-                where membership.settlement_id = settlement.id and invoice.status is distinct from 'paid'
+                left join order_cancellations cancellation on cancellation.order_id = membership.order_id
+                where membership.settlement_id = settlement.id
+                  and not (
+                    coalesce(invoice.status = 'paid', false)
+                    or (
+                      coalesce(invoice.status = 'refunded', false)
+                      and coalesce(cancellation.include_in_vendor_settlement, false)
+                    )
+                  )
               )
           ) as pending_amount,
           (select count(*) from vendor_settlements where status = 'paid') as paid_settlements,
@@ -235,7 +269,10 @@ export async function loader({ request }: Route.LoaderArgs) {
         settlement.status, settlement.created_at,
         (vendor.payout_account_status = 'verified' and vendor.payout_recipient_code is not null) as payout_account_ready,
         count(membership.order_id)::int as order_count,
-        count(membership.order_id) filter (where invoice.status = 'paid')::int as paid_order_count,
+        count(membership.order_id) filter (
+          where invoice.status = 'paid'
+            or (invoice.status = 'refunded' and cancellation.include_in_vendor_settlement)
+        )::int as paid_order_count,
         transfer.status as transfer_status,
         transfer.failure_reason as transfer_failure_reason,
         transfer.paystack_reference as transfer_reference
@@ -243,6 +280,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       left join vendors vendor on vendor.id = settlement.vendor_id
       left join vendor_settlement_orders membership on membership.settlement_id = settlement.id
       left join invoices invoice on invoice.order_id = membership.order_id
+      left join order_cancellations cancellation on cancellation.order_id = membership.order_id
       left join vendor_settlement_transfers transfer on transfer.settlement_id = settlement.id
       group by settlement.id, vendor.id, transfer.id
       order by settlement.created_at desc, settlement.id desc
@@ -334,13 +372,16 @@ export async function action({ request }: Route.ActionArgs) {
           status: string
           clothes_count_vendor: number | null
           invoice_status: string | null
+          include_in_vendor_settlement: boolean
         }>
       >`
         select order_row.id, order_row.public_order_number, order_row.status,
-          order_row.clothes_count_vendor, invoice.status as invoice_status
+          order_row.clothes_count_vendor, invoice.status as invoice_status,
+          coalesce(cancellation.include_in_vendor_settlement, false) as include_in_vendor_settlement
         from vendor_settlement_orders membership
         join orders order_row on order_row.id = membership.order_id
         left join invoices invoice on invoice.order_id = order_row.id
+        left join order_cancellations cancellation on cancellation.order_id = order_row.id
         where membership.settlement_id = ${settlementId}
         order by order_row.created_at desc
       `
@@ -357,7 +398,8 @@ export async function action({ request }: Route.ActionArgs) {
           publicOrderNumber: order.public_order_number ?? order.id,
           status: order.status,
           confirmedItems: Number(order.clothes_count_vendor ?? 0),
-          invoicePaid: order.invoice_status === 'paid',
+          invoiceStatus: order.invoice_status,
+          includeInVendorSettlement: order.include_in_vendor_settlement,
         })),
       },
       { headers, status: 200 },
@@ -425,11 +467,29 @@ export async function action({ request }: Route.ActionArgs) {
         on order_row.vendor_id = vendor.id
         and order_row.created_at >= ${new Date(`${periodStart}T00:00:00.000Z`).toISOString()}::timestamptz
         and order_row.created_at <= ${new Date(`${periodEnd}T23:59:59.999Z`).toISOString()}::timestamptz
-        and order_row.status <> 'cancelled'
+        and (
+          order_row.status <> 'cancelled'
+          or exists (
+            select 1 from order_cancellations cancellation
+            where cancellation.order_id = order_row.id
+              and cancellation.include_in_vendor_settlement
+          )
+        )
         and order_row.clothes_count_vendor is not null
         and exists (
           select 1 from invoices invoice
-          where invoice.order_id = order_row.id and invoice.status = 'paid'
+          where invoice.order_id = order_row.id
+            and (
+              invoice.status = 'paid'
+              or (
+                invoice.status = 'refunded'
+                and exists (
+                  select 1 from order_cancellations cancellation
+                  where cancellation.order_id = order_row.id
+                    and cancellation.include_in_vendor_settlement
+                )
+              )
+            )
         )
         and not exists (
           select 1 from vendor_settlement_orders settlement_order
@@ -1051,9 +1111,11 @@ export default function Finance() {
                         <div className="flex items-center gap-2 whitespace-nowrap">
                           <span
                             title={settlement.transferFailureReason ?? undefined}
-                            className={`rounded-full px-2.5 py-1 text-[10px] font-semibold capitalize tracking-[0.12em] ${settlement.transferStatus === 'reversed' || settlement.transferStatus === 'failed' || settlement.transferStatus === 'rejected' ? 'bg-red-50 text-red-700' : settlement.status === 'paid' || settlement.transferStatus === 'success' ? 'bg-emerald-50 text-emerald-700' : !settlement.eligibleForPayout ? 'bg-orange-50 text-orange-700' : settlement.transferStatus === 'processing' || settlement.transferStatus === 'queued' ? 'bg-blue-50 text-blue-700' : 'bg-amber-50 text-amber-700'}`}
+                            className={`rounded-full px-2.5 py-1 text-[10px] font-semibold capitalize tracking-[0.12em] ${settlement.status === 'cancelled' ? 'bg-slate-100 text-slate-600' : settlement.transferStatus === 'reversed' || settlement.transferStatus === 'failed' || settlement.transferStatus === 'rejected' ? 'bg-red-50 text-red-700' : settlement.status === 'paid' || settlement.transferStatus === 'success' ? 'bg-emerald-50 text-emerald-700' : !settlement.eligibleForPayout ? 'bg-orange-50 text-orange-700' : settlement.transferStatus === 'processing' || settlement.transferStatus === 'queued' ? 'bg-blue-50 text-blue-700' : 'bg-amber-50 text-amber-700'}`}
                           >
-                            {settlement.transferStatus === 'reversed'
+                            {settlement.status === 'cancelled'
+                              ? 'cancelled'
+                              : settlement.transferStatus === 'reversed'
                               ? 'reversed · review'
                               : settlement.status === 'paid'
                                 ? 'paid'
@@ -1239,9 +1301,11 @@ export default function Finance() {
                     {selectedSettlement.vendorName}
                   </h2>
                   <span
-                    className={`rounded-full px-2.5 py-1 text-[10px] font-semibold capitalize tracking-[0.1em] ${selectedSettlement.transferStatus === 'reversed' || selectedSettlement.transferStatus === 'failed' || selectedSettlement.transferStatus === 'rejected' ? 'bg-red-50 text-red-700' : selectedSettlement.status === 'paid' || selectedSettlement.transferStatus === 'success' ? 'bg-emerald-50 text-emerald-700' : selectedSettlement.transferStatus === 'processing' ? 'bg-blue-50 text-blue-700' : !selectedSettlement.eligibleForPayout ? 'bg-orange-50 text-orange-700' : 'bg-amber-50 text-amber-700'}`}
+                    className={`rounded-full px-2.5 py-1 text-[10px] font-semibold capitalize tracking-[0.1em] ${selectedSettlement.status === 'cancelled' ? 'bg-slate-100 text-slate-600' : selectedSettlement.transferStatus === 'reversed' || selectedSettlement.transferStatus === 'failed' || selectedSettlement.transferStatus === 'rejected' ? 'bg-red-50 text-red-700' : selectedSettlement.status === 'paid' || selectedSettlement.transferStatus === 'success' ? 'bg-emerald-50 text-emerald-700' : selectedSettlement.transferStatus === 'processing' ? 'bg-blue-50 text-blue-700' : !selectedSettlement.eligibleForPayout ? 'bg-orange-50 text-orange-700' : 'bg-amber-50 text-amber-700'}`}
                   >
-                    {selectedSettlement.transferStatus === 'reversed'
+                    {selectedSettlement.status === 'cancelled'
+                      ? 'Cancelled'
+                      : selectedSettlement.transferStatus === 'reversed'
                       ? 'Reversed · review'
                       : selectedSettlement.status === 'paid'
                         ? 'Paid'
@@ -1322,8 +1386,20 @@ export default function Finance() {
                           {order.confirmedItems} confirmed item{order.confirmedItems === 1 ? '' : 's'} · {order.status.replaceAll('_', ' ')}
                         </p>
                       </div>
-                      <span className={`text-xs font-medium ${order.invoicePaid ? 'text-emerald-700' : 'text-orange-700'}`}>
-                        {order.invoicePaid ? 'Customer invoice paid' : 'Waiting for customer payment'}
+                      <span
+                        className={`text-xs font-medium ${
+                          order.invoiceStatus === 'paid'
+                            ? 'text-emerald-700'
+                            : order.invoiceStatus === 'refunded' && order.includeInVendorSettlement
+                              ? 'text-amber-700'
+                              : 'text-orange-700'
+                        }`}
+                      >
+                        {order.invoiceStatus === 'paid'
+                          ? 'Customer invoice paid'
+                          : order.invoiceStatus === 'refunded' && order.includeInVendorSettlement
+                            ? 'Customer refunded · retained in settlement'
+                            : 'Waiting for customer payment'}
                       </span>
                     </div>
                   ))}

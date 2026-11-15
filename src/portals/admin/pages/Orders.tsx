@@ -28,6 +28,8 @@ import { sendCustomerNotification } from '../../../lib/notifications.server'
 import { issueReferralRewards, sendReferralRewardNotifications } from '../../../lib/wallet.server'
 import { loadAdminOrders, type OrdersData } from '../../../lib/admin-orders.server'
 import { calculateSubscriptionBilling } from '../../../lib/subscription-billing'
+import { cancelAdminOrder, OrderCancellationError } from '../../../lib/order-cancellation.server'
+import { RefundAccountingError } from '../../../lib/order-cancellation'
 import {
   calculateSubscriptionAllowance,
   calculateSubscriptionAllowanceThroughCurrentMonth,
@@ -62,10 +64,21 @@ type AdminOrder = {
   }>
   invoice: {
     amount: number
-    status: 'unpaid' | 'paid'
+    status: 'unpaid' | 'paid' | 'void' | 'refunded'
     payment_method: 'wallet' | 'offline' | null
     paid_at: string | null
     billing_breakdown: BillingBreakdown | null
+  } | null
+  cancellation: {
+    reason: string
+    refund_requested: boolean
+    refund_amount: number
+    include_in_vendor_settlement: boolean
+    created_at: string
+  } | null
+  settlement: {
+    status: 'pending' | 'paid' | 'cancelled'
+    transfer_status: 'queued' | 'processing' | 'success' | 'failed' | 'reversed' | 'rejected' | null
   } | null
   mismatches: Array<{ id: string; details: unknown }>
 }
@@ -419,6 +432,76 @@ export async function action({ request }: Route.ActionArgs) {
       } catch (error) {
         if (error instanceof OfflinePaymentCalculationError) {
           return data({ ok: false, intent, orderId, previewId, message: error.message }, { status: 409, headers: auth.headers })
+        }
+        throw error
+      }
+    }
+
+    if (intent === 'cancel-order') {
+      const reason = String(formData.get('reason') ?? '')
+      const refundValue = String(formData.get('refundRequested') ?? '')
+      const settlementValue = formData.get('includeVendorSettlement')
+      if (refundValue !== 'true' && refundValue !== 'false') {
+        return data({ ok: false, intent, orderId, message: 'Choose whether to refund the customer.' }, { status: 400, headers: auth.headers })
+      }
+      if (settlementValue !== null && settlementValue !== 'include' && settlementValue !== 'exclude') {
+        return data({ ok: false, intent, orderId, message: 'Choose a valid vendor settlement option.' }, { status: 400, headers: auth.headers })
+      }
+
+      try {
+        const result = await cancelAdminOrder({
+          orderId,
+          adminProfileId: auth.profile.id,
+          reason,
+          refundRequested: refundValue === 'true',
+          settlementChoice: settlementValue === 'include' || settlementValue === 'exclude' ? settlementValue : null,
+        })
+        const body =
+          result.refundRequested && result.refundAmount > 0
+            ? `Order ${result.publicOrderNumber} was cancelled and ₦${result.refundAmount.toLocaleString()} was returned to your wallet.`
+            : result.refundRequested
+              ? `Order ${result.publicOrderNumber} was cancelled. No wallet payment was due; eligible subscription units have been restored.`
+              : `Order ${result.publicOrderNumber} was cancelled. No wallet refund was issued.`
+        scheduleAdminOrderNotification(
+          sendCustomerNotification({
+            eventKey: `order:${result.orderId}:cancelled`,
+            customerId: result.customerId,
+            notificationType: 'order_cancelled',
+            orderId: result.orderId,
+            payload: {
+              title: 'Your order was cancelled',
+              body,
+              details: [
+                `Order: ${result.publicOrderNumber}`,
+                `Reason: ${result.reason}`,
+                ...(result.refundRequested && result.refundAmount > 0
+                  ? [`Wallet refund: ₦${result.refundAmount.toLocaleString()}`]
+                  : []),
+                ...(result.includeInVendorSettlement ? ['The vendor settlement decision does not change your refund.'] : []),
+              ],
+              url: `/orders?order=${encodeURIComponent(result.publicOrderNumber)}`,
+              tag: `order:${result.orderId}:cancelled`,
+            },
+          }),
+        )
+        return data(
+          {
+            ok: true,
+            intent,
+            orderId,
+            refundAmount: result.refundAmount,
+            refundRequested: result.refundRequested,
+            includeInVendorSettlement: result.includeInVendorSettlement,
+            alreadyCancelled: result.alreadyCancelled,
+          },
+          { headers: auth.headers },
+        )
+      } catch (error) {
+        if (error instanceof OrderCancellationError) {
+          return data({ ok: false, intent, orderId, message: error.message }, { status: error.status, headers: auth.headers })
+        }
+        if (error instanceof RefundAccountingError) {
+          return data({ ok: false, intent, orderId, message: error.message }, { status: 409, headers: auth.headers })
         }
         throw error
       }
@@ -780,21 +863,7 @@ export async function action({ request }: Route.ActionArgs) {
       return data({ ok: true, intent, orderId }, { headers: auth.headers })
     }
 
-    const [cancelledOrder] = await sql`
-      update orders
-      set status = 'cancelled'
-      where id = ${orderId}
-        and status = 'pending_pickup'
-        and picked = false
-      returning id
-    `
-    if (!cancelledOrder) {
-      return data(
-        { ok: false, intent, orderId, message: 'Only orders still awaiting pickup can be cancelled.' },
-        { status: 409, headers: auth.headers },
-      )
-    }
-    return data({ ok: true, intent, orderId }, { headers: auth.headers })
+    return data({ ok: false, intent, orderId, message: 'Invalid order action.' }, { status: 400, headers: auth.headers })
   } catch (error) {
     if (error instanceof OfflinePaymentCalculationError) {
       return data({ ok: false, intent, orderId, message: error.message }, { status: 409, headers: auth.headers })
@@ -881,6 +950,16 @@ const statusStyles: Record<AdminOrder['status'], string> = {
 }
 const orderTypeLabels = { wash: 'Wash only', wash_iron: 'Wash + Iron', mixed: 'Mixed service' }
 const serviceLabels = { wash: 'Wash', iron: 'Iron', wash_iron: 'Wash + Iron' }
+const paymentStatusLabel = (order: AdminOrder) =>
+  order.invoice?.status === 'paid'
+    ? 'Paid'
+    : order.invoice?.status === 'refunded'
+      ? 'Refunded'
+      : order.invoice?.status === 'void'
+        ? 'Voided'
+        : order.invoice
+          ? 'Pending'
+          : 'No invoice'
 const getCustomerItemCount = (order: AdminOrder) => order.items.reduce((total, item) => total + item.quantity, 0)
 const formatDate = (value: string | null) =>
   value
@@ -915,6 +994,10 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
   const location = useLocation()
   const { revalidate } = useRevalidator()
   const [confirmOfflinePayment, setConfirmOfflinePayment] = useState(false)
+  const [cancelDialogOpen, setCancelDialogOpen] = useState(false)
+  const [cancellationReason, setCancellationReason] = useState('')
+  const [refundCustomer, setRefundCustomer] = useState(false)
+  const [settlementChoice, setSettlementChoice] = useState<'include' | 'exclude' | ''>('')
   const [applySubscriptionAllowance, setApplySubscriptionAllowance] = useState(false)
   const [activeAllowancePreviewId, setActiveAllowancePreviewId] = useState<string | null>(null)
   const [paymentSubmitted, setPaymentSubmitted] = useState(false)
@@ -941,7 +1024,8 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
     handledCancelResponse.current = result
 
     if (result.ok) {
-      toast.success('Order cancelled.')
+      const refundAmount = 'refundAmount' in result && typeof result.refundAmount === 'number' ? result.refundAmount : 0
+      toast.success(refundAmount > 0 ? `Order cancelled and ${money(refundAmount)} refunded.` : 'Order cancelled.')
       onClose()
       return
     }
@@ -1087,6 +1171,27 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
   const canDeliver = isReadyForFinalDelivery(order.status, order.invoice?.status)
   const canRecordOfflinePayment =
     order.invoice?.status === 'unpaid' && order.clothes_count_vendor !== null && ['invoiced', 'out_for_delivery'].includes(order.status)
+  const paymentLabel =
+    order.invoice?.status === 'paid'
+      ? order.invoice.payment_method === 'offline'
+        ? 'Paid offline'
+        : 'Paid'
+      : order.invoice?.status === 'refunded'
+        ? 'Refunded'
+        : order.invoice?.status === 'void'
+          ? 'Voided'
+          : 'Pending'
+  const settlementEligible = order.invoice?.status === 'paid' && order.clothes_count_vendor !== null
+  const settlementLocked =
+    order.settlement?.status === 'paid' ||
+    order.settlement?.transfer_status === 'success' ||
+    order.settlement?.transfer_status === 'queued' ||
+    order.settlement?.transfer_status === 'processing'
+  const effectiveSettlementChoice = settlementLocked ? 'include' : settlementChoice
+  const cancellationCanSubmit =
+    cancellationReason.trim().length > 0 &&
+    (!settlementEligible || effectiveSettlementChoice !== '') &&
+    cancelFetcher.state === 'idle'
   const workflowGuidance =
     order.status === 'pending_pickup'
       ? 'Confirm the order has been collected, then mark it as picked up.'
@@ -1406,10 +1511,7 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
         <section className="mt-5 grid gap-4 rounded-2xl border border-violet-100 bg-violet-50 p-4 sm:grid-cols-4">
           <Detail label="Vendor count" value={order.clothes_count_vendor ?? 'Not confirmed'} />
           <Detail label="Invoice" value={order.invoice ? money(Number(order.invoice.amount)) : 'Not created'} />
-          <Detail
-            label="Payment"
-            value={order.invoice?.status !== 'paid' ? 'Pending' : order.invoice.payment_method === 'offline' ? 'Paid offline' : 'Paid'}
-          />
+          <Detail label="Payment" value={paymentLabel} />
           <Detail label="Service mode" value={order.is_subscription_order ? 'Subscription' : 'One-time'} />
         </section>
         {order.is_subscription_order && order.invoice?.billing_breakdown && (
@@ -1428,26 +1530,44 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
           <h4 className="font-bold text-slate-900">Notes</h4>
           <p className="mt-2 text-sm text-slate-600">{order.notes || 'No notes recorded.'}</p>
         </section>
+        {order.cancellation && (
+          <section className="mt-5 rounded-2xl border border-rose-200 bg-rose-50 p-4">
+            <h4 className="font-bold text-rose-900">Cancellation record</h4>
+            <p className="mt-2 text-sm text-rose-800">{order.cancellation.reason}</p>
+            <div className="mt-3 grid gap-3 sm:grid-cols-3">
+              <Detail
+                label="Refund"
+                value={
+                  order.cancellation.refund_amount > 0
+                    ? `${money(order.cancellation.refund_amount)} to wallet`
+                    : order.cancellation.refund_requested
+                      ? 'No wallet payment due'
+                      : 'Not issued'
+                }
+              />
+              <Detail label="Vendor settlement" value={order.cancellation.include_in_vendor_settlement ? 'Included' : 'Excluded'} />
+              <Detail label="Cancelled" value={formatDate(order.cancellation.created_at)} />
+            </div>
+          </section>
+        )}
         <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
-          {order.status === 'pending_pickup' && (
-            <cancelFetcher.Form
-              method="post"
-              onSubmit={(event) => {
-                if (!window.confirm('Are you sure you want to cancel this order?')) event.preventDefault()
+          {order.status !== 'delivered' && order.status !== 'cancelled' ? (
+            <button
+              type="button"
+              onClick={() => {
+                setCancellationReason('')
+                setRefundCustomer(false)
+                setSettlementChoice('')
+                setCancelDialogOpen(true)
               }}
+              disabled={cancelFetcher.state !== 'idle'}
+              className="rounded-lg border border-rose-200 px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
             >
-              <input type="hidden" name="intent" value="cancel-order" />
-              <input type="hidden" name="orderId" value={order.id} />
-              <button
-                type="submit"
-                disabled={cancelFetcher.state !== 'idle'}
-                className="rounded-lg border border-rose-200 px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
-              >
-                {cancelFetcher.state !== 'idle' ? 'Cancelling…' : 'Cancel order'}
-              </button>
-            </cancelFetcher.Form>
+              Cancel order
+            </button>
+          ) : (
+            <span />
           )}
-          {order.status !== 'pending_pickup' && <span />}
           <button
             type="button"
             onClick={onClose}
@@ -1457,6 +1577,154 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
           </button>
         </div>
       </div>
+      {cancelDialogOpen && (
+        <div className="fixed inset-0 z-[70] flex items-end justify-center bg-slate-950/50 p-0 sm:items-center sm:p-4">
+          <cancelFetcher.Form
+            method="post"
+            onSubmit={(event) => {
+              if (!cancellationCanSubmit) event.preventDefault()
+            }}
+            className="max-h-[calc(100vh-1rem)] w-full max-w-xl overflow-y-auto rounded-t-3xl bg-white p-5 shadow-2xl sm:max-h-[calc(100vh-2rem)] sm:rounded-3xl sm:p-6"
+          >
+            <input type="hidden" name="intent" value="cancel-order" />
+            <input type="hidden" name="orderId" value={order.id} />
+            <input type="hidden" name="refundRequested" value={String(refundCustomer)} />
+            {settlementEligible && effectiveSettlementChoice !== '' && (
+              <input type="hidden" name="includeVendorSettlement" value={effectiveSettlementChoice} />
+            )}
+            <header>
+              <h3 className="text-xl font-bold text-slate-900">Cancel {order.public_order_number}?</h3>
+              <p className="mt-1 text-sm text-slate-600">
+                Cancellation is immediate. Delivered orders cannot be cancelled.
+              </p>
+              {order.status === 'out_for_delivery' && (
+                <p className="mt-3 rounded-xl bg-amber-50 p-3 text-sm leading-5 text-amber-900">
+                  Contact Logistics separately to recover the laundry. Cancelling here does not recall the courier.
+                </p>
+              )}
+            </header>
+
+            <label className="mt-5 block">
+              <span className="mb-2 block text-sm font-semibold text-slate-700">Reason for cancellation</span>
+              <textarea
+                name="reason"
+                value={cancellationReason}
+                onChange={(event) => setCancellationReason(event.target.value)}
+                maxLength={1000}
+                required
+                rows={3}
+                className="w-full resize-y rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
+                placeholder="Add a customer-readable reason"
+              />
+            </label>
+
+            <section className="mt-4 rounded-xl border border-slate-200 p-4">
+              <h4 className="text-sm font-bold text-slate-900">Customer wallet</h4>
+              {order.invoice?.status === 'paid' && Number(order.invoice.amount) > 0 ? (
+                <label className="mt-3 flex cursor-pointer items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={refundCustomer}
+                    onChange={(event) => setRefundCustomer(event.target.checked)}
+                    className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-primary focus:ring-brand-primary"
+                  />
+                  <span>
+                    <span className="block text-sm font-semibold text-slate-800">
+                      Refund {money(Number(order.invoice.amount))} to the customer’s wallet
+                    </span>
+                    <span className="mt-1 block text-xs leading-5 text-slate-500">
+                      This restores the original wallet sources. Promotional credit remains promotional. Any vendor payout
+                      already sent cannot be reversed.
+                    </span>
+                  </span>
+                </label>
+              ) : order.invoice?.status === 'paid' ? (
+                <p className="mt-2 text-sm text-slate-600">
+                  No wallet payment was due. Any subscription units used by this order will be restored automatically.
+                </p>
+              ) : order.invoice?.status === 'unpaid' ? (
+                <p className="mt-2 text-sm text-slate-600">The unpaid invoice will be voided. No wallet refund is available.</p>
+              ) : (
+                <p className="mt-2 text-sm text-slate-600">
+                  No paid invoice is available. Any eligible subscription usage will be restored automatically.
+                </p>
+              )}
+            </section>
+
+            {settlementEligible ? (
+              <fieldset className="mt-4 rounded-xl border border-slate-200 p-4">
+                <legend className="px-1 text-sm font-bold text-slate-900">Vendor settlement</legend>
+                {settlementLocked ? (
+                  <>
+                    <p className="mt-1 text-sm leading-5 text-amber-800">
+                      {order.settlement?.status === 'paid' || order.settlement?.transfer_status === 'success'
+                        ? 'This vendor payout has already been paid and cannot be reversed. If you refund the customer, Qaffy absorbs that cost.'
+                        : 'A vendor payout is already in progress and cannot be safely stopped. This order must remain included.'}
+                    </p>
+                  </>
+                ) : (
+                  <div className="mt-2 space-y-3">
+                    <label className="flex cursor-pointer items-start gap-3 rounded-lg bg-slate-50 p-3">
+                      <input
+                        type="radio"
+                        name="settlementChoice"
+                        value="include"
+                        checked={settlementChoice === 'include'}
+                        onChange={() => setSettlementChoice('include')}
+                        className="mt-0.5 h-4 w-4 border-slate-300 text-brand-primary focus:ring-brand-primary"
+                      />
+                      <span>
+                        <span className="block text-sm font-semibold text-slate-800">Include in vendor settlement</span>
+                        <span className="mt-1 block text-xs text-slate-500">The vendor is paid under the saved settlement rates.</span>
+                      </span>
+                    </label>
+                    <label className="flex cursor-pointer items-start gap-3 rounded-lg bg-slate-50 p-3">
+                      <input
+                        type="radio"
+                        name="settlementChoice"
+                        value="exclude"
+                        checked={settlementChoice === 'exclude'}
+                        onChange={() => setSettlementChoice('exclude')}
+                        className="mt-0.5 h-4 w-4 border-slate-300 text-brand-primary focus:ring-brand-primary"
+                      />
+                      <span>
+                        <span className="block text-sm font-semibold text-slate-800">Exclude from vendor settlement</span>
+                        <span className="mt-1 block text-xs text-slate-500">
+                          Any unpaid batch membership will be removed. Qaffy will not fund this order’s vendor payout.
+                        </span>
+                      </span>
+                    </label>
+                  </div>
+                )}
+              </fieldset>
+            ) : (
+              <p className="mt-4 rounded-xl bg-slate-50 p-3 text-xs leading-5 text-slate-600">
+                This order cannot be included in vendor settlement unless its invoice is paid and the vendor has confirmed
+                the received count.
+              </p>
+            )}
+
+            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={() => setCancelDialogOpen(false)}
+                disabled={cancelFetcher.state !== 'idle'}
+                className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Keep order
+              </button>
+              <button
+                type="submit"
+                disabled={!cancellationCanSubmit}
+                className="inline-flex items-center justify-center gap-2 rounded-lg bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {cancelFetcher.state !== 'idle' && <LoaderCircle size={15} className="animate-spin" />}
+                {cancelFetcher.state !== 'idle' ? 'Cancelling…' : 'Confirm cancellation'}
+              </button>
+            </div>
+          </cancelFetcher.Form>
+        </div>
+      )}
     </div>
   )
 }
@@ -1948,7 +2216,7 @@ function OrdersPage({ pageData }: { pageData: OrdersData }) {
                     <td className="px-4 py-4 text-sm text-slate-700">
                       {order.items.length > 0 ? getCustomerItemCount(order) : 'Not recorded'}
                     </td>
-                    <td className="px-4 py-4 text-sm text-slate-700">{order.invoice?.status === 'paid' ? 'Paid' : 'Pending'}</td>
+                    <td className="px-4 py-4 text-sm text-slate-700">{paymentStatusLabel(order)}</td>
                     <td className="px-4 py-4">
                       <span
                         className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2.5 py-1 text-[10px] font-semibold capitalize tracking-[0.12em] ${statusStyles[order.status]}`}

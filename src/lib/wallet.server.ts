@@ -131,6 +131,12 @@ async function debitWallet(
       insert into wallet_transactions (customer_id, balance_type, txn_type, amount, balance_after, related_invoice_id)
       values (${customerId}, 'subscription', 'debit', ${amount}, ${newBalance}, ${invoiceId})
     `
+    if (invoiceId && amount > 0) {
+      await tx`
+        insert into invoice_payment_allocations (invoice_id, balance_type, amount)
+        values (${invoiceId}, 'subscription', ${amount})
+      `
+    }
     return { newBalance, promotionalBalance: Number(wallet?.promotional_balance ?? 0) }
   }
 
@@ -193,6 +199,12 @@ async function debitWallet(
         )
         values (${customerId}, 'promotional', 'debit', ${applied}, ${ledgerBalance}, ${invoiceId}, ${reward.id}, ${subscriptionId})
       `
+      if (invoiceId && applied > 0) {
+        await tx`
+          insert into invoice_payment_allocations (invoice_id, balance_type, amount, related_referral_reward_id)
+          values (${invoiceId}, 'promotional', ${applied}, ${reward.id})
+        `
+      }
     }
     if (remainingDebit > 0) throw new Error('Promotional reward ledger is inconsistent')
   }
@@ -209,6 +221,12 @@ async function debitWallet(
       )
       values (${customerId}, 'one_off', 'debit', ${oneOffDebit}, ${newBalance}, ${invoiceId}, ${subscriptionId})
     `
+    if (invoiceId && oneOffDebit > 0) {
+      await tx`
+        insert into invoice_payment_allocations (invoice_id, balance_type, amount)
+        values (${invoiceId}, 'one_off', ${oneOffDebit})
+      `
+    }
   }
   return { newBalance, promotionalBalance }
 }
@@ -356,7 +374,7 @@ export async function payFromWallet(customerId: string, invoiceId: string, balan
     const { newBalance } = await debitWallet(tx, customerId, invoiceId, Number(invoice.amount), balanceType)
     const deliveryOtp = await generateFourDigitOtp(tx)
 
-    await tx`update invoices set status = 'paid', paid_at = now() where id = ${invoiceId}`
+    await tx`update invoices set status = 'paid', payment_method = 'wallet', paid_at = now() where id = ${invoiceId}`
     await tx`
       update orders
       set status = case when status = 'out_for_delivery' then status else 'paid' end,
@@ -733,7 +751,7 @@ export async function finalizeVendorOrder(
     if (invoiceAmount <= availableBalance) {
       await debitWallet(tx, order.customer_id, invoice.id, invoiceAmount, 'one_off')
       const deliveryOtp = await generateFourDigitOtp(tx)
-      await tx`update invoices set status = 'paid', paid_at = now() where id = ${invoice.id}`
+      await tx`update invoices set status = 'paid', payment_method = 'wallet', paid_at = now() where id = ${invoice.id}`
       await tx`update orders set status = 'paid', delivery_otp = ${deliveryOtp} where id = ${orderId}`
       referralRewardRecipients.push(...(await issueReferralRewards(tx, order.customer_id, orderId, invoiceAmount)))
     }
@@ -883,7 +901,7 @@ async function applyWalletCredit(
         settledBalance -= invoiceAmount
         const deliveryOtp = await generateFourDigitOtp(tx)
         await tx`update wallets set one_off_balance = ${settledBalance}, updated_at = now() where customer_id = ${customerId}`
-        await tx`update invoices set status = 'paid', paid_at = now() where id = ${invoice.id}`
+        await tx`update invoices set status = 'paid', payment_method = 'wallet', paid_at = now() where id = ${invoice.id}`
         await tx`
           update orders
           set status = case when status = 'out_for_delivery' then status else 'paid' end,
@@ -894,6 +912,10 @@ async function applyWalletCredit(
           await tx`
             insert into wallet_transactions (customer_id, balance_type, txn_type, amount, balance_after, related_invoice_id)
             values (${customerId}, 'one_off', 'debit', ${invoiceAmount}, ${settledBalance}, ${invoice.id})
+          `
+          await tx`
+            insert into invoice_payment_allocations (invoice_id, balance_type, amount)
+            values (${invoice.id}, 'one_off', ${invoiceAmount})
           `
         }
         referralRewardRecipients.push(...(await issueReferralRewards(tx, customerId, invoice.order_id, invoiceAmount)))
@@ -1148,7 +1170,7 @@ export async function chargeSubscriptionInvoice(customerId: string, invoiceId: s
     const amount = Number(invoice.amount)
     const { newBalance } = await debitWallet(tx, customerId, invoiceId, amount, 'one_off')
     const deliveryOtp = await generateFourDigitOtp(tx)
-    await tx`update invoices set status = 'paid', paid_at = now() where id = ${invoiceId}`
+    await tx`update invoices set status = 'paid', payment_method = 'wallet', paid_at = now() where id = ${invoiceId}`
     await tx`
       update orders
       set status = case when status = 'out_for_delivery' then status else 'paid' end,

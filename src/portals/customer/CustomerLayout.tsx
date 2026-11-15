@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import {
   data,
   Form,
@@ -128,7 +128,7 @@ async function loadCustomerLayoutData(request: Request) {
     const orderPageSize = 10
     const transactionPageSize = 20
     const requestedTransactionFilter = requestUrl.searchParams.get('filter') ?? 'All activity'
-    const allowedTransactionFilters = ['All activity', 'Top ups', 'Payments', 'Rewards']
+    const allowedTransactionFilters = ['All activity', 'Top ups', 'Payments', 'Rewards', 'Refunds']
     const transactionFilter = allowedTransactionFilters.includes(requestedTransactionFilter) ? requestedTransactionFilter : 'All activity'
     const [transactionPageSummary] = isTransactionsScope
       ? await sql<
@@ -141,7 +141,7 @@ async function loadCustomerLayoutData(request: Request) {
               order_reference: string | null
               amount: number
               direction: 'credit' | 'debit'
-              category: 'topup' | 'payment' | 'reward'
+              category: 'topup' | 'payment' | 'reward' | 'refund'
               status: 'Successful' | 'Failed' | 'Pending'
             }[]
             total_count: number
@@ -189,10 +189,13 @@ async function loadCustomerLayoutData(request: Request) {
                 when transaction.txn_type = 'cashback' then 'Cashback earned'
                 when transaction.txn_type = 'referral_reward_expiry' then 'Promotional credit expired'
                 when transaction.txn_type = 'referral_reward' then 'Referral reward'
+                when transaction.txn_type = 'refund' then 'Order refund'
                 else 'Order payment'
               end,
               case
                 when transaction.txn_type = 'topup' then 'Admin credit • ' || left(transaction.id::text, 8)
+                when transaction.txn_type = 'refund'
+                  then 'Refund • ' || left(coalesce(transaction.related_invoice_id::text, transaction.id::text), 8)
                 when transaction.related_referral_reward_id is not null
                   then 'Referral • ' || left(transaction.related_referral_reward_id::text, 8)
                 when transaction.related_invoice_id is not null
@@ -204,10 +207,11 @@ async function loadCustomerLayoutData(request: Request) {
               order_row.public_order_number,
               abs(transaction.amount)::numeric,
               case
-                when transaction.txn_type in ('topup', 'cashback', 'referral_reward') then 'credit'
+                when transaction.txn_type in ('topup', 'cashback', 'referral_reward', 'refund') then 'credit'
                 else 'debit'
               end,
               case
+                when transaction.txn_type = 'refund' then 'refund'
                 when transaction.txn_type in ('cashback', 'referral_reward', 'referral_reward_expiry') then 'reward'
                 when transaction.txn_type = 'topup' then 'topup'
                 else 'payment'
@@ -259,6 +263,7 @@ async function loadCustomerLayoutData(request: Request) {
               or (${transactionFilter} = 'Top ups' and category = 'topup')
               or (${transactionFilter} = 'Payments' and category = 'payment')
               or (${transactionFilter} = 'Rewards' and category = 'reward')
+              or (${transactionFilter} = 'Refunds' and category = 'refund')
           ),
           total as (
             select count(*)::int as total_count from filtered_transactions
@@ -466,6 +471,9 @@ async function loadCustomerLayoutData(request: Request) {
             limit 1
           `
         : []
+    const orderIdsToLoad = isOrdersScope
+      ? [...new Set([...(orderPageSummary?.page_order_ids ?? []), ...requestedOrderId.map((order) => order.id)])]
+      : []
     const overviewSummaryPromise = isOverviewScope
       ? sql<
           {
@@ -524,7 +532,7 @@ async function loadCustomerLayoutData(request: Request) {
       : Promise.resolve([])
     const [
       { count: unreadNotificationCount },
-      { data: orders },
+      { data: orders, error: ordersError },
       { data: pickupLocations },
       { data: wallet },
       { data: walletTransactions },
@@ -537,7 +545,7 @@ async function loadCustomerLayoutData(request: Request) {
         .eq('customer_id', userData.user.id)
         .is('read_at', null),
       isSummaryScope
-        ? Promise.resolve({ data: [] })
+        ? Promise.resolve({ data: [], error: null })
         : isInvoiceScope
           ? invoicePageSummary?.page_order_ids.length
             ? serverSupabase
@@ -547,12 +555,10 @@ async function loadCustomerLayoutData(request: Request) {
                 )
                 .eq('customer_id', userData.user.id)
                 .in('id', invoicePageSummary.page_order_ids)
-            : Promise.resolve({ data: [] })
+            : Promise.resolve({ data: [], error: null })
           : isOrdersScope
               ? (() => {
-                  const orderIds = [
-                    ...new Set([...(orderPageSummary?.page_order_ids ?? []), ...(requestedOrderId.map((order) => order.id) ?? [])]),
-                  ]
+                  const orderIds = orderIdsToLoad
                   return orderIds.length > 0
                     ? serverSupabase
                         .from('orders')
@@ -561,7 +567,7 @@ async function loadCustomerLayoutData(request: Request) {
                         )
                         .eq('customer_id', userData.user.id)
                         .in('id', orderIds)
-                    : Promise.resolve({ data: [] })
+                    : Promise.resolve({ data: [], error: null })
                 })()
               : (() => {
                   let query = serverSupabase
@@ -586,7 +592,7 @@ async function loadCustomerLayoutData(request: Request) {
         : serverSupabase
             .from('wallet_transactions')
             .select(
-              'id, customer_id, balance_type, txn_type, amount, related_invoice_id, related_payment_id, related_referral_reward_id, related_subscription_id, created_at',
+              'id, customer_id, balance_type, txn_type, amount, related_invoice_id, related_payment_id, related_referral_reward_id, related_order_cancellation_id, related_subscription_id, created_at',
             )
             .eq('customer_id', userData.user.id)
             .order('created_at', { ascending: false })
@@ -611,6 +617,16 @@ async function loadCustomerLayoutData(request: Request) {
         .limit(1)
         .maybeSingle(),
     ])
+    if (isOrdersScope) {
+      if (ordersError) throw new Error(`Customer orders query failed: ${ordersError.message}`)
+      if (!orders) throw new Error('Customer orders query returned no result.')
+
+      const returnedOrderIds = new Set(orders.map((order) => order.id))
+      const missingOrderCount = orderIdsToLoad.filter((id) => !returnedOrderIds.has(id)).length
+      if (missingOrderCount > 0) {
+        throw new Error(`Customer orders query omitted ${missingOrderCount} expected row(s).`)
+      }
+    }
     const [overviewSummaryRow] = await overviewSummaryPromise
 
     const orderIds = (orders ?? []).map((order) => order.id)
@@ -649,14 +665,14 @@ async function loadCustomerLayoutData(request: Request) {
       isInvoiceScope && invoicePageSummary?.page_invoice_ids.length
         ? serverSupabase
             .from('invoices')
-            .select('id, order_id, amount, status, payment_method, billing_breakdown, paid_at, created_at')
+            .select('id, order_id, amount, status, payment_method, billing_breakdown, paid_at, voided_at, refunded_at, created_at')
             .in('id', invoicePageSummary.page_invoice_ids)
             .order('created_at', { ascending: false })
             .order('id', { ascending: false })
         : orderIds.length > 0
           ? serverSupabase
               .from('invoices')
-              .select('id, order_id, amount, status, payment_method, billing_breakdown, paid_at, created_at')
+              .select('id, order_id, amount, status, payment_method, billing_breakdown, paid_at, voided_at, refunded_at, created_at')
               .in('order_id', orderIds)
               .order('created_at', { ascending: false })
               .order('id', { ascending: false })
@@ -971,6 +987,25 @@ function PlanSummary({ onNavigate }: { onNavigate?: () => void }) {
   )
 }
 
+function createSnapshotStore<T>() {
+  let snapshot: T | null = null
+  const listeners = new Set<() => void>()
+
+  return {
+    subscribe(listener: () => void) {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    getSnapshot: () => snapshot,
+    getServerSnapshot: () => null,
+    setSnapshot(nextSnapshot: T | null) {
+      if (snapshot === nextSnapshot) return
+      snapshot = nextSnapshot
+      listeners.forEach((listener) => listener())
+    },
+  }
+}
+
 export default function CustomerLayout() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const isOffline = !useSyncExternalStore(subscribeToNetworkStatus, getNetworkStatus, getServerNetworkStatus)
@@ -992,8 +1027,25 @@ export default function CustomerLayout() {
   const shouldLoadCustomerData =
     Boolean(loaderData?.customerDataLoading) || Boolean(loaderData?.profile && loaderData.customerDataScope !== activeCustomerDataScope)
   const loadCustomerData = customerDataFetcher.load
-  const fetcherData = customerDataFetcher.data
   const [startedCustomerDataRequestId, setStartedCustomerDataRequestId] = useState<string | null>(null)
+  const retryCustomerData = useCallback(() => {
+    if (!customerDataRequestId) return
+    const requestParams = new URLSearchParams(location.search)
+    requestParams.set('customerData', '1')
+    requestParams.set('requestId', customerDataRequestId)
+    requestParams.set('scope', activeCustomerDataScope)
+    setStartedCustomerDataRequestId(customerDataRequestId)
+    loadCustomerData(`/?index&${requestParams.toString()}`)
+  }, [activeCustomerDataScope, customerDataRequestId, loadCustomerData, location.search])
+  const fetcherData = customerDataFetcher.data
+  const [ordersDataStore] = useState(() =>
+    createSnapshotStore<{ key: string; data: NonNullable<typeof loaderData> }>(),
+  )
+  const cachedOrdersData = useSyncExternalStore(
+    ordersDataStore.subscribe,
+    ordersDataStore.getSnapshot,
+    ordersDataStore.getServerSnapshot,
+  )
   useEffect(() => {
     if (!shouldLoadCustomerData || !customerDataRequestId) return
     if (
@@ -1013,23 +1065,34 @@ export default function CustomerLayout() {
     const timer = window.setTimeout(() => setStartedCustomerDataRequestId(customerDataRequestId), 0)
     return () => window.clearTimeout(timer)
   }, [customerDataFetcher.state, customerDataRequestId])
-  const loadedCustomerData =
+  const matchingCustomerDataResponse =
     fetcherData &&
     fetcherData.customerDataRequestId === customerDataRequestId &&
     fetcherData.customerDataScope === activeCustomerDataScope &&
     fetcherData.customerDataLoading === false
       ? fetcherData
       : null
-  const customerData = loadedCustomerData ?? loaderData
+  const loadedCustomerData = matchingCustomerDataResponse?.customerDataError ? null : matchingCustomerDataResponse
+  const ordersDataCacheKey = `${loaderData?.profile?.id ?? ''}:${location.search}`
+  useEffect(() => {
+    if (activeCustomerDataScope !== 'orders' || !loadedCustomerData) return
+    ordersDataStore.setSnapshot({ key: ordersDataCacheKey, data: loadedCustomerData })
+  }, [activeCustomerDataScope, loadedCustomerData, ordersDataCacheKey, ordersDataStore])
+  const retainedOrdersData =
+    activeCustomerDataScope === 'orders' && cachedOrdersData?.key === ordersDataCacheKey ? cachedOrdersData.data : null
+  const customerData = loadedCustomerData ?? retainedOrdersData ?? loaderData
   const customerDataRequestFailed =
     shouldLoadCustomerData &&
     startedCustomerDataRequestId === customerDataRequestId &&
     customerDataFetcher.state === 'idle' &&
     !loadedCustomerData
   const isCustomerDataLoading =
-    shouldLoadCustomerData && !loadedCustomerData && !loaderData?.customerDataError && !customerDataRequestFailed
+    shouldLoadCustomerData &&
+    (customerDataFetcher.state !== 'idle' || !loadedCustomerData) &&
+    !loaderData?.customerDataError &&
+    !customerDataRequestFailed
   const customerDataError =
-    loadedCustomerData?.customerDataError ??
+    matchingCustomerDataResponse?.customerDataError ??
     loaderData?.customerDataError ??
     (customerDataRequestFailed ? 'Your account data could not be loaded. Please try again.' : null)
   const referralCode = loaderData?.profile?.referral_code ?? null
@@ -1182,6 +1245,7 @@ export default function CustomerLayout() {
       }
       isDataLoading={isCustomerDataLoading}
       dataLoadError={customerDataError}
+      retryDataLoad={retryCustomerData}
     >
       {showReferralModal && referralCode && (
         <div className="referral-modal-backdrop fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/45 p-4 backdrop-blur-[2px]">
@@ -1455,7 +1519,7 @@ export default function CustomerLayout() {
               </div>
             </div>
             <main className="mx-auto w-full max-w-300 px-4 pb-8 pt-5 sm:px-6 sm:pt-6 lg:pb-10 lg:pt-5">
-              {customerDataError && location.pathname !== '/' && (
+              {customerDataError && location.pathname !== '/' && activeCustomerDataScope !== 'orders' && (
                 <div
                   role="alert"
                   className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700"

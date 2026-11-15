@@ -1,6 +1,6 @@
 export type PaystackTransferEventName = 'transfer.success' | 'transfer.failed' | 'transfer.reversed'
 export type PaystackTransferState = 'queued' | 'processing' | 'success' | 'failed' | 'reversed' | 'rejected'
-export type SettlementPaymentState = 'pending' | 'paid'
+export type SettlementPaymentState = 'pending' | 'paid' | 'cancelled'
 
 export type PaystackTransferEvent = {
   event: string

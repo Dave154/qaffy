@@ -3,6 +3,20 @@ import { requireRole } from './auth.server'
 import { sql } from './db.server'
 
 type BillingBreakdown = { coveredUnits: number; subscriberAmount: number; regularAmount: number }
+type AdminCancellationDetails = {
+  reason: string
+  refund_requested: boolean
+  refund_amount: number
+  include_in_vendor_settlement: boolean
+  created_at: string
+}
+type AdminCancellationRow = Omit<AdminCancellationDetails, 'created_at'> & {
+  created_at: string | Date
+}
+type AdminSettlementDetails = {
+  status: 'pending' | 'paid' | 'cancelled'
+  transfer_status: 'queued' | 'processing' | 'success' | 'failed' | 'reversed' | 'rejected' | null
+}
 type AdminOrder = {
   id: string
   public_order_number: string
@@ -31,16 +45,18 @@ type AdminOrder = {
   }>
   invoice: {
     amount: number
-    status: 'unpaid' | 'paid'
+    status: 'unpaid' | 'paid' | 'void' | 'refunded'
     payment_method: 'wallet' | 'offline' | null
     paid_at: string | null
     billing_breakdown: BillingBreakdown | null
   } | null
+  cancellation: AdminCancellationDetails | null
+  settlement: AdminSettlementDetails | null
   mismatches: Array<{ id: string; details: unknown }>
 }
 type OrderRow = Omit<
   AdminOrder,
-  'created_at' | 'picked_up_date' | 'delivery_date' | 'customer' | 'location' | 'items' | 'invoice' | 'mismatches'
+  'created_at' | 'picked_up_date' | 'delivery_date' | 'customer' | 'location' | 'items' | 'invoice' | 'cancellation' | 'mismatches'
 > & {
   created_at: string | Date
   picked_up_date: string | Date | null
@@ -49,6 +65,7 @@ type OrderRow = Omit<
   location: AdminOrder['location']
   items: AdminOrder['items']
   invoice: AdminOrder['invoice']
+  cancellation: AdminCancellationRow | null
   mismatches: AdminOrder['mismatches']
 }
 export type OrdersData = {
@@ -113,6 +130,12 @@ const statusLabels = {
   delivered: 'Delivered',
   cancelled: 'Cancelled',
 }
+function paymentStatusLabel(status: 'unpaid' | 'paid' | 'void' | 'refunded' | undefined) {
+  if (status === 'paid') return 'Paid'
+  if (status === 'refunded') return 'Refunded'
+  if (status === 'void') return 'Voided'
+  return 'Pending'
+}
 function validDate(value: string | null) {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return ''
   const parsed = new Date(`${value}T00:00:00Z`)
@@ -162,6 +185,13 @@ function normalizeOrder(row: OrderRow): AdminOrder {
           ...row.invoice,
           amount: Number(row.invoice.amount),
           billing_breakdown: normalizeBreakdown(row.invoice.billing_breakdown),
+        }
+      : null,
+    cancellation: row.cancellation
+      ? {
+          ...row.cancellation,
+          refund_amount: Number(row.cancellation.refund_amount),
+          created_at: timestamp(row.cancellation.created_at) ?? '',
         }
       : null,
   }
@@ -264,7 +294,14 @@ export async function loadAdminOrders(request: Request, authOverride?: Awaited<R
       case 'items':
         return sql`(select coalesce(sum(oi_sort.quantity), 0) from order_items oi_sort where oi_sort.order_id = o.id)`
       case 'payment':
-        return sql`case when exists (select 1 from invoices sort_invoice where sort_invoice.order_id = o.id and sort_invoice.status = 'paid') then 'Paid' else 'Pending' end`
+        return sql`
+          case
+            when exists (select 1 from invoices sort_invoice where sort_invoice.order_id = o.id and sort_invoice.status = 'paid') then 'Paid'
+            when exists (select 1 from invoices sort_invoice where sort_invoice.order_id = o.id and sort_invoice.status = 'refunded') then 'Refunded'
+            when exists (select 1 from invoices sort_invoice where sort_invoice.order_id = o.id and sort_invoice.status = 'void') then 'Voided'
+            else 'Pending'
+          end
+        `
       case 'status':
         return sql`o.status::text`
     }
@@ -318,7 +355,8 @@ export async function loadAdminOrders(request: Request, authOverride?: Awaited<R
         select 1 from invoices payment_invoice where payment_invoice.order_id = o.id and payment_invoice.status = 'paid'
       ))
       or (${paymentFilter} = 'pending' and not exists (
-        select 1 from invoices payment_invoice where payment_invoice.order_id = o.id and payment_invoice.status = 'paid'
+        select 1 from invoices payment_invoice
+        where payment_invoice.order_id = o.id and payment_invoice.status in ('paid', 'refunded', 'void')
       ))
     )
     and ${dateRangeFilter}
@@ -362,6 +400,36 @@ export async function loadAdminOrders(request: Request, authOverride?: Awaited<R
           'billing_breakdown', invoice.billing_breakdown)
         from invoices invoice where invoice.order_id = o.id
       ) as invoice,
+      case when ${includeDetails} then (
+        select json_build_object(
+          'status', settlement.status::text,
+          'transfer_status', transfer.status
+        )
+        from vendor_settlement_orders membership
+        join vendor_settlements settlement on settlement.id = membership.settlement_id
+        left join vendor_settlement_transfers transfer on transfer.settlement_id = settlement.id
+        where membership.order_id = o.id
+        order by
+          case
+            when settlement.status = 'paid'
+              or transfer.status in ('success', 'queued', 'processing') then 0
+            else 1
+          end,
+          settlement.created_at desc,
+          settlement.id desc
+        limit 1
+      ) else null end as settlement,
+      case when ${includeDetails} then (
+        select json_build_object(
+          'reason', cancellation.reason,
+          'refund_requested', cancellation.refund_requested,
+          'refund_amount', cancellation.refund_amount,
+          'include_in_vendor_settlement', cancellation.include_in_vendor_settlement,
+          'created_at', cancellation.created_at
+        )
+        from order_cancellations cancellation
+        where cancellation.order_id = o.id
+      ) else null end as cancellation,
       case when ${includeDetails} then coalesce((
         select json_agg(json_build_object('id', mismatch.id, 'details', mismatch.details))
         from mismatches mismatch where mismatch.order_id = o.id
@@ -430,7 +498,7 @@ export async function loadAdminOrders(request: Request, authOverride?: Awaited<R
               orderTypeLabels[row.order_type],
               row.location?.name ?? 'Location pending',
               Number(row.item_count),
-              row.invoice?.status === 'paid' ? 'Paid' : 'Pending',
+              paymentStatusLabel(row.invoice?.status),
               statusLabels[row.status],
             ]
               .map(csvValue)

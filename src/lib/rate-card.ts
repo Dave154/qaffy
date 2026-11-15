@@ -16,6 +16,7 @@ export type SettlementCandidateOrder = {
   status: string
   clothes_count_vendor: number | null
   invoice_status: string | null
+  include_in_vendor_settlement?: boolean
 }
 
 export type SettlementCandidateItem = {
@@ -96,7 +97,7 @@ export function buildSettlementVendorPreviews(
     const eligibleOrders = orders.filter(
       (order) =>
         order.vendor_id === vendor.vendorId &&
-        order.status !== 'cancelled' &&
+        (order.status !== 'cancelled' || order.include_in_vendor_settlement === true) &&
         order.clothes_count_vendor !== null &&
         order.invoice_status === 'paid' &&
         !settledOrderIds.has(order.id),

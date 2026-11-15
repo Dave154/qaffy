@@ -106,7 +106,13 @@ export default function Invoice() {
           <h2 className="mt-1 text-2xl font-bold tracking-tight text-[#121212] lg:hidden">Invoice</h2>
         </div>
         <span
-          className={`whitespace-nowrap rounded-full px-3 py-1.5 text-sm font-medium ${invoice.status === 'Paid' ? 'bg-emerald-50 text-emerald-700' : 'bg-brand-soft text-brand-primary'}`}
+          className={`whitespace-nowrap rounded-full px-3 py-1.5 text-sm font-medium ${
+            invoice.status === 'Paid' || invoice.status === 'Refunded'
+              ? 'bg-emerald-50 text-emerald-700'
+              : invoice.status === 'Cancelled'
+                ? 'bg-slate-100 text-slate-600'
+                : 'bg-brand-soft text-brand-primary'
+          }`}
         >
           {invoice.status}
         </span>
@@ -396,13 +402,19 @@ export default function Invoice() {
             </div>
           </div>
 
-          {invoice.status === 'Paid' ? (
+          {invoice.status !== 'Awaiting payment' ? (
             <button
               type="button"
               disabled
-              className="mt-6 w-full rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-100"
+              className={`mt-6 w-full rounded-2xl px-4 py-3 text-sm font-semibold text-white disabled:opacity-100 ${
+                invoice.status === 'Paid' || invoice.status === 'Refunded' ? 'bg-emerald-600' : 'bg-slate-500'
+              }`}
             >
-              Paid
+              {invoice.status === 'Paid'
+                ? 'Paid'
+                : invoice.status === 'Refunded'
+                  ? 'Refunded to wallet'
+                  : 'Order cancelled'}
             </button>
           ) : (
             <Link

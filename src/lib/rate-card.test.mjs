@@ -77,6 +77,39 @@ test('keeps paid dispatched orders eligible for payout while excluding unpaid di
   assert.equal(previews[0].amount, 125)
 })
 
+test('includes a cancelled order in settlement only when Admin retained settlement eligibility', () => {
+  const previews = buildSettlementVendorPreviews(
+    [vendors[0]],
+    [
+      {
+        id: 'cancelled-included',
+        vendor_id: 'vendor-a',
+        status: 'cancelled',
+        clothes_count_vendor: 1,
+        invoice_status: 'paid',
+        include_in_vendor_settlement: true,
+      },
+      {
+        id: 'cancelled-excluded',
+        vendor_id: 'vendor-a',
+        status: 'cancelled',
+        clothes_count_vendor: 1,
+        invoice_status: 'paid',
+        include_in_vendor_settlement: false,
+      },
+    ],
+    [
+      { id: 'item-cancelled-included', order_id: 'cancelled-included', category_id: 'shirts', confirmed_quantity: 2, service: 'wash', unit_price: 99 },
+      { id: 'item-cancelled-excluded', order_id: 'cancelled-excluded', category_id: 'shirts', confirmed_quantity: 8, service: 'wash', unit_price: 99 },
+    ],
+    rates,
+    [],
+  )
+
+  assert.deepEqual(previews[0].orderIds, ['cancelled-included'])
+  assert.equal(previews[0].amount, 250)
+})
+
 test('marks vendors with no payable orders ineligible', () => {
   const previews = buildSettlementVendorPreviews(
     [vendors[0]],
