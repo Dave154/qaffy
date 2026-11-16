@@ -92,6 +92,8 @@ function getAllowanceCredits(startDate: string, startAt: string | null, endDate:
   const activationParts = getZonedDateTimeParts(activationTime)
   const activationDate = formatCalendarDate(new Date(Date.UTC(activationParts.year, activationParts.month - 1, activationParts.day)))
   const scheduleStartDate = activationDate > startDate ? activationDate : startDate
+  const effectiveActivationTime =
+    startDate > activationDate ? getSundayMidnightLagos(startDate) : activationTime
   const scheduleStart = parseCalendarDate(scheduleStartDate)
   const scheduleStartAsUtc = Date.UTC(scheduleStart.year, scheduleStart.month - 1, scheduleStart.day)
   const firstSundayOffset = (7 - new Date(scheduleStartAsUtc).getUTCDay()) % 7
@@ -117,13 +119,14 @@ function getAllowanceCredits(startDate: string, startAt: string | null, endDate:
     planMonthIndex -= 1
   }
   const activationIsWithinTerm =
-    (!endTime || activationTime.getTime() <= endTime.getTime()) &&
+    effectiveActivationTime.getTime() >= getSundayMidnightLagos(startDate).getTime() &&
+    (!endTime || effectiveActivationTime.getTime() <= endTime.getTime()) &&
     (!endCalendarDate || startDate <= endCalendarDate)
   if (activationIsWithinTerm) {
-    scheduledCredits.push(activationTime)
+    scheduledCredits.push(effectiveActivationTime)
     creditsByPlanMonth.set(planMonthIndex, 1)
   }
-  if (activationTime.getTime() >= getSundayMidnightLagos(formatCalendarDate(sunday)).getTime()) {
+  if (effectiveActivationTime.getTime() >= getSundayMidnightLagos(formatCalendarDate(sunday)).getTime()) {
     sunday = new Date(sunday.getTime() + subscriptionWeekMilliseconds)
   }
 

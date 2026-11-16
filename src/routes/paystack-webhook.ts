@@ -40,6 +40,19 @@ export async function action({ request }: { request: Request }) {
 
   const paymentData = payload.data
   const reference = typeof paymentData?.reference === 'string' ? paymentData.reference : ''
+  if (payload.event === 'charge.failed' && reference) {
+    await sql`
+      update payments
+      set status = 'failed', subscription_checkout_state = case
+        when plan_id is not null then 'failed'
+        else subscription_checkout_state
+      end
+      where reference = ${reference}
+        and provider = 'paystack'
+        and status = 'pending'
+    `
+    return data({ ok: true }, { status: 200 })
+  }
   if (payload.event !== 'charge.success' || paymentData?.status !== 'success' || !reference) {
     return data({ ok: true, ignored: true }, { status: 200 })
   }
@@ -60,14 +73,20 @@ export async function action({ request }: { request: Request }) {
       const activation = await activateSubscriptionFromPayment(payment.customer_id, reference)
       if (!activation.alreadyActivated)
         await sendCustomerNotification({
-          eventKey: `subscription:${activation.subscriptionId}:activated`,
+          eventKey: activation.scheduled
+            ? `subscription:${activation.subscriptionId}:scheduled`
+            : `subscription:${activation.subscriptionId}:activated`,
           customerId: payment.customer_id,
-          notificationType: 'subscription_activated',
+          notificationType: activation.scheduled ? 'subscription_renewal_scheduled' : 'subscription_activated',
           subscriptionId: activation.subscriptionId,
           payload: {
-            title: 'Plan activated',
-            body: `Your ${activation.planName} plan is now active.`,
-            details: [`Plan: ${activation.planName}`, 'Your subscription benefits are now available.'],
+            title: activation.scheduled ? 'Plan renewal scheduled' : 'Plan activated',
+            body: activation.scheduled
+              ? `Your ${activation.planName} renewal is scheduled to start on ${activation.startDate}.`
+              : `Your ${activation.planName} plan is now active.`,
+            details: activation.scheduled
+              ? [`Plan: ${activation.planName}`, `Starts: ${activation.startDate}`, `Ends: ${activation.endDate}`]
+              : [`Plan: ${activation.planName}`, 'Your subscription benefits are now available.'],
             url: '/plans',
             tag: `subscription:${activation.subscriptionId}`,
           },
@@ -77,22 +96,23 @@ export async function action({ request }: { request: Request }) {
   }
 
   if (payment.plan_id) {
-    await sql`
-      update payments
-      set status = 'success', succeeded_at = coalesce(succeeded_at, now())
-      where reference = ${reference}
-    `
     const activation = await activateSubscriptionFromPayment(payment.customer_id, reference)
     if (!activation.alreadyActivated)
       await sendCustomerNotification({
-        eventKey: `subscription:${activation.subscriptionId}:activated`,
+        eventKey: activation.scheduled
+          ? `subscription:${activation.subscriptionId}:scheduled`
+          : `subscription:${activation.subscriptionId}:activated`,
         customerId: payment.customer_id,
-        notificationType: 'subscription_activated',
+        notificationType: activation.scheduled ? 'subscription_renewal_scheduled' : 'subscription_activated',
         subscriptionId: activation.subscriptionId,
         payload: {
-          title: 'Plan activated',
-          body: `Your ${activation.planName} plan is now active.`,
-          details: [`Plan: ${activation.planName}`, 'Your subscription benefits are now available.'],
+          title: activation.scheduled ? 'Plan renewal scheduled' : 'Plan activated',
+          body: activation.scheduled
+            ? `Your ${activation.planName} renewal is scheduled to start on ${activation.startDate}.`
+            : `Your ${activation.planName} plan is now active.`,
+          details: activation.scheduled
+            ? [`Plan: ${activation.planName}`, `Starts: ${activation.startDate}`, `Ends: ${activation.endDate}`]
+            : [`Plan: ${activation.planName}`, 'Your subscription benefits are now available.'],
           url: '/plans',
           tag: `subscription:${activation.subscriptionId}`,
         },

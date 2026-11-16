@@ -5,7 +5,7 @@
 export type UserRole = 'customer' | 'logistics' | 'vendor' | 'admin'
 export type PartnerStatus = 'pending' | 'approved' | 'rejected' | 'suspended'
 export type PlanType = 'monthly' | 'semester'
-export type SubscriptionStatus = 'active' | 'ended' | 'cancelled'
+export type SubscriptionStatus = 'active' | 'scheduled' | 'ended' | 'cancelled'
 export type WalletBalanceType = 'one_off' | 'subscription' | 'promotional'
 export type WalletTxnType = 'topup' | 'debit' | 'refund' | 'adjustment' | 'cashback' | 'referral_reward' | 'referral_reward_expiry'
 export type OrderType = 'wash' | 'wash_iron' | 'mixed'
@@ -170,6 +170,8 @@ export interface Subscription {
   weekly_limit_snapshot: number
   covers_wash_snapshot: boolean
   covers_iron_snapshot: boolean
+  price_snapshot: number | null
+  is_queued_renewal: boolean
   created_at: string
 }
 
@@ -300,6 +302,15 @@ export interface Payment {
   amount: number
   balance_type: WalletBalanceType
   plan_id: string | null
+  subscription_id: string | null
+  subscription_activation_processed_at: string | null
+  authorization_url: string | null
+  subscription_checkout_state: 'legacy' | 'initializing' | 'ready' | 'failed' | 'completed'
+  subscription_start_date_snapshot: string | null
+  subscription_end_date_snapshot: string | null
+  subscription_weekly_limit_snapshot: number | null
+  subscription_covers_wash_snapshot: boolean | null
+  subscription_covers_iron_snapshot: boolean | null
   status: PaymentStatus
   created_at: string
   succeeded_at: string | null

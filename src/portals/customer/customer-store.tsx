@@ -168,7 +168,15 @@ export type CustomerStore = {
   balance: number
   debt: number
   subscription: { name: string; billingPeriod: 'monthly' | 'semester' } | null
+  subscriptionStartDate: string | null
   subscriptionEndDate: string | null
+  scheduledSubscription: {
+    name: string
+    billingPeriod: 'monthly' | 'semester'
+    startDate: string
+    endDate: string
+    price: number
+  } | null
   activePlan: Plan | null
   subscriptionAvailableUnits: number | null
   subscriptionBorrowableUnits: number
@@ -517,6 +525,7 @@ type CustomerStoreProviderProps = {
     }
   >
   persistedSubscription?: { subscription: Subscription; plan: Plan } | null
+  persistedScheduledSubscription?: { subscription: Subscription; plan: Plan } | null
   persistedPickupLocations?: PickupLocationOption[]
   persistedOrderItems?: PersistedOrderItem[]
   persistedOrderMismatches?: Array<{
@@ -556,6 +565,7 @@ export function CustomerStoreProvider({
   invoiceAmountsByOrderId,
   persistedInvoices,
   persistedSubscription,
+  persistedScheduledSubscription = null,
   persistedPickupLocations,
   persistedOrderItems,
   persistedOrderMismatches,
@@ -668,7 +678,17 @@ export function CustomerStoreProvider({
       balance: oneOffBalance + promotionalBalance,
       debt: Math.max(0, -subscriptionBalance),
       subscription,
+      subscriptionStartDate: persistedSubscription?.subscription.start_date ?? null,
       subscriptionEndDate: persistedSubscription?.subscription.end_date ?? null,
+      scheduledSubscription: persistedScheduledSubscription
+        ? {
+            name: persistedScheduledSubscription.plan.name,
+            billingPeriod: persistedScheduledSubscription.plan.type,
+            startDate: persistedScheduledSubscription.subscription.start_date,
+            endDate: persistedScheduledSubscription.subscription.end_date ?? '',
+            price: persistedScheduledSubscription.plan.price,
+          }
+        : null,
       activePlan: persistedSubscription?.plan ?? null,
       subscriptionAvailableUnits,
       subscriptionBorrowableUnits,
@@ -837,6 +857,7 @@ export function CustomerStoreProvider({
     profile,
     persistedPickupLocations,
     persistedSubscription,
+    persistedScheduledSubscription,
     subscriptionBorrowableUnits,
     promotionalBalance,
     walletSourceKey,

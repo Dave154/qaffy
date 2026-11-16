@@ -100,6 +100,32 @@ test('caps each plan month at four weekly credits even when it contains five Sun
   assert.equal(allowance.balance, 80)
 })
 
+test('scheduled subscriptions do not receive allowance before their start date', () => {
+  const beforeStart = calculateSubscriptionAllowance(
+    {
+      weeklyLimit: 10,
+      startDate: '2026-11-20',
+      startAt: '2026-11-10T12:00:00.000Z',
+      endDate: '2026-12-20',
+      usedUnits: 0,
+    },
+    new Date('2026-11-15T12:00:00.000Z'),
+  )
+  const onStartDate = calculateSubscriptionAllowance(
+    {
+      weeklyLimit: 10,
+      startDate: '2026-11-20',
+      startAt: '2026-11-10T12:00:00.000Z',
+      endDate: '2026-12-20',
+      usedUnits: 0,
+    },
+    new Date('2026-11-20T12:00:00.000Z'),
+  )
+
+  assert.equal(beforeStart.accruedUnits, 0)
+  assert.equal(onStartDate.accruedUnits, 10)
+})
+
 test('allows Admin to use the remaining allowance through the current subscription month', () => {
   const allowance = calculateSubscriptionAllowanceThroughCurrentMonth(
     { weeklyLimit: 20, startDate: '2026-10-02', endDate: '2026-11-02', usedUnits: 30 },

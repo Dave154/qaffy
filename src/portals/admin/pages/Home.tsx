@@ -145,7 +145,15 @@ export async function loader({ request }: Route.LoaderArgs) {
   const auth = await requireRole(request, 'admin')
   if (!auth) throw new Response('Admin overview requires Supabase configuration.', { status: 503 })
   const { supabase, headers } = auth
-  const activeOnDate = new Date().toISOString().slice(0, 10)
+  const activeOnDateParts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Lagos',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date())
+  const activeOnDatePart = (type: Intl.DateTimeFormatPartTypes) =>
+    activeOnDateParts.find((part) => part.type === type)?.value ?? ''
+  const activeOnDate = `${activeOnDatePart('year')}-${activeOnDatePart('month')}-${activeOnDatePart('day')}`
 
   const coreData = (async (): Promise<OverviewCore> => {
     const [metricRows, trendRows, hourlyRows] = await Promise.all([
@@ -169,7 +177,9 @@ export async function loader({ request }: Route.LoaderArgs) {
           (select count(*) from vendors where status = 'approved') as vendors,
           (select count(*) from logistics_agents where status = 'approved') as logistics,
           (select count(distinct customer_id) from subscriptions
-            where status = 'active' and (end_date is null or end_date >= ${activeOnDate}::date)) as active_subscriptions,
+            where status in ('active', 'scheduled')
+              and start_date <= ${activeOnDate}::date
+              and (end_date is null or end_date >= ${activeOnDate}::date)) as active_subscriptions,
           (select count(*) from invoices where status = 'unpaid') as unpaid_invoices,
           (select coalesce(sum(amount), 0) from invoices where status = 'unpaid') as unpaid_amount,
           (select coalesce(sum(quantity), 0) from order_items) as clothes
@@ -410,7 +420,9 @@ export async function loader({ request }: Route.LoaderArgs) {
       sql<{ plan_id: string | null; subscribers: string }[]>`
         select plan_id, count(distinct customer_id) as subscribers
         from subscriptions
-        where status = 'active' and (end_date is null or end_date >= ${activeOnDate}::date)
+        where status in ('active', 'scheduled')
+          and start_date <= ${activeOnDate}::date
+          and (end_date is null or end_date >= ${activeOnDate}::date)
         group by grouping sets ((plan_id), ())
       `,
     ])

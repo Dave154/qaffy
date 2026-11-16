@@ -4,8 +4,9 @@ import { useEffect, useRef, useState } from 'react'
 import type { Route } from './+types/UserDetails'
 import { requireRole } from '../../../lib/auth.server'
 import { adjustWallet, creditAdminWallet } from '../../../lib/wallet.server'
-import { createManualSubscriptionWithSnapshot } from '../../../lib/subscriptions.server'
+import { createManualSubscriptionWithSnapshot, lockCustomerSubscription } from '../../../lib/subscriptions.server'
 import { sql } from '../../../lib/db.server'
+import { addCalendarMonthsToDate } from '../../../lib/subscription-terms'
 import { toast } from '../../../lib/toast'
 import { calculateSubscriptionAllowance } from '../../../lib/subscription-week'
 import { getSubscriptionUsageTotals } from '../../../lib/subscription-usage.server'
@@ -110,7 +111,14 @@ function date(value: string | null) {
   return value ? new Date(value).toLocaleString() : 'Not recorded'
 }
 function dateInput(value: Date) {
-  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Lagos',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(value)
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value ?? ''
+  return `${part('year')}-${part('month')}-${part('day')}`
 }
 function dateOnly(value: Date | string | null | undefined) {
   return value instanceof Date ? value.toISOString().slice(0, 10) : value?.slice(0, 10) ?? null
@@ -119,11 +127,6 @@ function getOrdersReturnPath(state: unknown) {
   if (!state || typeof state !== 'object' || !('returnTo' in state) || typeof state.returnTo !== 'string') return null
   return /^\/admin\/orders(?:\?[^#]*)?$/.test(state.returnTo) ? state.returnTo : null
 }
-function addMonth(value: string) {
-  const start = new Date(`${value}T12:00:00`)
-  return dateInput(new Date(start.getFullYear(), start.getMonth() + 1, start.getDate()))
-}
-
 function HistoryPagination({
   section,
   pagination,
@@ -191,7 +194,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
       return [key, Number.isSafeInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1]
     }),
   ) as Record<PageKey, number>
-  const today = new Date().toISOString().slice(0, 10)
+  const today = dateInput(new Date())
   const [
     { data: profile },
     { data: roles },
@@ -231,9 +234,10 @@ export async function loader({ request, params }: Route.LoaderArgs) {
       .from('subscriptions')
       .select('id, plan_id, status, start_date, end_date, weekly_limit_snapshot, created_at')
       .eq('customer_id', customerId)
-      .eq('status', 'active')
+      .in('status', ['active', 'scheduled'])
+      .lte('start_date', today)
       .or(`end_date.is.null,end_date.gte.${today}`)
-      .order('created_at', { ascending: false })
+      .order('start_date', { ascending: false })
       .limit(1)
       .maybeSingle(),
     supabase.from('plans').select('id, name, type, semester_end_date, active').order('created_at', { ascending: false }),
@@ -371,7 +375,11 @@ export async function loader({ request, params }: Route.LoaderArgs) {
         where order_row.customer_id = ${customerId}::uuid and invoice.status = 'paid') as paid_invoice_total,
       (select coalesce(sum(amount), 0) from payments
         where customer_id = ${customerId}::uuid and status = 'success' and plan_id is not null) as plan_payment_total,
-      (select count(*)::int from subscriptions where customer_id = ${customerId}::uuid and status = 'active') as active_subscriptions
+      (select count(*)::int from subscriptions
+        where customer_id = ${customerId}::uuid
+          and status in ('active', 'scheduled')
+          and start_date <= ${today}::date
+          and (end_date is null or end_date >= ${today}::date)) as active_subscriptions
   `
   stats.totalOrders = Number(allTimeStats?.total_orders ?? 0)
   stats.completedOrders = Number(allTimeStats?.completed_orders ?? 0)
@@ -508,15 +516,22 @@ export async function action({ request, params }: Route.ActionArgs) {
   }
   if (intent === 'subscription') {
     const planId = String(formData.get('planId') ?? '')
-    const startDate = String(formData.get('startDate') ?? new Date().toISOString().slice(0, 10))
-    const endDate = String(formData.get('endDate') ?? '') || null
+    const startDate = String(formData.get('startDate') ?? '').trim()
     if (!planId) return data({ ok: false, message: 'Select a plan.' }, { status: 400 })
+    const parsedStartDate = new Date(`${startDate}T00:00:00Z`)
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(startDate) ||
+      Number.isNaN(parsedStartDate.getTime()) ||
+      parsedStartDate.toISOString().slice(0, 10) !== startDate
+    ) {
+      return data({ ok: false, message: 'Enter a valid subscription start date.' }, { status: 400 })
+    }
     try {
-      await createManualSubscriptionWithSnapshot({ customerId, planId, startDate, endDate })
+      await createManualSubscriptionWithSnapshot({ customerId, planId, startDate })
       return data({ ok: true, message: 'Subscription created.' })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Subscription could not be created.'
-      return data({ ok: false, message }, { status: message.includes('already has an active subscription') ? 409 : 400 })
+      return data({ ok: false, message }, { status: /already has (an active subscription|a renewal scheduled)/i.test(message) ? 409 : 400 })
     }
   }
   if (intent === 'cancel-subscription') {
@@ -549,6 +564,9 @@ export async function action({ request, params }: Route.ActionArgs) {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(subscriptionId)) {
       return data({ ok: false, message: 'Invalid subscription.' }, { status: 400, headers: auth.headers })
     }
+    if (!endDate) {
+      return data({ ok: false, message: 'A subscription end date is required.' }, { status: 400, headers: auth.headers })
+    }
     if (endDate) {
       const parsedEndDate = new Date(`${endDate}T00:00:00Z`)
       if (
@@ -561,18 +579,46 @@ export async function action({ request, params }: Route.ActionArgs) {
     }
 
     try {
-      const [updatedSubscription] = await sql`
-        update subscriptions
-        set end_date = ${endDate}
-        where id = ${subscriptionId}
-          and customer_id = ${customerId}
-          and status = 'active'
-          and (${endDate}::date is null or ${endDate}::date >= start_date)
-        returning id
-      `
+      const updatedSubscription = await sql.begin(async (tx) => {
+        await lockCustomerSubscription(tx, customerId)
+        const [updated] = await tx`
+          update subscriptions
+          set end_date = ${endDate}
+          where id = ${subscriptionId}
+            and customer_id = ${customerId}
+            and status = 'active'
+            and ${endDate}::date >= start_date
+            and not exists (
+              select 1
+              from subscriptions scheduled
+              where scheduled.customer_id = ${customerId}
+                and scheduled.is_queued_renewal = true
+            )
+            and not exists (
+              select 1
+              from payments pending
+              where pending.customer_id = ${customerId}
+                and pending.plan_id is not null
+                and pending.status = 'pending'
+            )
+            and not exists (
+              select 1
+              from subscriptions scheduled
+              where scheduled.customer_id = ${customerId}
+                and scheduled.status = 'scheduled'
+                and scheduled.start_date <= ${endDate}::date
+            )
+          returning id
+        `
+        return updated
+      })
       if (!updatedSubscription) {
         return data(
-          { ok: false, message: 'Only active subscriptions can be edited, and the end date cannot be before the start date.' },
+          {
+            ok: false,
+            message:
+              'Only active subscriptions can be edited. The end date must be on or after the start date and cannot conflict with a queued renewal or pending subscription checkout.',
+          },
           { status: 409, headers: auth.headers },
         )
       }
@@ -648,6 +694,8 @@ function ManualSubscription({
   const [planId, setPlanId] = useState('')
   const [startDate, setStartDate] = useState(today)
   const [endDate, setEndDate] = useState('')
+  const selectedPlan = plans.find((candidate) => candidate.id === planId)
+  const endDateIsValid = Boolean(endDate && endDate >= startDate)
   const updatePlanDates = (nextPlanId: string, nextStartDate = startDate) => {
     const plan = plans.find((candidate) => candidate.id === nextPlanId)
     setPlanId(nextPlanId)
@@ -655,7 +703,13 @@ function ManualSubscription({
       setEndDate('')
       return
     }
-    setEndDate(plan.type === 'semester' ? (semesterEndDate ?? '') : addMonth(nextStartDate))
+    setEndDate(
+      plan.type === 'semester'
+        ? (semesterEndDate ?? '')
+        : nextStartDate
+          ? addCalendarMonthsToDate(nextStartDate, 1)
+          : '',
+    )
   }
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5">
@@ -683,9 +737,12 @@ function ManualSubscription({
             name="startDate"
             type="date"
             value={startDate}
+            required
             onChange={(event) => {
               setStartDate(event.target.value)
-              if (plans.find((plan) => plan.id === planId)?.type === 'monthly') setEndDate(addMonth(event.target.value))
+              if (plans.find((plan) => plan.id === planId)?.type === 'monthly') {
+                setEndDate(event.target.value ? addCalendarMonthsToDate(event.target.value, 1) : '')
+              }
             }}
             className="h-10 rounded-lg border border-slate-200 px-3 text-sm"
           />
@@ -693,14 +750,24 @@ function ManualSubscription({
             name="endDate"
             type="date"
             value={endDate}
-            onChange={(event) => setEndDate(event.target.value)}
-            readOnly={plans.find((plan) => plan.id === planId)?.type === 'semester'}
+            readOnly
+            required
             className="h-10 rounded-lg border border-slate-200 px-3 text-sm"
           />
         </div>
+        {selectedPlan?.type === 'semester' && !semesterEndDate && (
+          <p role="alert" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+            Set the semester end date in Admin Plans before creating a semester subscription.
+          </p>
+        )}
+        {selectedPlan && endDate && !endDateIsValid && (
+          <p role="alert" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+            The subscription end date must be on or after its start date.
+          </p>
+        )}
         <button
           type="submit"
-          disabled={isSaving}
+          disabled={isSaving || !endDateIsValid}
           className="rounded-lg bg-brand-primary px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
         >
           Create subscription

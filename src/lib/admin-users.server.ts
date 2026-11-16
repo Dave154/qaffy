@@ -146,8 +146,9 @@ export async function loadUsers(request: Request, authOverride?: Awaited<ReturnT
               from subscriptions current_subscription
               join profiles customer on customer.id = current_subscription.customer_id
               where customer.role = 'customer'
-                and current_subscription.status = 'active'
-                and (current_subscription.end_date is null or current_subscription.end_date >= current_date)
+                and current_subscription.status in ('active', 'scheduled')
+                and current_subscription.start_date <= (now() at time zone 'Africa/Lagos')::date
+                and (current_subscription.end_date is null or current_subscription.end_date >= (now() at time zone 'Africa/Lagos')::date)
             `
           )[0]?.count ?? 0,
         )
@@ -187,7 +188,7 @@ export async function loadUsers(request: Request, authOverride?: Awaited<ReturnT
       case 'wallet':
         return sql`coalesce((select coalesce(customer_wallet.one_off_balance, 0) + coalesce(customer_wallet.subscription_balance, 0) from wallets customer_wallet where customer_wallet.customer_id = p.id), 0)`
       case 'plan':
-        return sql`(select active_plan.name from subscriptions active_subscription join plans active_plan on active_plan.id = active_subscription.plan_id where active_subscription.customer_id = p.id and active_subscription.status = 'active' and (active_subscription.end_date is null or active_subscription.end_date >= current_date) order by active_subscription.created_at desc limit 1)`
+        return sql`(select active_plan.name from subscriptions active_subscription join plans active_plan on active_plan.id = active_subscription.plan_id where active_subscription.customer_id = p.id and active_subscription.status in ('active', 'scheduled') and active_subscription.start_date <= (now() at time zone 'Africa/Lagos')::date and (active_subscription.end_date is null or active_subscription.end_date >= (now() at time zone 'Africa/Lagos')::date) order by active_subscription.start_date desc, active_subscription.created_at desc limit 1)`
       case 'joined':
         return sql`p.created_at`
       case 'last_order':
@@ -236,8 +237,9 @@ export async function loadUsers(request: Request, authOverride?: Awaited<ReturnT
         select 1
         from subscriptions current_subscription
         where current_subscription.customer_id = p.id
-          and current_subscription.status = 'active'
-          and (current_subscription.end_date is null or current_subscription.end_date >= current_date)
+          and current_subscription.status in ('active', 'scheduled')
+          and current_subscription.start_date <= (now() at time zone 'Africa/Lagos')::date
+          and (current_subscription.end_date is null or current_subscription.end_date >= (now() at time zone 'Africa/Lagos')::date)
           and (${subscriptionFilter} = 'active' or current_subscription.plan_id::text = ${subscriptionFilter})
       )
     )
@@ -288,9 +290,10 @@ export async function loadUsers(request: Request, authOverride?: Awaited<ReturnT
        from subscriptions active_subscription
        join plans active_plan on active_plan.id = active_subscription.plan_id
        where active_subscription.customer_id = p.id
-         and active_subscription.status = 'active'
-         and (active_subscription.end_date is null or active_subscription.end_date >= current_date)
-       order by active_subscription.created_at desc
+         and active_subscription.status in ('active', 'scheduled')
+         and active_subscription.start_date <= (now() at time zone 'Africa/Lagos')::date
+         and (active_subscription.end_date is null or active_subscription.end_date >= (now() at time zone 'Africa/Lagos')::date)
+       order by active_subscription.start_date desc, active_subscription.created_at desc
        limit 1) as active_plan,
       case when ${includeOrders} then coalesce(
         (select json_agg(recent_order.order_detail order by recent_order.created_at desc)
