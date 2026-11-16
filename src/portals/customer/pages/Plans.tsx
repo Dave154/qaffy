@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { Check, ChevronRight, X } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { ChevronRight, X } from 'lucide-react'
 import { data, useFetcher, useLoaderData, useLocation, useRevalidator } from 'react-router'
 import type { Route } from './+types/Plans'
 import PlanEndingBanner from '../../../components/PlanEndingBanner'
@@ -7,8 +7,17 @@ import RecoverableError from '../../../components/RecoverableError'
 import { useCustomerStore } from '../customer-store-hook'
 import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
 import { toast } from '../../../lib/toast'
-import type { Plan } from '../../../types/database.types'
-import { getSpendableWalletBalance, purchaseSubscriptionWithWallet } from '../../../lib/wallet.server'
+import { getPendingCheckoutAction } from '../../../lib/subscription-checkout'
+import { isSubscriptionPurchaseQuote, subscriptionPurchaseQuotesMatch } from '../../../lib/subscription-terms'
+import { getSpendableWalletBalance, purchaseSubscriptionWithWallet, activateSubscriptionFromPayment } from '../../../lib/wallet.server'
+import { sendCustomerNotification } from '../../../lib/notifications.server'
+import {
+  createPendingSubscriptionPayment,
+  failPendingSubscriptionPayment,
+  getPendingSubscriptionPayment,
+  saveSubscriptionPaymentAuthorizationUrl,
+  getSubscriptionPurchaseOffer,
+} from '../../../lib/subscriptions.server'
 import { CustomerSectionSkeleton } from '../../../components/customer/CustomerDataSkeleton'
 
 type BillingPeriod = 'monthly' | 'semester'
@@ -82,47 +91,174 @@ export async function action({ request }: Route.ActionArgs) {
     return data({ ok: false, message: 'Choose a valid payment method.' }, { status: 400, headers })
   const planId = String(formData.get('planId') ?? '')
   if (!planId) return data({ ok: false, message: 'Choose a plan.' }, { status: 400, headers })
-  const { data: planRows, error: planError } = await serverSupabase.from('plans').select('*').eq('id', planId).eq('active', true).limit(1)
+  const secretKey = process.env.PAYSTACK_SECRET_KEY
+  let pendingCheckout: Awaited<ReturnType<typeof getPendingSubscriptionPayment>>
+  try {
+    pendingCheckout = await getPendingSubscriptionPayment(userData.user.id)
+  } catch (error) {
+    console.error('[customer-plans] Could not inspect an existing subscription checkout', error)
+    return data({ ok: false, message: 'The current subscription payment could not be checked. Please try again.' }, { status: 500, headers })
+  }
+  if (pendingCheckout) {
+    if (!secretKey) return data({ ok: false, message: 'Paystack is not configured.' }, { status: 503, headers })
+    try {
+      type PaystackVerification = {
+        status?: boolean
+        message?: string
+        data?: { status?: 'success' | 'pending' | 'failed' | 'abandoned'; reference?: string; amount?: number; currency?: string }
+      }
+      const verificationResponse = await fetch(
+        `https://api.paystack.co/transaction/verify/${encodeURIComponent(pendingCheckout.reference)}`,
+        { headers: { Authorization: `Bearer ${secretKey}` } },
+      )
+      let providerStatus: 'success' | 'pending' | 'failed' | 'abandoned' | 'not_found' | null | undefined
+      let verification: PaystackVerification | null = null
+      if (verificationResponse.status === 404) {
+        providerStatus = 'not_found'
+      } else {
+        verification = (await verificationResponse.json()) as PaystackVerification
+        if (!verificationResponse.ok || verification.status === false) {
+          console.error('[customer-plans] Could not reconcile Paystack checkout', {
+            reference: pendingCheckout.reference,
+            message: verification.message,
+          })
+          return data(
+            { ok: false, message: 'Paystack could not confirm the previous checkout. Please try again shortly.' },
+            { status: 502, headers },
+          )
+        }
+        providerStatus = verification.data?.status
+      }
 
-  if (planError || !planRows?.[0])
-    return data({ ok: false, message: 'This plan is not configured in the database.' }, { status: 400, headers })
-  const plan = planRows[0] as Plan
-
-  const { data: existingSubscription, error: existingError } = await serverSupabase
-    .from('subscriptions')
-    .select('id, end_date')
-    .eq('customer_id', userData.user.id)
-    .eq('status', 'active')
-    .or(`end_date.is.null,end_date.gte.${new Date().toISOString().slice(0, 10)}`)
-    .limit(1)
-    .maybeSingle()
-
-  if (existingError) return data({ ok: false, message: 'Could not check your current subscription.' }, { status: 500, headers })
-  if (existingSubscription) {
-    return data({ ok: false, message: 'You already have an active subscription.' }, { status: 409, headers })
+      const recoveryAction = getPendingCheckoutAction(
+        pendingCheckout.checkoutState,
+        pendingCheckout.authorizationUrl,
+        providerStatus,
+      )
+      if (recoveryAction === 'activate') {
+        const verifiedPayment = verification?.data
+        if (
+          !verifiedPayment ||
+          verifiedPayment.reference !== pendingCheckout.reference ||
+          Number(verifiedPayment.amount) !== pendingCheckout.amount * 100 ||
+          verifiedPayment.currency !== 'NGN'
+        ) {
+          console.error('[customer-plans] Paystack reconciliation did not match the stored payment', {
+            reference: pendingCheckout.reference,
+          })
+          return data({ ok: false, message: 'The previous payment could not be safely matched. Contact support.' }, { status: 409, headers })
+        }
+        const activation = await activateSubscriptionFromPayment(userData.user.id, pendingCheckout.reference)
+        if (!activation.alreadyActivated) {
+          await sendCustomerNotification({
+            eventKey: activation.scheduled
+              ? `subscription:${activation.subscriptionId}:scheduled`
+              : `subscription:${activation.subscriptionId}:activated`,
+            customerId: userData.user.id,
+            notificationType: activation.scheduled ? 'subscription_renewal_scheduled' : 'subscription_activated',
+            subscriptionId: activation.subscriptionId,
+            payload: {
+              title: activation.scheduled ? 'Plan renewal scheduled' : 'Plan activated',
+              body: activation.scheduled
+                ? `Your ${activation.planName} renewal is scheduled to start on ${activation.startDate}.`
+                : `Your ${activation.planName} plan is now active.`,
+              details: activation.scheduled
+                ? [`Plan: ${activation.planName}`, `Starts: ${activation.startDate}`, `Ends: ${activation.endDate}`]
+                : [`Plan: ${activation.planName}`, 'Your subscription benefits are now available.'],
+              url: '/plans',
+              tag: `subscription:${activation.subscriptionId}`,
+            },
+          })
+        }
+        return data({ ok: true, paymentConfirmed: true }, { headers })
+      }
+      if (recoveryAction === 'resume' && pendingCheckout.authorizationUrl) {
+        return data(
+          { ok: true, authorizationUrl: pendingCheckout.authorizationUrl, resumedCheckout: true },
+          { headers },
+        )
+      }
+      if (recoveryAction === 'retry') {
+        await failPendingSubscriptionPayment(pendingCheckout.reference)
+      } else if (recoveryAction === 'support') {
+        return data(
+          {
+            ok: false,
+            message: 'An earlier subscription checkout has no saved payment link. Contact support to reconcile it before starting another checkout.',
+          },
+          { status: 409, headers },
+        )
+      } else if (recoveryAction === 'wait') {
+        return data(
+          { ok: false, message: 'The existing subscription checkout is being reconciled. Please try again shortly.' },
+          { status: 409, headers },
+        )
+      }
+    } catch (error) {
+      console.error('[customer-plans] Paystack checkout reconciliation failed', error)
+      return data(
+        { ok: false, message: 'The previous checkout status could not be confirmed. Please try again shortly.' },
+        { status: 502, headers },
+      )
+    }
+  }
+  let offer: Awaited<ReturnType<typeof getSubscriptionPurchaseOffer>>
+  try {
+    offer = await getSubscriptionPurchaseOffer(userData.user.id, planId)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'This subscription could not be prepared.'
+    const status = /already|pending|awaiting confirmation|current subscription has no end date/i.test(message) ? 409 : 400
+    return data({ ok: false, message }, { status, headers })
   }
 
-  const amount = Number(plan.price)
+  const amount = offer.amount
+  let expectedQuote: typeof offer | undefined
+  const expectedTermsRaw = formData.get('expectedTerms')
+  if (expectedTermsRaw !== null) {
+    let parsedTerms: unknown
+    try {
+      parsedTerms = JSON.parse(String(expectedTermsRaw))
+    } catch {
+      return data({ ok: false, message: 'The displayed subscription terms are invalid. Please choose the plan again.' }, { status: 400, headers })
+    }
+    if (!isSubscriptionPurchaseQuote(parsedTerms)) {
+      return data({ ok: false, message: 'The displayed subscription terms are invalid. Please choose the plan again.' }, { status: 400, headers })
+    }
+    expectedQuote = parsedTerms
+  }
+  const expectedAmountRaw = formData.get('expectedAmount')
+  if (intent !== 'choose') {
+    const expectedAmount = Number(expectedAmountRaw)
+    if (
+      expectedAmountRaw === null ||
+      !Number.isFinite(expectedAmount) ||
+      expectedAmount !== amount ||
+      !expectedQuote ||
+      !subscriptionPurchaseQuotesMatch(offer, expectedQuote)
+    ) {
+      return data(
+        { ok: false, message: 'The subscription terms changed. Review the updated plan details before choosing how to pay.' },
+        { status: 409, headers },
+      )
+    }
+  }
   if (intent === 'choose') {
     const spendableBalance = await getSpendableWalletBalance(userData.user.id)
-    if (spendableBalance >= amount)
-      return data(
-        {
-          ok: true,
-          showPaymentChoices: true,
-          requestId: String(formData.get('requestId') ?? ''),
-          planId: plan.id,
-          planName: plan.name,
-          amount,
-          spendableBalance,
-        },
-        { headers },
-      )
+    return data(
+      {
+        ok: true,
+        showPaymentChoices: true,
+        requestId: String(formData.get('requestId') ?? ''),
+        spendableBalance,
+        ...offer,
+      },
+      { headers },
+    )
   }
 
   if (intent === 'wallet') {
     try {
-      await purchaseSubscriptionWithWallet(userData.user.id, plan.id)
+      await purchaseSubscriptionWithWallet(userData.user.id, offer.planId, amount, offer)
       return data({ ok: true, walletPurchase: true, requestId: String(formData.get('requestId') ?? '') }, { headers })
     } catch (error) {
       if (error instanceof Error && error.message === 'INSUFFICIENT_BALANCE') {
@@ -133,57 +269,100 @@ export async function action({ request }: Route.ActionArgs) {
             message: 'Your wallet balance changed. Choose Paystack to pay the full plan price.',
             walletNoLongerEnough: true,
             requestId: String(formData.get('requestId') ?? ''),
-            planId: plan.id,
-            amount,
             spendableBalance,
+            ...offer,
           },
           { status: 409, headers },
         )
       }
-      if (error instanceof Error && error.message === 'You already have an active subscription.')
+      if (error instanceof Error && error.message === 'PLAN_PRICE_CHANGED') {
+        return data(
+          { ok: false, message: 'The plan price changed. Review the updated price before choosing how to pay.' },
+          { status: 409, headers },
+        )
+      }
+      if (error instanceof Error && error.message === 'SUBSCRIPTION_TERMS_CHANGED') {
+        return data(
+          { ok: false, message: 'The subscription terms changed. Review the updated plan details before choosing how to pay.' },
+          { status: 409, headers },
+        )
+      }
+      if (error instanceof Error && /already|pending|awaiting confirmation|current subscription has no end date/i.test(error.message))
         return data({ ok: false, message: error.message }, { status: 409, headers })
       if (error instanceof Error && error.message === 'This plan is no longer available.')
         return data({ ok: false, message: error.message }, { status: 409, headers })
+      if (error instanceof Error && /semester end date|semester end date is before/i.test(error.message))
+        return data({ ok: false, message: error.message }, { status: 400, headers })
       console.error('[customer-plans] Wallet plan purchase failed', error)
       return data({ ok: false, message: 'The wallet payment could not be completed. Please try again.' }, { status: 500, headers })
     }
   }
 
   const reference = `subscription_${crypto.randomUUID()}`
-  const { error: paymentError } = await serverSupabase.from('payments').insert({
-    customer_id: userData.user.id,
-    provider: 'paystack',
-    reference,
-    amount,
-    balance_type: 'subscription',
-    plan_id: plan.id,
-    status: 'pending',
-  })
-  if (paymentError) return data({ ok: false, message: 'The subscription payment could not be recorded.' }, { status: 500, headers })
-
-  const secretKey = process.env.PAYSTACK_SECRET_KEY
   if (!secretKey) return data({ ok: false, message: 'Paystack is not configured.' }, { status: 503, headers })
-  const initializationResponse = await fetch('https://api.paystack.co/transaction/initialize', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${secretKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      email: userData.user.email,
-      amount: Math.round(amount * 100),
-      reference,
-      callback_url: new URL('/plans?payment=pending', request.url).toString(),
-    }),
-  })
-  const initialization = (await initializationResponse.json()) as {
-    status?: boolean
-    message?: string
-    data?: { authorization_url?: string }
+  let paymentTerms: Awaited<ReturnType<typeof createPendingSubscriptionPayment>>
+  try {
+    paymentTerms = await createPendingSubscriptionPayment(userData.user.id, offer.planId, reference, amount, offer)
+  } catch (error) {
+    const message =
+      error instanceof Error && error.message === 'SUBSCRIPTION_TERMS_CHANGED'
+        ? 'The subscription terms changed. Review the updated plan details before choosing how to pay.'
+        : error instanceof Error
+          ? error.message
+          : 'This subscription payment could not be prepared.'
+    const status =
+      message === 'PLAN_PRICE_CHANGED' ||
+      message === 'SUBSCRIPTION_TERMS_CHANGED' ||
+      /already|pending|awaiting confirmation|current subscription has no end date/i.test(message)
+        ? 409
+        : 400
+    return data({ ok: false, message }, { status, headers })
   }
-  if (!initializationResponse.ok || !initialization.status || !initialization.data?.authorization_url)
+
+  try {
+    const initializationResponse = await fetch('https://api.paystack.co/transaction/initialize', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${secretKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: userData.user.email,
+        amount: Math.round(paymentTerms.amount * 100),
+        currency: 'NGN',
+        reference,
+        callback_url: new URL('/plans?payment=pending', request.url).toString(),
+      }),
+    })
+    const initialization = (await initializationResponse.json()) as {
+      status?: boolean
+      message?: string
+      data?: { authorization_url?: string }
+    }
+    if (!initializationResponse.ok || initialization.status === false) {
+      await failPendingSubscriptionPayment(reference)
+      return data(
+        { ok: false, message: initialization.message ?? 'Paystack could not start this subscription payment.' },
+        { status: 502, headers },
+      )
+    }
+    if (!initialization.status || !initialization.data?.authorization_url) {
+      console.error('[customer-plans] Paystack returned an incomplete initialization response', { reference })
+      return data(
+        { ok: false, message: 'Paystack is still processing this payment request. Wait for confirmation before trying again.' },
+        { status: 502, headers },
+      )
+    }
+    await saveSubscriptionPaymentAuthorizationUrl(
+      userData.user.id,
+      reference,
+      initialization.data.authorization_url,
+    )
+    return data({ ok: true, authorizationUrl: initialization.data.authorization_url }, { headers })
+  } catch (error) {
+    console.error('[customer-plans] Paystack initialization failed', error)
     return data(
-      { ok: false, message: initialization.message ?? 'Paystack could not start this subscription payment.' },
+      { ok: false, message: 'Paystack could not confirm the checkout request. Wait for payment status before trying again.' },
       { status: 502, headers },
     )
-  return data({ ok: true, authorizationUrl: initialization.data.authorization_url }, { headers })
+  }
 }
 
 function formatPrice(price: number) {
@@ -204,11 +383,14 @@ export default function Plans() {
     !(plansRequestObserved && plansFetcher.state === 'idle' && !plansFetcher.data)
   const {
     activePlan,
+    subscriptionStartDate,
     subscriptionEndDate,
+    scheduledSubscription,
     subscriptionAvailableUnits,
     subscriptionBorrowedUnits,
     subscriptionNextBalanceAfterCredit,
     isDataLoading,
+    retryDataLoad,
   } = useCustomerStore()
   const fetcher = useFetcher<typeof action>()
   const { revalidate } = useRevalidator()
@@ -232,6 +414,8 @@ export default function Plans() {
   )
   const [isPaymentChoiceDismissed, setIsPaymentChoiceDismissed] = useState(false)
   const [latestPaymentRequestId, setLatestPaymentRequestId] = useState<string | null>(null)
+  const paymentReturnStartDate = useRef<string | null | undefined>(undefined)
+  const paymentReturnAttempts = useRef(0)
   const displayedBillingPeriod =
     availablePlans.length > 0 && !availablePlans.some((plan) => plan.billingPeriod === billingPeriod)
       ? availablePlans.some((plan) => plan.billingPeriod === 'semester')
@@ -252,30 +436,46 @@ export default function Plans() {
         featured: false,
       }
     : null
+  const hasOpenEndedCurrentSubscription = Boolean(activePlan && !subscriptionEndDate)
   const displayedAvailableUnits = Math.max(0, subscriptionAvailableUnits ?? 0)
   const planBalancePercent = currentPlan ? Math.min(100, Math.round((displayedAvailableUnits / currentPlan.weeklyLimit) * 100)) : 0
 
   useEffect(() => {
-    if (!new URLSearchParams(location.search).has('payment')) return
-    if (activePlan) {
+    if (!new URLSearchParams(location.search).has('payment')) {
+      paymentReturnStartDate.current = undefined
+      paymentReturnAttempts.current = 0
+      return
+    }
+    if (isDataLoading) return
+    if (paymentReturnStartDate.current === undefined) {
+      paymentReturnStartDate.current = subscriptionStartDate
+      paymentReturnAttempts.current = 0
+    }
+    const returnedSubscription =
+      scheduledSubscription ||
+      (paymentReturnStartDate.current === null && activePlan) ||
+      (paymentReturnStartDate.current !== null && subscriptionStartDate !== paymentReturnStartDate.current)
+    if (returnedSubscription) {
       window.history.replaceState(null, '', '/plans')
+      paymentReturnStartDate.current = undefined
+      paymentReturnAttempts.current = 0
       return
     }
 
-    let attempts = 0
     const refreshTimer = window.setInterval(() => {
-      attempts += 1
-      revalidate()
-      if (attempts >= 15) window.clearInterval(refreshTimer)
+      paymentReturnAttempts.current += 1
+      retryDataLoad()
+      if (paymentReturnAttempts.current >= 15) window.clearInterval(refreshTimer)
     }, 2000)
     return () => window.clearInterval(refreshTimer)
-  }, [activePlan, location.search, revalidate])
+  }, [activePlan, isDataLoading, location.search, retryDataLoad, scheduledSubscription, subscriptionStartDate])
 
   const isSubscribing = fetcher.state !== 'idle'
   const submittingIntent = isSubscribing ? String(fetcher.formData?.get('intent') ?? 'choose') : ''
   const submittingPlanId = isSubscribing ? String(fetcher.formData?.get('planId') ?? '') : ''
   useEffect(() => {
     if (fetcher.data?.ok && 'authorizationUrl' in fetcher.data && fetcher.data.authorizationUrl) {
+      if ('resumedCheckout' in fetcher.data && fetcher.data.resumedCheckout) toast.info('Resuming your pending subscription checkout.')
       window.location.assign(fetcher.data.authorizationUrl)
       return
     }
@@ -316,8 +516,28 @@ export default function Plans() {
     fetcher.data && 'amount' in fetcher.data && typeof fetcher.data.amount === 'number'
       ? fetcher.data.amount
       : (paymentChoicePlan?.price ?? 0)
-  const walletNoLongerEnough = Boolean(walletRetryRequired)
-
+  const choiceQuote = fetcher.data && isSubscriptionPurchaseQuote(fetcher.data) ? fetcher.data : null
+  const choiceExpectedTerms = choiceQuote
+    ? JSON.stringify({
+          planId: choiceQuote.planId,
+          planName: choiceQuote.planName,
+          planType: choiceQuote.planType,
+          amount: choiceQuote.amount,
+          startDate: choiceQuote.startDate,
+          endDate: choiceQuote.endDate,
+          scheduled: choiceQuote.scheduled,
+          weeklyLimit: choiceQuote.weeklyLimit,
+          coversWash: choiceQuote.coversWash,
+          coversIron: choiceQuote.coversIron,
+        })
+    : null
+  const choiceService = choiceQuote
+    ? choiceQuote.coversWash && choiceQuote.coversIron
+      ? 'Wash + Iron'
+      : choiceQuote.coversWash
+        ? 'Wash'
+        : 'Iron'
+    : null
   return (
     <div className="space-y-6 pb-8">
       {currentPlan && <PlanEndingBanner planName={`${currentPlan.name} ${currentPlan.billingPeriod}`} endDate={subscriptionEndDate} />}
@@ -364,6 +584,29 @@ export default function Plans() {
           >
             <div className="h-full rounded-full bg-[#55aaa3] transition-[width] duration-500" style={{ width: `${planBalancePercent}%` }} />
           </div>
+          {hasOpenEndedCurrentSubscription && (
+            <p className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+              This subscription has no end date, so it cannot be renewed in advance. Contact support to update its term.
+            </p>
+          )}
+          {subscriptionEndDate && !scheduledSubscription && (
+            <p className="mt-4 text-sm text-slate-600">
+              You can choose a renewal now. It will start the day after your current plan ends.
+            </p>
+          )}
+        </section>
+      )}
+
+      {scheduledSubscription && (
+        <section className="rounded-2xl border border-brand-border bg-brand-soft p-5">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-strong">Upcoming renewal</p>
+          <h3 className="mt-2 text-xl font-bold text-slate-900">{scheduledSubscription.name}</h3>
+          <p className="mt-1 text-sm capitalize text-slate-600">
+            {scheduledSubscription.billingPeriod} plan · {formatPrice(scheduledSubscription.price)}
+          </p>
+          <p className="mt-2 text-sm text-slate-600">
+            Starts {scheduledSubscription.startDate} and ends {scheduledSubscription.endDate}.
+          </p>
         </section>
       )}
 
@@ -417,6 +660,7 @@ export default function Plans() {
         ) : (
           visiblePlans.map((plan) => {
             const isCurrent = plan.id === activePlan?.id
+            const purchaseBlocked = Boolean(scheduledSubscription || hasOpenEndedCurrentSubscription)
             return (
               <article
                 key={plan.id}
@@ -447,21 +691,19 @@ export default function Plans() {
                 </div>
                 <button
                   type="button"
-                  disabled={Boolean(activePlan) || isSubscribing}
+                  disabled={purchaseBlocked || isSubscribing}
                   onClick={() => {
                     setIsPaymentChoiceDismissed(false)
                     const requestId = window.crypto.randomUUID()
                     setLatestPaymentRequestId(requestId)
                     fetcher.submit({ intent: 'choose', planId: plan.id, requestId }, { method: 'post' })
                   }}
-                  className={`mt-6 flex w-full items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold transition ${isCurrent ? 'cursor-default bg-[#eef9f7] text-[#418d87]' : activePlan ? 'cursor-not-allowed border border-slate-200 bg-slate-50 text-slate-400' : plan.featured ? 'bg-brand-strong text-white hover:bg-brand-strong-hover' : 'border border-brand-border bg-white text-brand-strong hover:bg-brand-soft'} ${isSubscribing && submittingPlanId !== plan.id ? 'opacity-50' : ''}`}
+                  className={`mt-6 flex w-full items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold transition ${purchaseBlocked ? 'cursor-not-allowed border border-slate-200 bg-slate-50 text-slate-400' : plan.featured ? 'bg-brand-strong text-white hover:bg-brand-strong-hover' : 'border border-brand-border bg-white text-brand-strong hover:bg-brand-soft'} ${isSubscribing && submittingPlanId !== plan.id ? 'opacity-50' : ''}`}
                 >
-                  {isCurrent ? (
-                    <>
-                      Current plan <Check className="h-4 w-4" />
-                    </>
-                  ) : activePlan ? (
-                    'Current subscription active'
+                  {scheduledSubscription ? (
+                    'Renewal already scheduled'
+                  ) : hasOpenEndedCurrentSubscription ? (
+                    'Contact support to renew'
                   ) : submittingPlanId === plan.id ? (
                     submittingIntent === 'paystack' ? (
                       'Opening secure checkout...'
@@ -471,9 +713,15 @@ export default function Plans() {
                       'Checking payment options...'
                     )
                   ) : (
-                    <>
-                      Choose plan <ChevronRight className="h-4 w-4" />
-                    </>
+                    activePlan ? (
+                      <>
+                        {isCurrent ? 'Renew this plan' : 'Choose renewal'} <ChevronRight className="h-4 w-4" />
+                      </>
+                    ) : (
+                      <>
+                        Choose plan <ChevronRight className="h-4 w-4" />
+                      </>
+                    )
                   )}
                 </button>
               </article>
@@ -494,22 +742,45 @@ export default function Plans() {
               Choose how to pay
             </h3>
             <div className="mt-6 rounded-2xl bg-slate-50 px-4 py-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{paymentChoicePlan.name}</p>
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                {choiceQuote?.planName ?? paymentChoicePlan.name}
+              </p>
               <p className="mt-1 text-2xl font-bold text-slate-900">{formatPrice(choicePlanAmount)}</p>
             </div>
-            {!walletNoLongerEnough && (
-              <p className="mt-3 text-xs text-slate-500">Wallet available: {formatPrice(choiceSpendableBalance)}</p>
+            {choiceQuote && (
+              <>
+                <p className="mt-3 text-sm capitalize text-slate-600">
+                  {choiceQuote.planType} plan · {choiceQuote.weeklyLimit} clothes per week · {choiceService}
+                </p>
+                <p className="mt-2 text-sm text-slate-600">
+                  {choiceQuote.scheduled ? 'Renewal starts' : 'Plan starts'} {choiceQuote.startDate} and ends {choiceQuote.endDate}.
+                </p>
+              </>
             )}
+            <p className="mt-3 text-xs text-slate-500">Wallet available: {formatPrice(choiceSpendableBalance)}</p>
             <div className="mt-6 grid gap-3">
-              {!walletNoLongerEnough && (
+              {choiceSpendableBalance >= choicePlanAmount && (
                 <button
                   type="button"
                   disabled={isSubscribing}
                   onClick={() => {
+                    if (!choiceExpectedTerms) {
+                      toast.error('The plan details need to be reloaded. Please choose the plan again.')
+                      return
+                    }
                     setIsPaymentChoiceDismissed(true)
                     const requestId = window.crypto.randomUUID()
                     setLatestPaymentRequestId(requestId)
-                    fetcher.submit({ intent: 'wallet', planId: paymentChoicePlan.id, requestId }, { method: 'post' })
+                    fetcher.submit(
+                      {
+                        intent: 'wallet',
+                        planId: paymentChoicePlan.id,
+                        requestId,
+                        expectedAmount: String(choicePlanAmount),
+                        expectedTerms: choiceExpectedTerms,
+                      },
+                      { method: 'post' },
+                    )
                   }}
                   className="flex min-h-14 items-center justify-center rounded-2xl bg-brand-strong px-5 py-3.5 text-sm font-semibold text-white shadow-[0_6px_16px_rgba(0,143,166,0.2)] transition duration-200 hover:-translate-y-0.5 hover:bg-brand-strong-hover hover:shadow-[0_9px_20px_rgba(0,143,166,0.24)] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-brand-focus/40 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
                 >
@@ -520,10 +791,23 @@ export default function Plans() {
                 type="button"
                 disabled={isSubscribing}
                 onClick={() => {
+                  if (!choiceExpectedTerms) {
+                    toast.error('The plan details need to be reloaded. Please choose the plan again.')
+                    return
+                  }
                   setIsPaymentChoiceDismissed(true)
                   const requestId = window.crypto.randomUUID()
                   setLatestPaymentRequestId(requestId)
-                  fetcher.submit({ intent: 'paystack', planId: paymentChoicePlan.id, requestId }, { method: 'post' })
+                  fetcher.submit(
+                    {
+                      intent: 'paystack',
+                      planId: paymentChoicePlan.id,
+                      requestId,
+                      expectedAmount: String(choicePlanAmount),
+                      expectedTerms: choiceExpectedTerms,
+                    },
+                    { method: 'post' },
+                  )
                 }}
                 className="flex min-h-14 items-center justify-center rounded-2xl border border-slate-200 bg-white px-5 py-3.5 text-sm font-semibold text-slate-700 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-brand-border hover:bg-brand-soft hover:text-brand-strong hover:shadow-md focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-brand-focus/40 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
               >

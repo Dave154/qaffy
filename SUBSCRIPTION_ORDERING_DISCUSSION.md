@@ -137,3 +137,13 @@ Example: a customer has 5 weighted units remaining and a vendor-confirmed order 
 - Current modified vendor files `src/portals/vendor/pages/Home.tsx` and `src/portals/vendor/pages/Orders.tsx` include hiding customer-entered counts and starting vendor counts blank. Preserve these changes during future conflict resolution.
 
 Before release, confirm which environment the linked database represents and complete the subscription workflow smoke tests. No remote migration was applied by this coding session.
+
+## Prepaid Renewal Handoff (2026-11-15)
+
+- Customers may pay for one renewal while their current subscription is active. The renewal is scheduled to start the day after the current end date; an open-ended current subscription blocks advance purchase.
+- Paystack checkout saves its authorization URL plus a validated price, date, service-coverage, and weekly-limit quote before redirecting. Customers can resume an abandoned checkout; an ambiguous initialization is reconciled server-side before retry. The signed webhook activates from the saved quote, so later plan or semester-setting edits cannot change the purchase. Wallet purchases use the same term and snapshot rules.
+- Scheduled plans do not grant allowance before their start date. At the start date, the queued-renewal reservation is released so a customer can buy the next renewal even before cron runs; customer and order entitlement lookups already recognize the due plan as effective.
+- `/api/notifications/subscriptions` now transitions due renewals to active, ends expired and missed renewals, and sends a start notification. The job remains protected by `CRON_SECRET`.
+- Every new subscription requires an end date. Monthly end dates are calculated from the start date; semester creation or purchase fails until a valid configured semester end date is available.
+- Apply `supabase/migrations/20261115210000_scheduled_subscription_status.sql`, then `20261115220000_scheduled_subscription_renewals.sql`, then `20261115230000_subscription_checkout_recovery.sql`. Reconcile pre-existing pending subscription checkouts before rollout; legacy pending checkouts without a saved Paystack URL are not automatically replaced. Do not apply migrations until the linked Supabase project is confirmed.
+- Focused date/allowance tests and TypeScript typecheck pass. Full build/test validation and live workflow smoke tests are still required; no migration has been applied remotely.

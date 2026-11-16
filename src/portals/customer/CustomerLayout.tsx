@@ -82,6 +82,17 @@ function getServerNetworkStatus() {
   return true
 }
 
+function getLagosCalendarDate(value = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Lagos',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(value)
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value ?? ''
+  return `${part('year')}-${part('month')}-${part('day')}`
+}
+
 async function loadCustomerLayoutData(request: Request) {
   if (!isSupabaseServerConfigured) return null
 
@@ -116,6 +127,7 @@ async function loadCustomerLayoutData(request: Request) {
       ? requestedScope
       : 'full'
     : getCustomerDataScope(requestUrl.pathname)
+  const todayInLagos = getLagosCalendarDate()
 
   const loadCustomerData = async (scope: 'summary' | 'overview' | 'orders' | 'invoice' | 'transactions' | 'full') => {
     const isSummaryScope = scope === 'summary'
@@ -537,7 +549,8 @@ async function loadCustomerLayoutData(request: Request) {
       { data: wallet },
       { data: walletTransactions },
       { data: payments, error: paymentsError },
-      { data: subscription },
+      { data: subscription, error: subscriptionError },
+      { data: scheduledSubscription, error: scheduledSubscriptionError },
     ] = await Promise.all([
       serverSupabase
         .from('notification_events')
@@ -608,15 +621,30 @@ async function loadCustomerLayoutData(request: Request) {
       serverSupabase
         .from('subscriptions')
         .select(
-          'id, customer_id, plan_id, start_date, end_date, weekly_limit_snapshot, covers_wash_snapshot, covers_iron_snapshot, created_at',
+          'id, customer_id, plan_id, status, start_date, end_date, weekly_limit_snapshot, covers_wash_snapshot, covers_iron_snapshot, price_snapshot, is_queued_renewal, created_at',
         )
         .eq('customer_id', userData.user.id)
-        .eq('status', 'active')
-        .or(`end_date.is.null,end_date.gte.${new Date().toISOString().slice(0, 10)}`)
-        .order('created_at', { ascending: false })
+        .in('status', ['active', 'scheduled'])
+        .lte('start_date', todayInLagos)
+        .or(`end_date.is.null,end_date.gte.${todayInLagos}`)
+        .order('start_date', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      serverSupabase
+        .from('subscriptions')
+        .select(
+          'id, customer_id, plan_id, status, start_date, end_date, weekly_limit_snapshot, covers_wash_snapshot, covers_iron_snapshot, price_snapshot, created_at',
+        )
+        .eq('customer_id', userData.user.id)
+        .eq('status', 'scheduled')
+        .eq('is_queued_renewal', true)
+        .gt('start_date', todayInLagos)
+        .order('start_date', { ascending: true })
         .limit(1)
         .maybeSingle(),
     ])
+    if (subscriptionError) throw new Error(`Customer subscription query failed: ${subscriptionError.message}`)
+    if (scheduledSubscriptionError) throw new Error(`Scheduled subscription query failed: ${scheduledSubscriptionError.message}`)
     if (isOrdersScope) {
       if (ordersError) throw new Error(`Customer orders query failed: ${ordersError.message}`)
       if (!orders) throw new Error('Customer orders query returned no result.')
@@ -652,7 +680,8 @@ async function loadCustomerLayoutData(request: Request) {
     const [
       { data: orderItems },
       { data: invoiceRows, error: invoiceRowsError },
-      { data: subscriptionPlan },
+      { data: subscriptionPlan, error: subscriptionPlanError },
+      { data: scheduledSubscriptionPlan, error: scheduledSubscriptionPlanError },
       subscriptionUsageTotalsRows,
       subscriptionUsageOrders,
     ] = await Promise.all([
@@ -680,13 +709,24 @@ async function loadCustomerLayoutData(request: Request) {
       subscription
         ? serverSupabase
             .from('plans')
-            .select('id, name, type, weekly_limit, covers_wash, covers_iron')
+            .select('id, name, type, price, weekly_limit, covers_wash, covers_iron')
             .eq('id', subscription.plan_id)
             .maybeSingle()
-        : Promise.resolve({ data: null }),
+        : Promise.resolve({ data: null, error: null }),
+      scheduledSubscription
+        ? serverSupabase
+            .from('plans')
+            .select('id, name, type, price, weekly_limit, covers_wash, covers_iron')
+            .eq('id', scheduledSubscription.plan_id)
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
       subscriptionUsageTotalsQuery,
       subscriptionUsageOrdersQuery,
     ])
+    if (subscriptionPlanError) throw new Error(`Customer subscription plan query failed: ${subscriptionPlanError.message}`)
+    if (scheduledSubscriptionPlanError) {
+      throw new Error(`Scheduled subscription plan query failed: ${scheduledSubscriptionPlanError.message}`)
+    }
 
     const categoryIds = [...new Set((orderItems ?? []).map((item) => item.category_id))]
     const customerInvoiceOrderIds = (invoiceRows ?? []).map((invoice) => invoice.order_id)
@@ -740,9 +780,20 @@ async function loadCustomerLayoutData(request: Request) {
       subscription && subscriptionPlan
         ? {
             ...subscriptionPlan,
+            price: Number(subscription.price_snapshot ?? subscriptionPlan.price),
             weekly_limit: subscription.weekly_limit_snapshot,
             covers_wash: subscription.covers_wash_snapshot,
             covers_iron: subscription.covers_iron_snapshot,
+          }
+        : null
+    const scheduledSubscriptionPlanSnapshot =
+      scheduledSubscription && scheduledSubscriptionPlan
+        ? {
+            ...scheduledSubscriptionPlan,
+            price: Number(scheduledSubscription.price_snapshot ?? scheduledSubscriptionPlan.price),
+            weekly_limit: scheduledSubscription.weekly_limit_snapshot,
+            covers_wash: scheduledSubscription.covers_wash_snapshot,
+            covers_iron: scheduledSubscription.covers_iron_snapshot,
           }
         : null
     const subscriptionAllowance =
@@ -798,6 +849,8 @@ async function loadCustomerLayoutData(request: Request) {
       unreadNotificationCount: unreadNotificationCount ?? 0,
       subscription,
       subscriptionPlan: subscriptionPlanSnapshot,
+      scheduledSubscription,
+      scheduledSubscriptionPlan: scheduledSubscriptionPlanSnapshot,
       overviewSummary: overviewSummaryRow
         ? {
             activeOrderCount: Number(overviewSummaryRow.active_order_count),
@@ -850,6 +903,8 @@ async function loadCustomerLayoutData(request: Request) {
         unreadNotificationCount: 0,
         subscription: null,
         subscriptionPlan: null,
+        scheduledSubscription: null,
+        scheduledSubscriptionPlan: null,
         overviewSummary: null,
         ordersPagination: null,
         invoicePagination: null,
@@ -898,6 +953,8 @@ async function loadCustomerLayoutData(request: Request) {
         unreadNotificationCount: 0,
         subscription: null,
         subscriptionPlan: null,
+        scheduledSubscription: null,
+        scheduledSubscriptionPlan: null,
         overviewSummary: null,
         ordersPagination: null,
         invoicePagination: null,
@@ -1241,6 +1298,14 @@ export default function CustomerLayout() {
       persistedSubscription={
         customerData?.subscription && customerData.subscriptionPlan
           ? { subscription: customerData.subscription as Subscription, plan: customerData.subscriptionPlan as Plan }
+          : null
+      }
+      persistedScheduledSubscription={
+        customerData?.scheduledSubscription && customerData.scheduledSubscriptionPlan
+          ? {
+              subscription: customerData.scheduledSubscription as Subscription,
+              plan: customerData.scheduledSubscriptionPlan as Plan,
+            }
           : null
       }
       isDataLoading={isCustomerDataLoading}

@@ -12,9 +12,17 @@ import {
   getAuthorizedSubscriptionBorrowUnits,
   getSubscriptionWeekStart,
 } from './subscription-week'
-import { addCalendarMonthsToDate, insertSubscriptionWithSnapshot, lockCustomerSubscription } from './subscriptions.server'
+import {
+  ensureNoPendingSubscriptionPayment,
+  insertSubscriptionWithSnapshot,
+  lockCustomerSubscription,
+  resolveSubscriptionPurchaseTerms,
+} from './subscriptions.server'
+import type { SubscriptionPurchaseQuote } from './subscription-terms'
+import { subscriptionPurchaseQuotesMatch } from './subscription-terms'
 import { calculateSubscriptionBilling } from './subscription-billing'
 import { isValidVendorReceivedItems } from './vendor-received-counts'
+import { getSavedSubscriptionTerms, getSubscriptionStartState } from './subscription-terms'
 
 class InsufficientBalanceError extends Error {
   constructor() {
@@ -559,9 +567,10 @@ export async function finalizeVendorOrder(
           select s.id, s.weekly_limit_snapshot as weekly_limit, s.start_date, s.end_date, s.created_at
           from subscriptions s
           where s.customer_id = ${order.customer_id}
-            and s.status = 'active'
-            and (s.end_date is null or s.end_date >= current_date)
-          order by s.created_at desc
+            and s.status in ('active', 'scheduled')
+            and s.start_date <= (now() at time zone 'Africa/Lagos')::date
+            and (s.end_date is null or s.end_date >= (now() at time zone 'Africa/Lagos')::date)
+          order by s.start_date desc, s.created_at desc
           limit 1
           for update of s
         `
@@ -974,71 +983,70 @@ export async function getSpendableWalletBalance(customerId: string) {
   return Number(wallet?.spendable_balance ?? 0)
 }
 
-export async function purchaseSubscriptionWithWallet(customerId: string, planId: string) {
+export async function purchaseSubscriptionWithWallet(
+  customerId: string,
+  planId: string,
+  expectedAmount?: number,
+  expectedTerms?: SubscriptionPurchaseQuote,
+) {
   const result = await sql.begin(async (tx) => {
     await lockCustomerSubscription(tx, customerId)
+    await ensureNoPendingSubscriptionPayment(tx, customerId)
     await tx`insert into wallets (customer_id) values (${customerId}) on conflict (customer_id) do nothing`
 
-    const [plan] = await tx`
-      select id, name, type, price, semester_end_date
-      from plans
-      where id = ${planId}
-        and active = true
-      for share
-    `
-    if (!plan) throw new Error('This plan is no longer available.')
-
-    const [existingSubscription] = await tx`
-      select id
-      from subscriptions
-      where customer_id = ${customerId}
-        and status = 'active'
-        and (end_date is null or end_date >= current_date)
-      limit 1
-      for update
-    `
-    if (existingSubscription) throw new Error('You already have an active subscription.')
-
-    const [settings] = await tx`
-      select semester_end_date from app_settings where key = 'semester' limit 1
-    `
-    const startDate = new Date()
-    const startDateValue = startDate.toISOString().slice(0, 10)
-    const endDate =
-      plan.type === 'semester'
-        ? (settings?.semester_end_date ??
-          plan.semester_end_date ??
-          addCalendarMonthsToDate(startDateValue, 6))
-        : addCalendarMonthsToDate(startDateValue, 1)
+    const terms = await resolveSubscriptionPurchaseTerms(tx, customerId, planId)
+    if (expectedTerms && !subscriptionPurchaseQuotesMatch(terms, expectedTerms))
+      throw new Error('SUBSCRIPTION_TERMS_CHANGED')
+    if (expectedAmount !== undefined && expectedAmount !== terms.amount) throw new Error('PLAN_PRICE_CHANGED')
     const subscription = await insertSubscriptionWithSnapshot(tx, {
       customerId,
-      planId: plan.id,
-      startDate: startDateValue,
-      endDate,
+      planId: terms.planId,
+      startDate: terms.startDate,
+      endDate: terms.endDate,
+      status: terms.scheduled ? 'scheduled' : 'active',
+      isQueuedRenewal: terms.scheduled,
+      priceSnapshot: terms.amount,
+      weeklyLimitSnapshot: terms.weeklyLimit,
+      coversWashSnapshot: terms.coversWash,
+      coversIronSnapshot: terms.coversIron,
     })
 
-    await debitWallet(tx, customerId, null, Number(plan.price), 'one_off', subscription.id)
+    await debitWallet(tx, customerId, null, terms.amount, 'one_off', subscription.id)
 
     return {
       subscriptionId: subscription.id,
-      planName: plan.name,
-      amount: Number(plan.price),
+      planName: terms.planName,
+      amount: terms.amount,
+      startDate: terms.startDate,
+      endDate: terms.endDate,
+      scheduled: terms.scheduled,
     }
   })
 
   await sendCustomerNotification({
-    eventKey: `subscription:${result.subscriptionId}:activated`,
+    eventKey: result.scheduled
+      ? `subscription:${result.subscriptionId}:scheduled`
+      : `subscription:${result.subscriptionId}:activated`,
     customerId,
-    notificationType: 'subscription_activated',
+    notificationType: result.scheduled ? 'subscription_renewal_scheduled' : 'subscription_activated',
     subscriptionId: result.subscriptionId,
     payload: {
-      title: 'Plan activated',
-      body: `Your ${result.planName} plan is now active.`,
-      details: [
-        `Plan: ${result.planName}`,
-        `Paid from wallet: ₦${result.amount.toLocaleString()}`,
-        'Your subscription benefits are now available.',
-      ],
+      title: result.scheduled ? 'Plan renewal scheduled' : 'Plan activated',
+      body: result.scheduled
+        ? `Your ${result.planName} renewal is scheduled to start on ${result.startDate}.`
+        : `Your ${result.planName} plan is now active.`,
+      details: result.scheduled
+        ? [
+            `Plan: ${result.planName}`,
+            `Paid from wallet: ₦${result.amount.toLocaleString()}`,
+            `Starts: ${result.startDate}`,
+            `Ends: ${result.endDate}`,
+          ]
+        : [
+            `Plan: ${result.planName}`,
+            `Paid from wallet: ₦${result.amount.toLocaleString()}`,
+            'Your subscription benefits are now available.',
+          ],
       url: '/plans',
       tag: `subscription:${result.subscriptionId}`,
     },
@@ -1052,44 +1060,82 @@ export async function activateSubscriptionFromPayment(customerId: string, paymen
   return sql.begin(async (tx) => {
     await lockCustomerSubscription(tx, customerId)
     const [payment] = await tx`
-      select p.id, p.plan_id, p.status, p.customer_id, pl.name, pl.type, pl.semester_end_date
+      select p.id, p.plan_id, p.status, p.customer_id, p.amount,
+        p.subscription_id, p.subscription_activation_processed_at,
+        p.subscription_start_date_snapshot, p.subscription_end_date_snapshot,
+        p.subscription_weekly_limit_snapshot, p.subscription_covers_wash_snapshot,
+        p.subscription_covers_iron_snapshot, plan.name as plan_name
       from payments p
-      join plans pl on pl.id = p.plan_id
+      join plans plan on plan.id = p.plan_id
       where p.reference = ${paymentReference}
         and p.customer_id = ${customerId}
         and p.plan_id is not null
-      for update of p
+      for update
     `
     if (!payment) throw new Error('Subscription payment was not found')
-    if (payment.status !== 'success') throw new Error('Subscription payment is not successful')
+    if (payment.subscription_activation_processed_at) return { alreadyActivated: true }
+    if (!['pending', 'success'].includes(payment.status)) throw new Error('Subscription payment is not successful')
 
-    const [existingSubscription] = await tx`
-      select id from subscriptions
-      where customer_id = ${customerId}
-        and status = 'active'
-        and (end_date is null or end_date >= current_date)
-      limit 1
-    `
-    if (existingSubscription) return { alreadyActivated: true }
+    const savedTerms = getSavedSubscriptionTerms({
+      startDate: payment.subscription_start_date_snapshot,
+      endDate: payment.subscription_end_date_snapshot,
+      weeklyLimit:
+        payment.subscription_weekly_limit_snapshot === null ? null : Number(payment.subscription_weekly_limit_snapshot),
+      coversWash: payment.subscription_covers_wash_snapshot,
+      coversIron: payment.subscription_covers_iron_snapshot,
+    })
+    let startDate: string
+    let endDate: string
+    let weeklyLimitSnapshot: number
+    let coversWashSnapshot: boolean
+    let coversIronSnapshot: boolean
+    if (savedTerms) {
+      startDate = savedTerms.startDate
+      endDate = savedTerms.endDate
+      weeklyLimitSnapshot = savedTerms.weeklyLimit
+      coversWashSnapshot = savedTerms.coversWash
+      coversIronSnapshot = savedTerms.coversIron
+    } else {
+      const legacyTerms = await resolveSubscriptionPurchaseTerms(tx, customerId, payment.plan_id, false)
+      startDate = legacyTerms.startDate
+      endDate = legacyTerms.endDate
+      weeklyLimitSnapshot = legacyTerms.weeklyLimit
+      coversWashSnapshot = legacyTerms.coversWash
+      coversIronSnapshot = legacyTerms.coversIron
+    }
 
-    const [settings] = await tx`
-      select semester_end_date from app_settings where key = 'semester' limit 1
-    `
-    const startDate = new Date()
-    const endDate =
-      payment.type === 'semester'
-        ? (settings?.semester_end_date ??
-          payment.semester_end_date ??
-          addCalendarMonthsToDate(startDate.toISOString().slice(0, 10), 6))
-        : addCalendarMonthsToDate(startDate.toISOString().slice(0, 10), 1)
+    const [clock] = await tx<{ today: string }[]>`select (now() at time zone 'Africa/Lagos')::date::text as today`
+    const startState = getSubscriptionStartState(startDate, clock.today)
 
     const subscription = await insertSubscriptionWithSnapshot(tx, {
       customerId,
       planId: payment.plan_id,
-      startDate: startDate.toISOString().slice(0, 10),
+      startDate,
       endDate,
+      status: startState.status,
+      isQueuedRenewal: startState.isQueuedRenewal,
+      priceSnapshot: Number(payment.amount),
+      weeklyLimitSnapshot,
+      coversWashSnapshot,
+      coversIronSnapshot,
     })
-    return { alreadyActivated: false, subscriptionId: subscription.id, planName: payment.name, endDate }
+    await tx`
+      update payments
+      set status = 'success',
+          succeeded_at = coalesce(succeeded_at, now()),
+          subscription_id = ${subscription.id},
+          subscription_activation_processed_at = now(),
+          subscription_checkout_state = 'completed'
+      where id = ${payment.id}
+    `
+    return {
+      alreadyActivated: false,
+      subscriptionId: subscription.id,
+      planName: String(payment.plan_name),
+      startDate,
+      endDate,
+      scheduled: startState.isQueuedRenewal,
+    }
   })
 }
 
