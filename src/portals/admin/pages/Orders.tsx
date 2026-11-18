@@ -81,6 +81,19 @@ type AdminOrder = {
     transfer_status: 'queued' | 'processing' | 'success' | 'failed' | 'reversed' | 'rejected' | null
   } | null
   mismatches: Array<{ id: string; details: unknown }>
+  handoff_events: Array<{
+    id: string
+    event_type: 'picked_up' | 'delivered'
+    created_at: string
+    actor_type: 'logistics' | 'admin' | 'unknown'
+    actor_name: string | null
+    actor_email: string | null
+  }>
+  vendor_claim: {
+    business_name: string
+    claimant_name: string | null
+    claimant_email: string | null
+  } | null
 }
 type BillingBreakdown = { coveredUnits: number; subscriberAmount: number; regularAmount: number }
 type SortColumn =
@@ -139,6 +152,7 @@ type OfflinePaymentOrderRow = {
 type OfflinePaymentSubscriptionRow = {
   id: string
   weekly_limit_snapshot: number
+  semester_weeks_snapshot: number | null
   covers_wash_snapshot: boolean
   covers_iron_snapshot: boolean
   start_date: string | Date
@@ -212,7 +226,7 @@ async function getOfflinePaymentCalculation(
   }
 
   const [subscription] = await tx<OfflinePaymentSubscriptionRow[]>`
-    select id, weekly_limit_snapshot, covers_wash_snapshot, covers_iron_snapshot, start_date, end_date, created_at
+    select id, weekly_limit_snapshot, semester_weeks_snapshot, covers_wash_snapshot, covers_iron_snapshot, start_date, end_date, created_at
     from subscriptions
     where customer_id = ${order.customer_id}
       and status = 'active'
@@ -296,6 +310,7 @@ async function getOfflinePaymentCalculation(
   const usedUnits = Number(usage?.used_units ?? 0)
   const allowanceInput = {
     weeklyLimit: Number(subscription.weekly_limit_snapshot),
+    semesterWeeks: subscription.semester_weeks_snapshot,
     startDate,
     startAt,
     endDate,
@@ -1429,6 +1444,62 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
           <Detail label="Created" value={formatDate(order.created_at)} />
           <Detail label="Location" value={order.location?.name ?? 'Location pending'} />
         </section>
+        <section className="mt-4 rounded-2xl border border-slate-200 p-4">
+          <h4 className="font-bold text-slate-900">Handoff and claim history</h4>
+          <div className="mt-3 grid gap-3 sm:grid-cols-3">
+            {([
+              ['picked_up', 'Pickup'],
+              ['delivered', 'Delivery'],
+            ] as const).map(([eventType, label]) => {
+              const events = order.handoff_events.filter((event) => event.event_type === eventType)
+              return (
+                <div key={eventType} className="rounded-xl bg-slate-50 p-3">
+                  <p className="text-xs font-semibold text-slate-500">{label}</p>
+                  {events.length > 0 ? (
+                    <div className="mt-2 space-y-3">
+                      {events.map((event) => (
+                        <div key={event.id}>
+                          <p className="text-sm font-semibold text-slate-900">
+                            {event.actor_type === 'logistics'
+                              ? 'Logistics handoff'
+                              : event.actor_type === 'admin'
+                                ? 'Admin override'
+                                : 'Source unavailable'}
+                          </p>
+                          {event.actor_type !== 'unknown' && (
+                            <p className="mt-0.5 break-words text-xs text-slate-600">
+                              {event.actor_name ?? event.actor_email ?? 'Name unavailable'}
+                              {event.actor_email && event.actor_name ? ` · ${event.actor_email}` : ''}
+                            </p>
+                          )}
+                          <p className="mt-1 text-xs text-slate-500">{formatDate(event.created_at)}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-sm text-slate-500">No event recorded</p>
+                  )}
+                </div>
+              )
+            })}
+            <div className="rounded-xl bg-slate-50 p-3">
+              <p className="text-xs font-semibold text-slate-500">Vendor claim</p>
+              {order.vendor_claim ? (
+                <>
+                  <p className="mt-2 break-words text-sm font-semibold text-slate-900">{order.vendor_claim.business_name}</p>
+                  <p className="mt-0.5 break-words text-xs text-slate-600">
+                    {order.vendor_claim.claimant_name ?? order.vendor_claim.claimant_email ?? 'Claimant name unavailable'}
+                    {order.vendor_claim.claimant_email && order.vendor_claim.claimant_name
+                      ? ` · ${order.vendor_claim.claimant_email}`
+                      : ''}
+                  </p>
+                </>
+              ) : (
+                <p className="mt-2 text-sm text-slate-500">Not claimed</p>
+              )}
+            </div>
+          </div>
+        </section>
         <section className="mt-4 grid gap-3 sm:grid-cols-2" aria-label="Order OTPs">
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Pickup OTP</p>
@@ -1943,9 +2014,12 @@ function OrdersPage({ pageData }: { pageData: OrdersData }) {
   const [draftEndDate, setDraftEndDate] = useState(endDate)
   const requestedOrderId = searchParams.get('orderId')
   const orderDetailsReturnPath = getOrderDetailsReturnPath(location.state)
-  const selectedOrder = requestedOrderId
-    ? (orders.find((order) => order.id === requestedOrderId) ?? (loadedSelectedOrder?.id === requestedOrderId ? loadedSelectedOrder : null))
-    : null
+  const selectedOrder =
+    requestedOrderId && loadedSelectedOrder?.id === requestedOrderId
+      ? loadedSelectedOrder
+      : requestedOrderId
+        ? (orders.find((order) => order.id === requestedOrderId) ?? null)
+        : null
   const isOnlyOrderSelectionNavigation =
     navigation.location?.pathname === '/admin/orders' &&
     location.pathname === '/admin/orders' &&

@@ -357,6 +357,7 @@ async function loadCustomerLayoutData(request: Request) {
             total_count: number
             active_count: number
             delivered_count: number
+            unpicked_order_count: number
           }[]
         >`
           with customer_orders as (
@@ -441,7 +442,8 @@ async function loadCustomerLayoutData(request: Request) {
             select
               count(*)::int as total_count,
               count(*) filter (where status <> 'delivered')::int as active_count,
-              count(*) filter (where status = 'delivered')::int as delivered_count
+              count(*) filter (where status = 'delivered')::int as delivered_count,
+              count(*) filter (where status = 'pending_pickup' and not picked)::int as unpicked_order_count
             from orders
             where customer_id = ${userData.user.id}
               and status <> 'cancelled'
@@ -468,7 +470,8 @@ async function loadCustomerLayoutData(request: Request) {
             page_info.page,
             all_counts.total_count,
             all_counts.active_count,
-            all_counts.delivered_count
+            all_counts.delivered_count,
+            all_counts.unpicked_order_count
           from counts, page_info, all_counts
         `
       : []
@@ -490,6 +493,7 @@ async function loadCustomerLayoutData(request: Request) {
       ? sql<
           {
             active_order_count: number
+            unpicked_order_count: number
             pending_payment_total: number
             has_pending_invoice_order: boolean
             mismatch_count: number
@@ -498,6 +502,9 @@ async function loadCustomerLayoutData(request: Request) {
         >`
           select
             count(*) filter (where order_row.status <> 'delivered')::int as active_order_count,
+            count(*) filter (
+              where order_row.status = 'pending_pickup' and not order_row.picked
+            )::int as unpicked_order_count,
             coalesce(sum(coalesce(invoice.amount, order_row.billed_extra_amount, 0)) filter (
               where (invoice.status is null or invoice.status = 'unpaid')
                 and order_row.status <> 'delivered'
@@ -621,7 +628,7 @@ async function loadCustomerLayoutData(request: Request) {
       serverSupabase
         .from('subscriptions')
         .select(
-          'id, customer_id, plan_id, status, start_date, end_date, weekly_limit_snapshot, covers_wash_snapshot, covers_iron_snapshot, price_snapshot, is_queued_renewal, created_at',
+          'id, customer_id, plan_id, status, start_date, end_date, weekly_limit_snapshot, semester_weeks_snapshot, covers_wash_snapshot, covers_iron_snapshot, price_snapshot, is_queued_renewal, created_at',
         )
         .eq('customer_id', userData.user.id)
         .in('status', ['active', 'scheduled'])
@@ -633,7 +640,7 @@ async function loadCustomerLayoutData(request: Request) {
       serverSupabase
         .from('subscriptions')
         .select(
-          'id, customer_id, plan_id, status, start_date, end_date, weekly_limit_snapshot, covers_wash_snapshot, covers_iron_snapshot, price_snapshot, created_at',
+          'id, customer_id, plan_id, status, start_date, end_date, weekly_limit_snapshot, semester_weeks_snapshot, covers_wash_snapshot, covers_iron_snapshot, price_snapshot, created_at',
         )
         .eq('customer_id', userData.user.id)
         .eq('status', 'scheduled')
@@ -801,6 +808,7 @@ async function loadCustomerLayoutData(request: Request) {
         ? calculateSubscriptionAllowance(
             {
               weeklyLimit: Number(subscription.weekly_limit_snapshot),
+              semesterWeeks: subscription.semester_weeks_snapshot,
               startDate: subscription.start_date,
               startAt: subscription.created_at,
               endDate: subscription.end_date,
@@ -854,6 +862,7 @@ async function loadCustomerLayoutData(request: Request) {
       overviewSummary: overviewSummaryRow
         ? {
             activeOrderCount: Number(overviewSummaryRow.active_order_count),
+        unpickedOrderCount: Number(overviewSummaryRow.unpicked_order_count),
             pendingPaymentTotal: Number(overviewSummaryRow.pending_payment_total),
             hasPendingInvoiceOrder: Boolean(overviewSummaryRow.has_pending_invoice_order),
             mismatchCount: Number(overviewSummaryRow.mismatch_count),
@@ -868,6 +877,7 @@ async function loadCustomerLayoutData(request: Request) {
             filteredCount: Number(orderPageSummary?.filtered_count ?? 0),
             activeCount: Number(orderPageSummary?.active_count ?? 0),
             deliveredCount: Number(orderPageSummary?.delivered_count ?? 0),
+            unpickedOrderCount: Number(orderPageSummary?.unpicked_order_count ?? 0),
             pageOrderIds: orderPageSummary?.page_order_ids ?? [],
           }
         : null,

@@ -10,9 +10,14 @@ import {
 import { CustomerStoreContext } from './customer-store-context'
 import type { Invoice, Order, Payment, Plan, Subscription, Wallet, WalletTransaction } from '../../types/database.types'
 
+export const CUSTOMER_MAX_UNPICKED_ORDERS = 1
+export const CUSTOMER_UNPICKED_ORDER_CAP_MESSAGE = `You've reached the limit of ${CUSTOMER_MAX_UNPICKED_ORDERS} order${CUSTOMER_MAX_UNPICKED_ORDERS === 1 ? '' : 's'} awaiting pickup. Edit or cancel an existing order before placing another.`
+
 export type OrderStatus =
   'Awaiting pickup' | 'Picked up' | 'In progress' | 'Pending payment' | 'Ready for delivery' | 'Delivered' | 'Cancelled'
 export type OrderLine = {
+  itemId?: string
+  categoryId?: string
   category: string
   service: string
   quantity: number
@@ -120,12 +125,14 @@ export type CustomerOrder = {
   paymentStatus: 'Paid' | 'Pending'
   isSubscriptionOrder: boolean
   pickupLocation: string
+  pickupLocationId?: string | null
   lines?: OrderLine[]
   mismatch: { id: string; direction: 'over' | 'under'; detail: string; lines: MismatchLine[] } | null
 }
 
 export type CustomerOverviewSummary = {
   activeOrderCount: number
+  unpickedOrderCount: number
   pendingPaymentTotal: number
   hasPendingInvoiceOrder: boolean
   mismatchCount: number
@@ -139,6 +146,7 @@ export type CustomerOrdersPagination = {
   filteredCount: number
   activeCount: number
   deliveredCount: number
+  unpickedOrderCount: number
   pageOrderIds: string[]
 }
 
@@ -187,6 +195,7 @@ export type CustomerStore = {
   preferredPickupLocationName: string | null
   pickupLocations: PickupLocationOption[]
   orders: CustomerOrder[]
+  unpickedOrderCount: number
   overviewSummary: CustomerOverviewSummary | null
   ordersPagination: CustomerOrdersPagination | null
   invoicePagination: CustomerInvoicePagination | null
@@ -197,6 +206,7 @@ export type CustomerStore = {
   isDataLoading: boolean
   dataLoadError: string | null
   retryDataLoad: () => void
+  removeOptimisticOrder: (orderId: string) => void
   invoice: CustomerInvoice | null
   invoices: CustomerInvoice[]
   topUpWallet: (amount: number) => Promise<void>
@@ -466,11 +476,14 @@ function mapDatabaseOrder(
     pickupLocation:
       pickupLocations.find((location) => location.id === order.pickup_location_id)?.name ??
       (order.pickup_location_id ? 'Pickup location pending' : 'Pickup location pending'),
+    pickupLocationId: order.pickup_location_id,
     lines: persistedItems
       .filter((item) => item.order_id === order.id)
       .map((item) => {
         const mismatchLine = mismatchLines.find((line) => line.itemId === item.id)
         return {
+          itemId: item.id,
+          categoryId: item.category_id,
           category: item.category_name,
           service: item.service === 'wash_iron' ? 'Wash + Iron' : item.service === 'iron' ? 'Iron' : 'Wash',
           quantity: item.confirmed_quantity ?? item.quantity,
@@ -612,6 +625,11 @@ export function CustomerStoreProvider({
     () => [...optimisticOrders.filter((order) => !persistedOrderIds.has(order.id)), ...persistedOrdersMapped],
     [optimisticOrders, persistedOrderIds, persistedOrdersMapped],
   )
+  const unpickedOrderCount = Math.max(
+    persistedOverviewSummary?.unpickedOrderCount ?? 0,
+    persistedOrdersPagination?.unpickedOrderCount ?? 0,
+    orders.filter((order) => order.status === 'Awaiting pickup' && !order.pickedUp).length,
+  )
   const walletSourceKey = `${persistedWallet?.updated_at ?? 'no-wallet'}:${persistedWallet?.one_off_balance ?? 0}:${persistedWallet?.subscription_balance ?? 0}`
   const [optimisticWallet, setOptimisticWallet] = useState<{
     source: string
@@ -699,6 +717,7 @@ export function CustomerStoreProvider({
       preferredPickupLocationName: preferredPickupLocation?.name ?? null,
       pickupLocations: persistedPickupLocations ?? [],
       orders,
+      unpickedOrderCount,
       overviewSummary: persistedOverviewSummary,
       ordersPagination: persistedOrdersPagination,
       invoicePagination: persistedInvoicePagination,
@@ -711,6 +730,9 @@ export function CustomerStoreProvider({
       isDataLoading,
       dataLoadError,
       retryDataLoad,
+      removeOptimisticOrder: (orderId) => {
+        setOptimisticOrders((currentOrders) => currentOrders.filter((order) => order.id !== orderId))
+      },
       invoice,
       invoices,
       topUpWallet: async (amount) => {
@@ -725,6 +747,9 @@ export function CustomerStoreProvider({
         toast.success(`₦${amount.toLocaleString()} added to your wallet.`)
       },
       addOrder: async ({ items, notes, pickupLocation, subscriptionBorrowConsentUnits }) => {
+        if (unpickedOrderCount >= CUSTOMER_MAX_UNPICKED_ORDERS) {
+          throw new Error(CUSTOMER_UNPICKED_ORDER_CAP_MESSAGE)
+        }
         if (getMixedServiceGroups(items).length > 0 && !hasMinimumMixedServiceInstructions(notes)) {
           throw new Error(`Mixed-service instructions must contain at least ${MIN_MIXED_SERVICE_INSTRUCTION_LENGTH} characters.`)
         }
@@ -756,6 +781,7 @@ export function CustomerStoreProvider({
           paymentStatus: 'Pending',
           isSubscriptionOrder: Boolean(persistedSubscription),
           pickupLocation,
+          pickupLocationId: persistedPickupLocations?.find((location) => location.name === pickupLocation)?.id ?? null,
           lines: items,
           mismatch: null,
         }
@@ -865,6 +891,7 @@ export function CustomerStoreProvider({
     persistedSubscriptionAllowance,
     persistedOverviewSummary,
     persistedOrdersPagination,
+    unpickedOrderCount,
     persistedInvoicePagination,
     persistedTransactionPagination,
     subscriptionAvailableUnits,

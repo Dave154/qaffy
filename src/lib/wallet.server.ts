@@ -545,26 +545,28 @@ export async function finalizeVendorOrder(
     let billingBreakdown: { coveredUnits: number; subscriberAmount: number; regularAmount: number } | null = null
     if (order.is_subscription_order) {
       let weeklyLimit: number
+      let semesterWeeks: number | null
       let startDate: string | null
       let startAt: string | null
       let endDate: string | null
       let coverage = { wash: true, iron: true }
       if (order.subscription_id) {
         const [snapshot] = await tx`
-          select weekly_limit_snapshot, covers_wash_snapshot, covers_iron_snapshot, start_date, end_date, created_at
+          select weekly_limit_snapshot, semester_weeks_snapshot, covers_wash_snapshot, covers_iron_snapshot, start_date, end_date, created_at
           from subscriptions
           where id = ${order.subscription_id} and customer_id = ${order.customer_id}
           for update
         `
         if (!snapshot) throw new Error('The subscription terms for this order could not be found')
         weeklyLimit = Number(snapshot.weekly_limit_snapshot)
+        semesterWeeks = snapshot.semester_weeks_snapshot === null ? null : Number(snapshot.semester_weeks_snapshot)
         coverage = { wash: Boolean(snapshot.covers_wash_snapshot), iron: Boolean(snapshot.covers_iron_snapshot) }
         startDate = toDateOnly(snapshot.start_date)
         startAt = snapshot.created_at instanceof Date ? snapshot.created_at.toISOString() : String(snapshot.created_at)
         endDate = snapshot.end_date ? toDateOnly(snapshot.end_date) : null
       } else {
         const [legacyPlan] = await tx`
-          select s.id, s.weekly_limit_snapshot as weekly_limit, s.start_date, s.end_date, s.created_at
+          select s.id, s.weekly_limit_snapshot as weekly_limit, s.semester_weeks_snapshot, s.start_date, s.end_date, s.created_at
           from subscriptions s
           where s.customer_id = ${order.customer_id}
             and s.status in ('active', 'scheduled')
@@ -575,6 +577,9 @@ export async function finalizeVendorOrder(
           for update of s
         `
         weeklyLimit = Number(legacyPlan?.weekly_limit ?? 0)
+        semesterWeeks = legacyPlan?.semester_weeks_snapshot === null || legacyPlan?.semester_weeks_snapshot === undefined
+          ? null
+          : Number(legacyPlan.semester_weeks_snapshot)
         appliedSubscriptionId = legacyPlan?.id ?? null
         startDate = legacyPlan ? toDateOnly(legacyPlan.start_date) : null
         startAt = legacyPlan
@@ -624,6 +629,7 @@ export async function finalizeVendorOrder(
         ? calculateSubscriptionAllowance(
             {
               weeklyLimit,
+              semesterWeeks,
               startDate,
               startAt,
               endDate,
@@ -1007,6 +1013,7 @@ export async function purchaseSubscriptionWithWallet(
       isQueuedRenewal: terms.scheduled,
       priceSnapshot: terms.amount,
       weeklyLimitSnapshot: terms.weeklyLimit,
+      semesterWeeksSnapshot: terms.semesterWeeks,
       coversWashSnapshot: terms.coversWash,
       coversIronSnapshot: terms.coversIron,
     })
@@ -1064,7 +1071,7 @@ export async function activateSubscriptionFromPayment(customerId: string, paymen
         p.subscription_id, p.subscription_activation_processed_at,
         p.subscription_start_date_snapshot, p.subscription_end_date_snapshot,
         p.subscription_weekly_limit_snapshot, p.subscription_covers_wash_snapshot,
-        p.subscription_covers_iron_snapshot, plan.name as plan_name
+        p.subscription_semester_weeks_snapshot, p.subscription_covers_iron_snapshot, plan.name as plan_name
       from payments p
       join plans plan on plan.id = p.plan_id
       where p.reference = ${paymentReference}
@@ -1081,18 +1088,22 @@ export async function activateSubscriptionFromPayment(customerId: string, paymen
       endDate: payment.subscription_end_date_snapshot,
       weeklyLimit:
         payment.subscription_weekly_limit_snapshot === null ? null : Number(payment.subscription_weekly_limit_snapshot),
+      semesterWeeks:
+        payment.subscription_semester_weeks_snapshot === null ? null : Number(payment.subscription_semester_weeks_snapshot),
       coversWash: payment.subscription_covers_wash_snapshot,
       coversIron: payment.subscription_covers_iron_snapshot,
     })
     let startDate: string
     let endDate: string
     let weeklyLimitSnapshot: number
+    let semesterWeeksSnapshot: number | null
     let coversWashSnapshot: boolean
     let coversIronSnapshot: boolean
     if (savedTerms) {
       startDate = savedTerms.startDate
       endDate = savedTerms.endDate
       weeklyLimitSnapshot = savedTerms.weeklyLimit
+      semesterWeeksSnapshot = savedTerms.semesterWeeks
       coversWashSnapshot = savedTerms.coversWash
       coversIronSnapshot = savedTerms.coversIron
     } else {
@@ -1100,6 +1111,7 @@ export async function activateSubscriptionFromPayment(customerId: string, paymen
       startDate = legacyTerms.startDate
       endDate = legacyTerms.endDate
       weeklyLimitSnapshot = legacyTerms.weeklyLimit
+      semesterWeeksSnapshot = legacyTerms.semesterWeeks
       coversWashSnapshot = legacyTerms.coversWash
       coversIronSnapshot = legacyTerms.coversIron
     }
@@ -1116,6 +1128,7 @@ export async function activateSubscriptionFromPayment(customerId: string, paymen
       isQueuedRenewal: startState.isQueuedRenewal,
       priceSnapshot: Number(payment.amount),
       weeklyLimitSnapshot,
+      semesterWeeksSnapshot,
       coversWashSnapshot,
       coversIronSnapshot,
     })

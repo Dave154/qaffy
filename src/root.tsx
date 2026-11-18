@@ -61,7 +61,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       </head>
       <body>
         {children}
-        <Toaster position="top-right" richColors closeButton />
+        <Toaster position="top-right" richColors closeButton toastOptions={{ className: 'qaffy-toast' }} />
         <ScrollRestoration />
         <Scripts />
       </body>
@@ -76,9 +76,10 @@ export default function App() {
     initializePwaInstall()
   }, [])
 
-  const isAdminTableUpdate =
-    (location.pathname === '/admin/users' && navigation.location?.pathname === '/admin/users') ||
-    (location.pathname === '/admin/orders' && navigation.location?.pathname === '/admin/orders')
+  const isInPageTableUpdate =
+    ['/admin/users', '/admin/orders', '/admin/mismatches', '/logistics', '/vendor', '/vendor/orders'].some(
+      (pathname) => location.pathname === pathname && navigation.location?.pathname === pathname,
+    )
   const isAdminRouteTransition =
     navigation.state !== 'idle' &&
     navigation.location?.pathname.startsWith('/admin') &&
@@ -88,7 +89,7 @@ export default function App() {
     <>
       <Outlet />
       <RouteLoadingScreen
-        watchNavigation={!isAdminTableUpdate}
+        watchNavigation={!isInPageTableUpdate}
         maxDurationMs={isAdminRouteTransition ? 650 : undefined}
       />
     </>

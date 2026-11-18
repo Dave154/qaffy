@@ -3,6 +3,7 @@ import { data, useFetcher, useLoaderData, useNavigation } from 'react-router'
 import { useEffect, useState } from 'react'
 import type { Route } from './+types/Plans'
 import { requireRole } from '../../../lib/auth.server'
+import { DEFAULT_SEMESTER_WEEKS, isValidSemesterWeeks } from '../../../lib/subscription-terms'
 import type { PlanType } from '../../../types/database.types'
 
 type PlanRow = {
@@ -16,8 +17,35 @@ type PlanRow = {
   createdAt: string
 }
 
-type SemesterSettings = { semesterStartDate: string | null; semesterEndDate: string | null }
-type PlansData = { plans: PlanRow[]; semesterSettings: SemesterSettings }
+type SemesterSettings = { semesterStartDate: string | null; semesterEndDate: string | null; semesterWeeks: number | null }
+type PlansData = { plans: PlanRow[]; semesterSettings: SemesterSettings; loadError: string | null }
+type AdminSupabase = NonNullable<Awaited<ReturnType<typeof requireRole>>>['supabase']
+
+async function validateSemesterPlanConfiguration(supabase: AdminSupabase, weeklyLimit: number) {
+  const { data, error } = await supabase
+    .from('app_settings' as any)
+    .select('semester_start_date, semester_end_date, semester_weeks')
+    .eq('key', 'semester')
+    .maybeSingle()
+  if (error) return 'Semester settings could not be verified. Please try again.'
+  const settings = data as unknown as {
+    semester_start_date: string | null
+    semester_end_date: string | null
+    semester_weeks: number | null
+  } | null
+  if (
+    !settings?.semester_start_date ||
+    !settings.semester_end_date ||
+    new Date(settings.semester_end_date) <= new Date(settings.semester_start_date) ||
+    !isValidSemesterWeeks(settings.semester_weeks)
+  ) {
+    return 'Set valid semester start and end dates and the number of semester weeks before creating a semester plan.'
+  }
+  if (!Number.isSafeInteger(weeklyLimit * settings.semester_weeks)) {
+    return 'The semester allowance exceeds the supported unit limit. Update the semester weeks or plan weekly limit.'
+  }
+  return null
+}
 
 function getServiceCoverage(coversWash: boolean, coversIron: boolean): PlanRow['serviceCoverage'] {
   if (coversWash && coversIron) return 'both'
@@ -34,7 +62,15 @@ function formatDate(value: string | null) {
 // eslint-disable-next-line react-refresh/only-export-components
 export async function loader({ request }: Route.LoaderArgs) {
   const auth = await requireRole(request, 'admin')
-  if (!auth) return data<PlansData>({ plans: [], semesterSettings: { semesterStartDate: null, semesterEndDate: null } }, { status: 200 })
+  if (!auth)
+    return data<PlansData>(
+      {
+        plans: [],
+        semesterSettings: { semesterStartDate: null, semesterEndDate: null, semesterWeeks: null },
+        loadError: null,
+      },
+      { status: 200 },
+    )
 
   const [{ data: rows, error }, settingsResult] = await Promise.all([
     auth.supabase
@@ -43,20 +79,24 @@ export async function loader({ request }: Route.LoaderArgs) {
       .order('created_at', { ascending: false }),
     auth.supabase
       .from('app_settings' as any)
-      .select('semester_start_date, semester_end_date')
+      .select('semester_start_date, semester_end_date, semester_weeks')
       .eq('key', 'semester')
       .maybeSingle() as unknown as Promise<{
-      data: { semester_start_date: string | null; semester_end_date: string | null } | null
+      data: { semester_start_date: string | null; semester_end_date: string | null; semester_weeks: number | null } | null
       error: { message: string } | null
     }>,
   ])
 
   const settings = settingsResult.data
 
-  if (error)
+  if (error || settingsResult.error)
     return data<PlansData>(
-      { plans: [], semesterSettings: { semesterStartDate: null, semesterEndDate: null } },
-      { headers: auth.headers, status: 200 },
+      {
+        plans: [],
+        semesterSettings: { semesterStartDate: null, semesterEndDate: null, semesterWeeks: null },
+        loadError: 'Plans and semester settings could not be loaded. Please try again.',
+      },
+      { headers: auth.headers, status: 500 },
     )
 
   return data<PlansData>(
@@ -74,7 +114,9 @@ export async function loader({ request }: Route.LoaderArgs) {
       semesterSettings: {
         semesterStartDate: settings?.semester_start_date ?? null,
         semesterEndDate: settings?.semester_end_date ?? null,
+        semesterWeeks: settings?.semester_weeks ?? null,
       },
+      loadError: null,
     },
     { headers: auth.headers, status: 200 },
   )
@@ -113,17 +155,22 @@ export async function action({ request }: Route.ActionArgs) {
   if (intent === 'update-semester-settings') {
     const semesterStartDate = String(formData.get('semesterStartDate') ?? '').trim() || null
     const semesterEndDate = String(formData.get('semesterEndDate') ?? '').trim() || null
+    const rawSemesterWeeks = String(formData.get('semesterWeeks') ?? '').trim()
+    const semesterWeeks = rawSemesterWeeks ? Number(rawSemesterWeeks) : DEFAULT_SEMESTER_WEEKS
 
     if (!semesterStartDate || !semesterEndDate)
       return data({ error: 'Semester settings require both a start and end date.' }, { headers, status: 400 })
     if (new Date(semesterEndDate) <= new Date(semesterStartDate))
       return data({ error: 'Semester end date must be later than the start date.' }, { headers, status: 400 })
+    if (!isValidSemesterWeeks(semesterWeeks))
+      return data({ error: 'Enter a positive whole number of weeks for the semester.' }, { headers, status: 400 })
 
     const { error } = await supabase.from('app_settings' as any).upsert(
       {
         key: 'semester',
         semester_start_date: semesterStartDate,
         semester_end_date: semesterEndDate,
+        semester_weeks: semesterWeeks,
         updated_at: new Date().toISOString(),
       },
       { onConflict: 'key' },
@@ -147,10 +194,15 @@ export async function action({ request }: Route.ActionArgs) {
       !['wash', 'iron', 'both'].includes(rawCoverage) ||
       !Number.isFinite(price) ||
       price <= 0 ||
-      !Number.isFinite(weeklyLimit) ||
-      weeklyLimit <= 0
+      !Number.isSafeInteger(weeklyLimit) ||
+      weeklyLimit <= 0 ||
+      weeklyLimit > 2_147_483_647
     ) {
       return data({ error: 'Enter a plan name, valid type, positive price, and positive weekly limit.' }, { headers, status: 400 })
+    }
+    if (rawType === 'semester') {
+      const configError = await validateSemesterPlanConfiguration(supabase, weeklyLimit)
+      if (configError) return data({ error: configError }, { headers, status: 400 })
     }
     const { error } = await supabase
       .from('plans')
@@ -178,7 +230,12 @@ export async function action({ request }: Route.ActionArgs) {
   if (!['monthly', 'semester'].includes(rawType)) return data({ error: 'Invalid plan type.' }, { headers, status: 400 })
   if (!['wash', 'iron', 'both'].includes(rawCoverage)) return data({ error: 'Choose valid service coverage.' }, { headers, status: 400 })
   if (price <= 0) return data({ error: 'Plan price must be greater than zero.' }, { headers, status: 400 })
-  if (weeklyLimit <= 0) return data({ error: 'Weekly limit must be greater than zero.' }, { headers, status: 400 })
+  if (!Number.isSafeInteger(weeklyLimit) || weeklyLimit <= 0 || weeklyLimit > 2_147_483_647)
+    return data({ error: 'Weekly limit must be a positive whole number.' }, { headers, status: 400 })
+  if (validatedType === 'semester') {
+    const configError = await validateSemesterPlanConfiguration(supabase, weeklyLimit)
+    if (configError) return data({ error: configError }, { headers, status: 400 })
+  }
 
   const { error } = await supabase.from('plans').insert({
     name,
@@ -195,7 +252,7 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function Plans() {
-  const { plans, semesterSettings } = useLoaderData<typeof loader>()
+  const { plans, semesterSettings, loadError } = useLoaderData<typeof loader>()
   const fetcher = useFetcher<typeof action>()
   const navigation = useNavigation()
   const [planType, setPlanType] = useState<'monthly' | 'semester'>('monthly')
@@ -226,6 +283,14 @@ export default function Plans() {
   const handleSemesterChange = (field: 'semesterStartDate' | 'semesterEndDate', value: string) => {
     setSemesterConfig((current) => ({ ...current, [field]: value || null }))
   }
+  const handleSemesterWeeksChange = (value: string) => {
+    setSemesterConfig((current) => ({ ...current, semesterWeeks: value === '' ? null : Number(value) }))
+  }
+  const handleSemesterWeeksBlur = () => {
+    setSemesterConfig((current) =>
+      current.semesterWeeks === null ? { ...current, semesterWeeks: DEFAULT_SEMESTER_WEEKS } : current,
+    )
+  }
   const pendingIntent = fetcher.state === 'idle' ? '' : String(fetcher.formData?.get('intent') ?? '')
   const isPending = (intent: string) => pendingIntent === intent
   const isTogglePending = (id: string) => isPending('toggle') && String(fetcher.formData?.get('id') ?? '') === id
@@ -233,6 +298,11 @@ export default function Plans() {
 
   return (
     <div className="space-y-6">
+      {loadError && (
+        <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+          {loadError}
+        </div>
+      )}
       {isPageLoading && (
         <div
           role="status"
@@ -336,7 +406,7 @@ export default function Plans() {
       <section className="rounded-2xl border border-brand-soft bg-[#f8fcfc] p-5 shadow-sm">
         <h3 className="text-lg font-bold text-slate-900">Semester settings</h3>
 
-        <fetcher.Form method="post" className="mt-4 grid gap-4 md:grid-cols-2">
+        <fetcher.Form method="post" className="mt-4 grid gap-4 md:grid-cols-3">
           <input type="hidden" name="intent" value="update-semester-settings" />
           <label className="min-w-0">
             <span className="mb-1.5 block text-xs font-semibold capitalize tracking-[0.14em] text-slate-500">Start date</span>
@@ -358,7 +428,24 @@ export default function Plans() {
               className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
             />
           </label>
-          <div className="md:col-span-2 flex justify-end">
+          <label className="min-w-0">
+            <span className="mb-1.5 block text-xs font-semibold capitalize tracking-[0.14em] text-slate-500">Weeks in semester</span>
+            <input
+              type="number"
+              min="1"
+              max="2147483647"
+              step="1"
+              name="semesterWeeks"
+              value={semesterConfig.semesterWeeks ?? ''}
+              onChange={(event) => handleSemesterWeeksChange(event.target.value)}
+              onBlur={handleSemesterWeeksBlur}
+              className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
+            />
+            <span className="mt-1 block text-xs text-slate-500">
+              Defaults to 17 weeks. Semester plans can earn up to their weekly limit multiplied by this number.
+            </span>
+          </label>
+          <div className="md:col-span-3 flex justify-end">
             <button
               type="submit"
               disabled={isPending('update-semester-settings')}

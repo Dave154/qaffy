@@ -527,6 +527,7 @@ export default function Plans() {
           endDate: choiceQuote.endDate,
           scheduled: choiceQuote.scheduled,
           weeklyLimit: choiceQuote.weeklyLimit,
+          semesterWeeks: choiceQuote.semesterWeeks,
           coversWash: choiceQuote.coversWash,
           coversIron: choiceQuote.coversIron,
         })
@@ -752,6 +753,11 @@ export default function Plans() {
                 <p className="mt-3 text-sm capitalize text-slate-600">
                   {choiceQuote.planType} plan · {choiceQuote.weeklyLimit} clothes per week · {choiceService}
                 </p>
+                {choiceQuote.semesterWeeks !== null && (
+                  <p className="mt-1 text-sm text-slate-600">
+                    Up to {choiceQuote.weeklyLimit * choiceQuote.semesterWeeks} allowance units across {choiceQuote.semesterWeeks} weeks.
+                  </p>
+                )}
                 <p className="mt-2 text-sm text-slate-600">
                   {choiceQuote.scheduled ? 'Renewal starts' : 'Plan starts'} {choiceQuote.startDate} and ends {choiceQuote.endDate}.
                 </p>

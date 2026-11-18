@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowRight, Check, ChevronRight, Clock3, PackageCheck, Search, Truck } from 'lucide-react'
-import { data, Link, useFetcher, useLocation, useNavigate, useOutletContext, useRevalidator } from 'react-router'
+import { ArrowRight, Check, ChevronRight, Clock3, LoaderCircle, PackageCheck, Search, Truck } from 'lucide-react'
+import { data, Link, useFetcher, useLocation, useNavigate, useNavigation, useOutletContext, useRevalidator } from 'react-router'
 import type { Route } from './+types/Home'
 import { sql } from '../../../lib/db.server'
 import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
@@ -8,6 +8,8 @@ import { requireRole } from '../../../lib/auth.server'
 import { finalizeVendorOrder } from '../../../lib/wallet.server'
 import { toast } from '../../../lib/toast'
 import { sendCustomerNotification, walletInvoicePaidNotification } from '../../../lib/notifications.server'
+import { MultiSortManager, SortColumnHeader } from '../../../components/admin/MultiSortControls'
+import type { MultiSortOption, MultiSortRule } from '../../../components/admin/MultiSortControls'
 import VendorOrderReviewDialog, {
   getInitialReceivedCounts,
   type VendorReviewAddedItem,
@@ -152,7 +154,6 @@ type VendorOrder = {
   customerEmail: string
   customerPhone: string
   collectedAt: string
-  createdAt: string
   orderType: 'wash' | 'wash_iron' | 'mixed'
   location: string
   status: 'Pending' | 'Processing' | 'Ready to dispatch' | 'Out for delivery' | 'Completed' | 'Cancelled'
@@ -253,8 +254,7 @@ function mapLoaderOrder(order: VendorLoaderOrder): VendorOrder {
     customerId: order.customer?.qaffy_id ?? order.customer_id,
     customerEmail: order.customer?.email ?? 'Not available',
     customerPhone: order.customer?.phone ?? 'Not available',
-    collectedAt: order.picked_up_date ? new Date(order.picked_up_date).toLocaleString() : new Date(order.created_at).toLocaleString(),
-    createdAt: new Date(order.created_at).toLocaleString(),
+    collectedAt: order.picked_up_date ? new Date(order.picked_up_date).toLocaleString() : 'Not recorded',
     orderType: order.order_type,
     location: order.location?.name ?? 'Pickup location pending',
     status: statusMap[order.status],
@@ -313,6 +313,46 @@ const statusStyles: Record<VendorOrder['status'], string> = {
 }
 
 const orderTypeLabels: Record<VendorOrder['orderType'], string> = { wash: 'Wash only', wash_iron: 'Wash + Iron', mixed: 'Mixed service' }
+type OverviewDateMode = 'all' | 'today' | 'this_week' | 'last_week' | 'this_month' | 'last_month' | 'custom'
+type OverviewSortColumn = 'pickup_date' | 'order_type' | 'customer' | 'customer_id' | 'location' | 'status'
+type OverviewSortRule = MultiSortRule<OverviewSortColumn>
+
+const overviewDateOptions: Array<{ value: OverviewDateMode; label: string }> = [
+  { value: 'all', label: 'All time' },
+  { value: 'today', label: 'Today' },
+  { value: 'this_week', label: 'This week' },
+  { value: 'last_week', label: 'Last week' },
+  { value: 'this_month', label: 'This month' },
+  { value: 'last_month', label: 'Last month' },
+  { value: 'custom', label: 'Custom' },
+]
+
+const overviewSortableColumns: MultiSortOption<OverviewSortColumn>[] = [
+  { value: 'pickup_date', label: 'Picked up date' },
+  { value: 'order_type', label: 'Order type' },
+  { value: 'customer', label: 'Customer' },
+  { value: 'customer_id', label: 'Customer ID' },
+  { value: 'location', label: 'Pickup location' },
+  { value: 'status', label: 'Status' },
+]
+
+function parseOverviewSortRules(value: string | null): OverviewSortRule[] {
+  if (!value) return []
+  const seen = new Set<OverviewSortColumn>()
+  return value.split(',').flatMap((rule): OverviewSortRule[] => {
+    const [column, direction] = rule.split(':')
+    if (
+      !overviewSortableColumns.some((option) => option.value === column) ||
+      (direction !== 'asc' && direction !== 'desc') ||
+      seen.has(column as OverviewSortColumn)
+    ) {
+      return []
+    }
+    seen.add(column as OverviewSortColumn)
+    return [{ column: column as OverviewSortColumn, direction }]
+  })
+}
+
 export default function Home() {
   const {
     orders: loadedOrders,
@@ -326,15 +366,29 @@ export default function Home() {
   const { revalidate } = useRevalidator()
   const location = useLocation()
   const navigate = useNavigate()
+  const navigation = useNavigation()
   const orders = loadedOrders.map(mapLoaderOrder)
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null)
   const [detailsDismissed, setDetailsDismissed] = useState(false)
   const [received, setReceived] = useState<Record<string, Record<string, number | undefined>>>({})
   const [addedItems, setAddedItems] = useState<VendorReviewAddedItem[]>([])
   const [notes, setNotes] = useState('')
-  const requestedDateRange = new URLSearchParams(location.search).get('range') ?? 'Today'
-  const dateRange = (['Today', 'This week', 'All time'].includes(requestedDateRange) ? requestedDateRange : 'Today') as
-    'Today' | 'This week' | 'All time'
+  const searchParams = new URLSearchParams(location.search)
+  const legacyRange = searchParams.get('range')
+  const legacyMode =
+    legacyRange === 'Today' ? 'today' : legacyRange === 'This week' ? 'this_week' : legacyRange === 'All time' ? 'all' : null
+  const requestedDateMode = searchParams.get('date') ?? legacyMode ?? 'today'
+  const dateMode: OverviewDateMode = overviewDateOptions.some((option) => option.value === requestedDateMode)
+    ? (requestedDateMode as OverviewDateMode)
+    : 'today'
+  const startDate = searchParams.get('from') ?? ''
+  const endDate = searchParams.get('to') ?? ''
+  const sortRules = searchParams.has('sort')
+    ? parseOverviewSortRules(searchParams.get('sort'))
+    : [{ column: 'pickup_date', direction: 'desc' } satisfies OverviewSortRule]
+  const [customRangeOpen, setCustomRangeOpen] = useState(false)
+  const [draftStartDate, setDraftStartDate] = useState(startDate)
+  const [draftEndDate, setDraftEndDate] = useState(endDate)
   const handledFetcherData = useRef<typeof fetcher.data>(null)
   const isClaimingOrder = (orderId: string) =>
     fetcher.state !== 'idle' && fetcher.formData?.get('intent') === 'claim' && fetcher.formData?.get('orderId') === orderId
@@ -384,21 +438,62 @@ export default function Home() {
 
   const visibleOrders = orders.filter((order) => overviewOrderIds?.includes(order.id))
   const attentionOrders = visibleOrders.filter((order) => order.orderStatus === 'picked_up')
-  const updateOverviewQuery = (updates: { range?: string; page?: number }) => {
-    const searchParams = new URLSearchParams(location.search)
-    if (updates.range !== undefined) {
-      searchParams.set('range', updates.range)
-      searchParams.delete('page')
+  const isLoadingOverview = navigation.state === 'loading' && navigation.location?.pathname === '/vendor'
+  const updateOverviewQuery = (updates: {
+    dateMode?: OverviewDateMode
+    from?: string
+    to?: string
+    sortRules?: OverviewSortRule[]
+    page?: number
+  }) => {
+    const nextSearchParams = new URLSearchParams(location.search)
+    if (updates.dateMode !== undefined) {
+      nextSearchParams.set('date', updates.dateMode)
+      nextSearchParams.delete('range')
+      if (updates.dateMode !== 'custom') {
+        nextSearchParams.delete('from')
+        nextSearchParams.delete('to')
+      }
+      nextSearchParams.delete('page')
+    }
+    if (updates.from !== undefined || updates.to !== undefined) {
+      nextSearchParams.set('date', 'custom')
+      nextSearchParams.delete('range')
+      if (updates.from) nextSearchParams.set('from', updates.from)
+      else nextSearchParams.delete('from')
+      if (updates.to) nextSearchParams.set('to', updates.to)
+      else nextSearchParams.delete('to')
+      nextSearchParams.delete('page')
+    }
+    if (updates.sortRules !== undefined) {
+      nextSearchParams.set('sort', updates.sortRules.map((rule) => `${rule.column}:${rule.direction}`).join(','))
+      nextSearchParams.delete('page')
     }
     if (updates.page !== undefined) {
-      if (updates.page <= 1) searchParams.delete('page')
-      else searchParams.set('page', String(updates.page))
+      if (updates.page <= 1) nextSearchParams.delete('page')
+      else nextSearchParams.set('page', String(updates.page))
     }
-    const query = searchParams.toString()
+    const query = nextSearchParams.toString()
     navigate(`${location.pathname}${query ? `?${query}` : ''}`, { replace: true })
   }
 
-  const summary = overviewMetrics?.[dateRange]
+  const changeColumnSort = (column: OverviewSortColumn, direction: OverviewSortRule['direction']) => {
+    const updatedRules = [{ column, direction }, ...sortRules.filter((rule) => rule.column !== column)]
+    updateOverviewQuery({ sortRules: updatedRules })
+  }
+  const renderSortHeader = (column: OverviewSortColumn, label: string) => {
+    const activeRule = sortRules.find((rule) => rule.column === column)
+    return (
+      <SortColumnHeader
+        label={label}
+        direction={activeRule?.direction ?? null}
+        onSort={(direction) => changeColumnSort(column, direction)}
+        fillWidth
+      />
+    )
+  }
+  const isValidCustomRange = Boolean(draftStartDate && draftEndDate && draftStartDate <= draftEndDate)
+  const summary = overviewMetrics?.[dateMode]
   const metrics = [
     {
       label: 'Pending',
@@ -486,23 +581,105 @@ export default function Home() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <label className="flex h-10 items-center gap-2 rounded-[8px] border border-[#dedede] bg-white px-3 text-sm text-slate-700">
-            <span className="font-medium">Date</span>
-            <select
-              value={dateRange}
-              onChange={(event) => updateOverviewQuery({ range: event.target.value })}
-              className="bg-transparent font-semibold outline-none"
-            >
-              <option>Today</option>
-              <option>This week</option>
-              <option>All time</option>
-            </select>
-          </label>
+          <div className="relative flex items-center gap-2">
+            <label className="flex h-10 items-center gap-2 rounded-[8px] border border-[#dedede] bg-white px-3 text-sm text-slate-700">
+              <span className="font-medium">Date</span>
+              <select
+                value={dateMode}
+                onChange={(event) => {
+                  const nextMode = event.target.value as OverviewDateMode
+                  if (nextMode === 'custom') {
+                    setDraftStartDate(startDate)
+                    setDraftEndDate(endDate)
+                    setCustomRangeOpen(true)
+                  } else {
+                    setCustomRangeOpen(false)
+                    updateOverviewQuery({ dateMode: nextMode })
+                  }
+                }}
+                className="bg-transparent font-semibold outline-none"
+              >
+                {overviewDateOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {dateMode === 'custom' && (
+              <button
+                type="button"
+                onClick={() => {
+                  setDraftStartDate(startDate)
+                  setDraftEndDate(endDate)
+                  setCustomRangeOpen(true)
+                }}
+                className="h-10 rounded-[8px] border border-[#dedede] bg-white px-3 text-sm font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary"
+              >
+                Edit dates
+              </button>
+            )}
+            {customRangeOpen && (
+              <div
+                role="dialog"
+                aria-label="Custom pickup date range"
+                className="absolute right-0 top-full z-30 mt-2 w-[min(90vw,360px)] rounded-xl border border-slate-200 bg-white p-4 shadow-xl"
+              >
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="space-y-1 text-xs font-medium text-slate-600">
+                    From
+                    <input
+                      type="date"
+                      value={draftStartDate}
+                      max={draftEndDate || undefined}
+                      onChange={(event) => setDraftStartDate(event.target.value)}
+                      className="h-10 w-full rounded-lg border border-slate-200 px-2 text-sm"
+                    />
+                  </label>
+                  <label className="space-y-1 text-xs font-medium text-slate-600">
+                    To
+                    <input
+                      type="date"
+                      value={draftEndDate}
+                      min={draftStartDate || undefined}
+                      onChange={(event) => setDraftEndDate(event.target.value)}
+                      className="h-10 w-full rounded-lg border border-slate-200 px-2 text-sm"
+                    />
+                  </label>
+                </div>
+                <div className="mt-4 flex items-center justify-between gap-3">
+                  <p className="text-xs text-slate-500">
+                    {draftStartDate && draftEndDate && !isValidCustomRange ? 'End date must be on or after start date.' : ''}
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setCustomRangeOpen(false)}
+                      className="h-9 rounded-lg border border-slate-200 px-3 text-xs font-semibold text-slate-600"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!isValidCustomRange}
+                      onClick={() => {
+                        updateOverviewQuery({ from: draftStartDate, to: draftEndDate })
+                        setCustomRangeOpen(false)
+                      }}
+                      className="h-9 rounded-lg bg-brand-primary px-3 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Apply
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
           <Link
             to="/vendor/orders?tab=unclaimed"
             className="inline-flex h-10 items-center gap-2 rounded-[8px] border border-[#dedede] bg-white px-3 text-sm font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary"
           >
-            View all orders <ArrowRight size={16} />
+            All orders <ArrowRight size={16} />
           </Link>
         </div>
       </section>
@@ -525,7 +702,8 @@ export default function Home() {
           <div>
             <h3 className="text-lg font-bold text-slate-900">Orders needing attention</h3>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <MultiSortManager columns={overviewSortableColumns} rules={sortRules} onApply={(rules) => updateOverviewQuery({ sortRules: rules })} />
             <div className="relative hidden sm:block">
               <Search size={15} className="absolute left-3 top-3 text-slate-400" />
               <span className="flex h-9 w-44 items-center rounded-[8px] border border-[#e1e1e1] pl-9 text-xs text-slate-400">
@@ -542,7 +720,12 @@ export default function Home() {
           </div>
         </div>
         <div className="space-y-3 p-4 md:hidden">
-          {attentionOrders.map((order) => (
+          {isLoadingOverview ? (
+            <div className="flex items-center justify-center gap-2 py-10 text-sm text-slate-500" role="status">
+              <LoaderCircle size={18} className="animate-spin text-brand-primary" />
+              Loading orders...
+            </div>
+          ) : attentionOrders.map((order) => (
             <article key={order.id} className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
@@ -579,34 +762,39 @@ export default function Home() {
               </div>
             </article>
           ))}
-          {attentionOrders.length === 0 && (
+          {!isLoadingOverview && attentionOrders.length === 0 && (
             <p className="py-8 text-center text-sm text-slate-500">
-              {dateRange === 'Today' ? 'No orders today.' : 'No orders in this date range.'}
+              {dateMode === 'today' ? 'No orders today.' : 'No orders in this date range.'}
             </p>
           )}
         </div>
         <div className="hidden overflow-x-auto p-4 md:block md:p-5">
-          <table className="w-full min-w-[1240px] table-fixed text-left">
+          <table className="w-full min-w-[1120px] table-fixed text-left">
             <thead>
               <tr className="border-b border-[#ededed] text-[10px] capitalize tracking-[0.16em] text-slate-400">
-                <th className="w-40 px-4 py-3 font-semibold">Picked up date</th>
-                <th className="w-40 px-4 py-3 font-semibold">Created at</th>
-                <th className="w-36 px-4 py-3 font-semibold">Order type</th>
-                <th className="w-56 px-4 py-3 font-semibold">Customer</th>
-                <th className="w-40 px-4 py-3 font-semibold">Customer ID</th>
-                <th className="w-40 px-4 py-3 font-semibold">Pickup location</th>
-                <th className="w-40 px-4 py-3 font-semibold">Status</th>
+                <th className="w-40 px-4 py-3 font-semibold">{renderSortHeader('pickup_date', 'Picked up date')}</th>
+                <th className="w-36 px-4 py-3 font-semibold">{renderSortHeader('order_type', 'Order type')}</th>
+                <th className="w-56 px-4 py-3 font-semibold">{renderSortHeader('customer', 'Customer')}</th>
+                <th className="w-40 px-4 py-3 font-semibold">{renderSortHeader('customer_id', 'Customer ID')}</th>
+                <th className="w-40 px-4 py-3 font-semibold">{renderSortHeader('location', 'Pickup location')}</th>
+                <th className="w-40 px-4 py-3 font-semibold">{renderSortHeader('status', 'Status')}</th>
                 <th className="w-32 px-4 py-3 text-right font-semibold">Action</th>
               </tr>
             </thead>
             <tbody>
-              {attentionOrders.map((order) => (
+              {isLoadingOverview ? (
+                <tr>
+                  <td colSpan={7} className="px-4 py-12">
+                    <div className="flex items-center justify-center gap-2 text-sm text-slate-500" role="status">
+                      <LoaderCircle size={18} className="animate-spin text-brand-primary" />
+                      Loading orders...
+                    </div>
+                  </td>
+                </tr>
+              ) : attentionOrders.map((order) => (
                 <tr key={order.id} className="border-b border-[#f0f0f0] last:border-0">
                   <td className="max-w-40 truncate whitespace-nowrap px-4 py-4 text-sm text-slate-500" title={order.collectedAt}>
                     {order.collectedAt}
-                  </td>
-                  <td className="max-w-40 truncate whitespace-nowrap px-4 py-4 text-sm text-slate-500" title={order.createdAt}>
-                    {order.createdAt}
                   </td>
                   <td
                     className="max-w-36 truncate whitespace-nowrap px-4 py-4 text-sm text-slate-600"
@@ -649,9 +837,9 @@ export default function Home() {
               ))}
             </tbody>
           </table>
-          {attentionOrders.length === 0 && (
+          {!isLoadingOverview && attentionOrders.length === 0 && (
             <p className="py-8 text-center text-sm text-slate-500">
-              {dateRange === 'Today' ? 'No orders today.' : 'No orders in this date range.'}
+              {dateMode === 'today' ? 'No orders today.' : 'No orders in this date range.'}
             </p>
           )}
         </div>
@@ -668,7 +856,7 @@ export default function Home() {
             <button
               type="button"
               onClick={() => updateOverviewQuery({ page: overviewPagination.page - 1 })}
-              disabled={overviewPagination.page <= 1}
+              disabled={overviewPagination.page <= 1 || isLoadingOverview}
               className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
               Previous
@@ -676,7 +864,7 @@ export default function Home() {
             <button
               type="button"
               onClick={() => updateOverviewQuery({ page: overviewPagination.page + 1 })}
-              disabled={overviewPagination.page >= overviewPagination.pageCount}
+              disabled={overviewPagination.page >= overviewPagination.pageCount || isLoadingOverview}
               className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
               Next

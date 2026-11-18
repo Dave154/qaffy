@@ -236,13 +236,78 @@ test('does not allow borrowing after the final scheduled credit or after plan ex
   assert.equal(afterExpiry.unitsAvailableForConfirmation, 0)
 })
 
-test('caps semester allowance at four credits per subscription month', () => {
+test('preserves the legacy four-credit monthly cap for semester subscriptions without a week snapshot', () => {
   const allowance = calculateSubscriptionAllowance(
     { weeklyLimit: 20, startDate: '2026-09-01', endDate: '2027-01-01', usedUnits: 0 },
     new Date('2027-01-01T12:00:00.000Z'),
   )
 
   assert.equal(allowance.accruedUnits, 320)
+})
+
+test('semester subscriptions accrue on Sundays across months up to their snapshotted week count', () => {
+  const allowance = calculateSubscriptionAllowance(
+    {
+      weeklyLimit: 20,
+      semesterWeeks: 17,
+      startDate: '2026-10-01',
+      startAt: '2026-10-01T10:00:00.000Z',
+      endDate: '2026-11-30',
+      usedUnits: 0,
+    },
+    new Date('2026-11-30T12:00:00.000Z'),
+  )
+
+  assert.equal(allowance.accruedUnits, 200)
+  assert.equal(allowance.nextCreditAt, null)
+})
+
+test('semester allowance never exceeds weekly limit multiplied by configured weeks', () => {
+  const allowance = calculateSubscriptionAllowance(
+    {
+      weeklyLimit: 20,
+      semesterWeeks: 17,
+      startDate: '2026-09-01',
+      startAt: '2026-09-01T10:00:00.000Z',
+      endDate: '2027-01-31',
+      usedUnits: 0,
+    },
+    new Date('2027-02-01T12:00:00.000Z'),
+  )
+
+  assert.equal(allowance.accruedUnits, 340)
+  assert.equal(allowance.balance, 340)
+  assert.equal(allowance.nextCreditAt, null)
+})
+
+test('semester borrowing advances a capped credit and cannot extend the total allowance', () => {
+  const beforeFinalCredit = calculateSubscriptionAllowance(
+    {
+      weeklyLimit: 20,
+      semesterWeeks: 2,
+      startDate: '2026-09-01',
+      endDate: '2026-09-30',
+      usedUnits: 20,
+    },
+    new Date('2026-09-02T12:00:00.000Z'),
+  )
+  const afterFinalCredit = calculateSubscriptionAllowance(
+    {
+      weeklyLimit: 20,
+      semesterWeeks: 2,
+      startDate: '2026-09-01',
+      endDate: '2026-09-30',
+      usedUnits: 40,
+    },
+    new Date('2026-09-13T12:00:00.000Z'),
+  )
+
+  assert.equal(beforeFinalCredit.borrowableUnits, 20)
+  assert.equal(beforeFinalCredit.unitsAvailableForConfirmation, 20)
+  assert.equal(afterFinalCredit.accruedUnits, 40)
+  assert.equal(afterFinalCredit.balance, 0)
+  assert.equal(afterFinalCredit.borrowableUnits, 0)
+  assert.equal(afterFinalCredit.nextCreditAt, null)
 })
 
 test('sums applied units only for the subscription and its legacy unlinked orders', () => {

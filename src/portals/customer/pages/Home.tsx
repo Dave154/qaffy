@@ -23,6 +23,7 @@ import CopyableOrderId from '../../../components/CopyableOrderId'
 import ProtectedOtp from '../../../components/ProtectedOtp'
 import DeliveryOtpPaywall from '../../../components/DeliveryOtpPaywall'
 import DeliveryOtpStatus from '../../../components/DeliveryOtpStatus'
+import { CUSTOMER_MAX_UNPICKED_ORDERS, CUSTOMER_UNPICKED_ORDER_CAP_MESSAGE } from '../customer-store'
 import { useCustomerStore } from '../customer-store-hook'
 import { ensurePushSubscription, getPushSubscription, savePushSubscription } from '../../../lib/push.client'
 import BubblyBackground from '../../../components/BubblyBackground'
@@ -107,6 +108,7 @@ export default function Home() {
     customerId,
     referralCode,
     orders,
+    unpickedOrderCount,
     invoices,
     overviewSummary,
     subscription,
@@ -398,7 +400,13 @@ export default function Home() {
             </button>
             <button
               type="button"
-              onClick={() => setIsOrderModalOpen(true)}
+              onClick={() => {
+                if (unpickedOrderCount >= CUSTOMER_MAX_UNPICKED_ORDERS) {
+                  toast.error(CUSTOMER_UNPICKED_ORDER_CAP_MESSAGE)
+                  return
+                }
+                setIsOrderModalOpen(true)
+              }}
               disabled={isDataLoading || Boolean(dataLoadError)}
               title={isDataLoading ? 'Loading account details' : undefined}
               className="flex-1 rounded-lg border border-brand-primary bg-white px-4 py-2.5 text-sm font-semibold text-brand-primary transition hover:bg-brand-soft"

@@ -86,7 +86,14 @@ function getSundayMidnightLagos(calendarDate: string) {
   return new Date(Date.UTC(year, month - 1, day) - 60 * 60 * 1000)
 }
 
-function getAllowanceCredits(startDate: string, startAt: string | null, endDate: string | null, reference: Date, weeklyLimit: number) {
+function getAllowanceCredits(
+  startDate: string,
+  startAt: string | null,
+  endDate: string | null,
+  reference: Date,
+  weeklyLimit: number,
+  semesterWeeks: number | null,
+) {
   const start = parseCalendarDate(startDate)
   const activationTime = startAt ? new Date(startAt) : getSundayMidnightLagos(startDate)
   const activationParts = getZonedDateTimeParts(activationTime)
@@ -105,8 +112,8 @@ function getAllowanceCredits(startDate: string, startAt: string | null, endDate:
     : null
   const endTime = endCalendarDate ? new Date(`${endCalendarDate}T23:59:59.999+01:00`) : null
   const generationLimit = endTime ?? new Date(reference.getTime() + subscriptionWeekMilliseconds)
-  let totalCreditLimit = Number.POSITIVE_INFINITY
-  if (endCalendarDate) {
+  let totalCreditLimit = semesterWeeks ?? Number.POSITIVE_INFINITY
+  if (semesterWeeks === null && endCalendarDate) {
     let planMonths = 0
     while (addSubscriptionMonth(startDate, planMonths) < endCalendarDate) planMonths += 1
     totalCreditLimit = planMonths * 4
@@ -139,7 +146,7 @@ function getAllowanceCredits(startDate: string, startAt: string | null, endDate:
 
     while (sundayDate >= addSubscriptionMonth(startDate, planMonthIndex + 1)) planMonthIndex += 1
     const creditsInMonth = creditsByPlanMonth.get(planMonthIndex) ?? 0
-    if (creditsInMonth < 4 && scheduledCredits.length < totalCreditLimit) {
+    if ((semesterWeeks !== null || creditsInMonth < 4) && scheduledCredits.length < totalCreditLimit) {
       scheduledCredits.push(getSundayMidnightLagos(sundayDate))
       creditsByPlanMonth.set(planMonthIndex, creditsInMonth + 1)
     }
@@ -153,12 +160,27 @@ function getAllowanceCredits(startDate: string, startAt: string | null, endDate:
 }
 
 export function calculateSubscriptionAllowance(
-  input: { weeklyLimit: number; startDate: string; startAt?: string | null; endDate: string | null; usedUnits: number },
+  input: {
+    weeklyLimit: number
+    startDate: string
+    startAt?: string | null
+    endDate: string | null
+    usedUnits: number
+    semesterWeeks?: number | null
+  },
   reference = new Date(),
 ): SubscriptionAllowance {
   const weeklyLimit = Math.max(0, Math.floor(input.weeklyLimit))
   const usedUnits = Math.max(0, Math.floor(input.usedUnits))
-  const { accruedUnits, nextCredit } = getAllowanceCredits(input.startDate, input.startAt ?? null, input.endDate, reference, weeklyLimit)
+  const semesterWeeks = input.semesterWeeks ?? null
+  const { accruedUnits, nextCredit } = getAllowanceCredits(
+    input.startDate,
+    input.startAt ?? null,
+    input.endDate,
+    reference,
+    weeklyLimit,
+    semesterWeeks,
+  )
   const balance = accruedUnits - usedUnits
   const nextWeekStart = new Date(getSubscriptionWeekStart(reference).getTime() + subscriptionWeekMilliseconds)
   const canBorrow = nextCredit !== null && nextCredit.getTime() <= nextWeekStart.getTime()
@@ -174,7 +196,14 @@ export function calculateSubscriptionAllowance(
 }
 
 export function calculateSubscriptionAllowanceThroughCurrentMonth(
-  input: { weeklyLimit: number; startDate: string; startAt?: string | null; endDate: string | null; usedUnits: number },
+  input: {
+    weeklyLimit: number
+    startDate: string
+    startAt?: string | null
+    endDate: string | null
+    usedUnits: number
+    semesterWeeks?: number | null
+  },
   reference = new Date(),
 ) {
   const localParts = getZonedDateTimeParts(reference)
@@ -199,6 +228,7 @@ export function calculateSubscriptionAllowanceThroughCurrentMonth(
     cappedEndDate,
     referenceAtEndOfAllowance,
     weeklyLimit,
+    input.semesterWeeks ?? null,
   )
 
   return {
