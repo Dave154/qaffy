@@ -232,7 +232,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
       ),
     supabase
       .from('subscriptions')
-      .select('id, plan_id, status, start_date, end_date, weekly_limit_snapshot, created_at')
+      .select('id, plan_id, status, start_date, end_date, weekly_limit_snapshot, semester_weeks_snapshot, created_at')
       .eq('customer_id', customerId)
       .in('status', ['active', 'scheduled'])
       .lte('start_date', today)
@@ -341,6 +341,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     ? calculateSubscriptionAllowance(
         {
           weeklyLimit: Number(activeSubscription.weekly_limit_snapshot),
+          semesterWeeks: activeSubscription.semester_weeks_snapshot,
           startDate: activeSubscription.start_date,
           startAt: activeSubscription.created_at,
           endDate: activeSubscription.end_date,

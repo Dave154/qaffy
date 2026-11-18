@@ -1,5 +1,6 @@
-import { data, useFetcher, useOutletContext, useRevalidator, useSearchParams } from 'react-router'
+import { data, Form, useFetcher, useNavigation, useOutletContext, useRevalidator, useSearchParams } from 'react-router'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { LoaderCircle } from 'lucide-react'
 import { waitUntil } from '@vercel/functions'
 import type { Route } from './+types/Home'
 import { sql } from '../../../lib/db.server'
@@ -282,7 +283,7 @@ export async function action({ request }: Route.ActionArgs) {
   return data({ ok: true, orderId: order.id, status: order.status, pickedUpDate: order.picked_up_date })
 }
 
-const filters = ['Today', 'Yesterday', 'Last week', 'Last month', 'All time'] as const
+const filters = ['Today', 'Yesterday', 'Last week', 'Last month', 'All time', 'Custom'] as const
 
 const presetLabels: Record<(typeof filters)[number], string> = {
   Today: 'Today',
@@ -290,6 +291,7 @@ const presetLabels: Record<(typeof filters)[number], string> = {
   'Last week': 'Last week',
   'Last month': 'Last month',
   'All time': 'All time',
+  Custom: 'Custom',
 }
 
 type HandoffQueueEntry = {
@@ -414,8 +416,10 @@ export default function Home() {
     historyPagination: { page: number; pageSize: number; totalCount: number; pageCount: number }
   }>()
   const lookupFetcher = useFetcher<typeof action>()
+  const navigation = useNavigation()
   const { revalidate } = useRevalidator()
   const [searchParams, setSearchParams] = useSearchParams()
+  const isUpdatingFilters = navigation.state === 'loading' && navigation.location?.pathname === '/logistics'
   const requestedRange = searchParams.get('range') ?? 'Today'
   const selectedRange = (
     filters.includes(requestedRange as (typeof filters)[number]) ? requestedRange : 'Today'
@@ -616,13 +620,20 @@ export default function Home() {
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-end gap-2">
-        <label className="flex min-w-0 items-center gap-1 rounded-full border border-[#e7e7e7] bg-white px-2 py-1.5 text-xs text-slate-700 shadow-sm sm:gap-2 sm:px-3 sm:py-2 sm:text-sm">
+      <div className="grid grid-cols-2 items-center gap-2 sm:flex sm:flex-wrap sm:justify-end">
+        <label className="flex w-full min-w-0 items-center justify-between gap-1 rounded-full border border-[#e7e7e7] bg-white px-2 py-1.5 text-xs text-slate-700 shadow-sm sm:w-auto sm:justify-start sm:gap-2 sm:px-3 sm:py-2 sm:text-sm">
           <span className="whitespace-nowrap font-medium">Activity</span>
           <select
             value={selectedRange}
-            onChange={(event) => updateFilters({ range: event.target.value === 'Today' ? null : event.target.value })}
-            className="min-w-0 rounded-full border border-slate-200 bg-transparent px-1.5 py-0.5 text-xs font-medium text-slate-700 outline-none focus:border-brand-primary sm:px-2 sm:py-1 sm:text-sm"
+            onChange={(event) => {
+              const nextRange = event.target.value as (typeof filters)[number]
+              updateFilters({
+                range: nextRange === 'Today' ? null : nextRange,
+                from: nextRange === 'Custom' ? searchParams.get('from') : null,
+                to: nextRange === 'Custom' ? searchParams.get('to') : null,
+              })
+            }}
+            className="min-w-0 flex-1 rounded-full border border-slate-200 bg-transparent px-1.5 py-0.5 text-xs font-medium text-slate-700 outline-none focus:border-brand-primary sm:flex-none sm:px-2 sm:py-1 sm:text-sm"
             aria-label="Activity date range"
           >
             {filters.map((filter) => (
@@ -631,14 +642,25 @@ export default function Home() {
               </option>
             ))}
           </select>
+          {isUpdatingFilters && (
+            <span
+              className="inline-flex shrink-0 items-center gap-1 text-[10px] text-slate-500 sm:text-xs"
+              role="status"
+              aria-live="polite"
+            >
+              <LoaderCircle size={13} className="animate-spin text-brand-primary" aria-hidden="true" />
+              <span className="hidden sm:inline">Updating…</span>
+              <span className="sr-only">Updating logistics results</span>
+            </span>
+          )}
         </label>
 
-        <label className="flex min-w-0 items-center gap-1 rounded-full border border-[#e7e7e7] bg-white px-2 py-1.5 text-xs text-slate-700 shadow-sm sm:gap-2 sm:px-3 sm:py-2 sm:text-sm">
+        <label className="flex w-full min-w-0 items-center justify-between gap-1 rounded-full border border-[#e7e7e7] bg-white px-2 py-1.5 text-xs text-slate-700 shadow-sm sm:w-auto sm:justify-start sm:gap-2 sm:px-3 sm:py-2 sm:text-sm">
           <span className="whitespace-nowrap font-medium">Location</span>
           <select
             value={selectedLocation}
             onChange={(event) => updateFilters({ location: event.target.value === 'all' ? null : event.target.value })}
-            className="min-w-0 rounded-full border border-slate-200 bg-transparent px-1.5 py-0.5 text-xs font-medium text-slate-700 outline-none focus:border-brand-primary sm:px-2 sm:py-1 sm:text-sm"
+            className="min-w-0 flex-1 rounded-full border border-slate-200 bg-transparent px-1.5 py-0.5 text-xs font-medium text-slate-700 outline-none focus:border-brand-primary sm:flex-none sm:px-2 sm:py-1 sm:text-sm"
             aria-label="Pickup location filter"
           >
             <option value="all">All locations</option>
@@ -649,9 +671,52 @@ export default function Home() {
             ))}
           </select>
         </label>
+
+        {selectedRange === 'Custom' && (
+          <Form
+            method="get"
+            action="/logistics"
+            className="col-span-2 grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-1 sm:flex sm:flex-wrap sm:justify-end sm:gap-2"
+          >
+            <input type="hidden" name="range" value="Custom" />
+            <input type="hidden" name="location" value={selectedLocation} />
+            <input type="hidden" name="history" value={selectedHistory} />
+            <label className="flex min-w-0 items-center gap-1 rounded-full border border-[#e7e7e7] bg-white px-2 py-1.5 text-[10px] text-slate-700 shadow-sm sm:gap-2 sm:px-3 sm:py-2 sm:text-sm">
+              <span className="whitespace-nowrap font-medium">From</span>
+              <input
+                type="date"
+                name="from"
+                defaultValue={searchParams.get('from') ?? ''}
+                aria-label="Activity start date"
+                className="w-full min-w-0 rounded-full border border-slate-200 bg-transparent px-1 py-1 text-[10px] text-slate-700 outline-none focus:border-brand-primary sm:w-auto sm:px-2 sm:text-sm"
+              />
+            </label>
+            <label className="flex min-w-0 items-center gap-1 rounded-full border border-[#e7e7e7] bg-white px-2 py-1.5 text-[10px] text-slate-700 shadow-sm sm:gap-2 sm:px-3 sm:py-2 sm:text-sm">
+              <span className="whitespace-nowrap font-medium">To</span>
+              <input
+                type="date"
+                name="to"
+                defaultValue={searchParams.get('to') ?? ''}
+                aria-label="Activity end date"
+                className="w-full min-w-0 rounded-full border border-slate-200 bg-transparent px-1 py-1 text-[10px] text-slate-700 outline-none focus:border-brand-primary sm:w-auto sm:px-2 sm:text-sm"
+              />
+            </label>
+            <button
+              type="submit"
+              className="h-9 whitespace-nowrap rounded-full bg-brand-primary px-2 text-[10px] font-semibold text-white hover:bg-brand-primary-hover sm:h-10 sm:px-4 sm:text-sm"
+            >
+              Apply dates
+            </button>
+          </Form>
+        )}
       </div>
 
-      <div className="grid grid-cols-2 gap-x-4 gap-y-3 rounded-2xl border border-[#e7e7e7] bg-white px-4 py-3 text-sm shadow-sm shadow-slate-100 sm:grid-cols-4">
+      <div
+        aria-busy={isUpdatingFilters}
+        className={`grid grid-cols-2 gap-x-4 gap-y-3 rounded-2xl border border-[#e7e7e7] bg-white px-4 py-3 text-sm shadow-sm shadow-slate-100 transition-opacity duration-200 sm:grid-cols-4 ${
+          isUpdatingFilters ? 'opacity-60' : ''
+        }`}
+      >
         {[
           { label: 'Picked up', count: summary.pickedUp },
           { label: 'Pending pickup', count: summary.pendingPickup },
@@ -822,7 +887,12 @@ export default function Home() {
         </section>
       )}
 
-      <section className="rounded-[28px] border border-[#e7e7e7] bg-white p-4 shadow-sm shadow-slate-100 md:p-5">
+      <section
+        aria-busy={isUpdatingFilters}
+        className={`rounded-[28px] border border-[#e7e7e7] bg-white p-4 shadow-sm shadow-slate-100 transition-opacity duration-200 md:p-5 ${
+          isUpdatingFilters ? 'opacity-60' : ''
+        }`}
+      >
         <div className="flex items-center justify-between gap-3">
           <h2 className="whitespace-nowrap font-bold text-slate-900 text-sm sm:text-xl">Handoff history</h2>
           <div

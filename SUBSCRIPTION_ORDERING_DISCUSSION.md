@@ -54,7 +54,7 @@ Each plan would cover a chosen service: Wash, Iron, or both. Services not covere
 - For a Wash-only plan and a Wash + Iron order line, the Wash component uses the plan allowance and the Iron component is charged separately at its regular rate.
 - An active subscriber may place an order containing both covered and uncovered services; each component is handled according to plan coverage.
 - Plan coverage and weekly limit are fixed for the current subscription. Admin changes to those plan terms apply when the customer starts their next subscription.
-- The first weekly limit is credited immediately when the subscription activates. Later credits are added Sunday at 00:00 in `Africa/Lagos`, up to four credits per subscription month including the activation credit. Unused credits roll over for the plan duration, so a fifth calendar week does not add a fifth credit; earlier unused units can cover it. Monthly entitlement is four weekly limits. Semester entitlement is four weekly limits for each subscription month.
+- The first weekly limit is credited immediately when the subscription activates. Later credits are added Sunday at 00:00 in `Africa/Lagos`. Monthly plans receive up to four credits per subscription month, including the activation credit. Semester allowance rules are updated in the 2026-11-18 handoff below.
 - Vendor confirmation debits the pooled balance. It may borrow from at most one upcoming weekly credit, only when that credit is scheduled within the next week and remains within the plan's total entitlement. Orders placed under a subscription may consume its remaining accrued balance after expiry; no new credits accrue after the subscription ends.
 - If the order estimate requires borrowing, the customer sees the estimated borrowed units and expected remaining balance after the next credit, then must consent at order submission. The consented amount is stored with the order. If vendor-confirmed quantities require more borrowing than consented, the excess is billed at the existing subscriber over-limit rate.
 - When confirmation borrows units, notify the customer and show the borrowed units and expected balance after the upcoming credit.
@@ -83,7 +83,7 @@ Example: a customer has 5 weighted units remaining and a vendor-confirmed order 
 ### Confirmed follow-up decisions
 
 - If a category is added while a customer has an active subscription, the global subscriber rate applies to orders placed after that rate is configured; the rate is captured per order at placement.
-- The first allowance credit is granted at activation; later credits accrue Sunday at 00:00 in `Africa/Lagos`, up to four credits per subscription month total. Unused units roll over for the subscription duration. A vendor confirmation can borrow from one upcoming weekly credit; the borrowed balance reduces the next credit. Monthly plans receive four weekly limits total. Semester plans receive four weekly limits per subscription month.
+- The first allowance credit is granted at activation; later credits accrue Sunday at 00:00 in `Africa/Lagos`, up to four credits per subscription month total for monthly plans. Unused units roll over for the subscription duration. A vendor confirmation can borrow from one upcoming weekly credit; the borrowed balance reduces the next credit. Monthly plans receive four weekly limits total. Semester allowance rules are updated in the 2026-11-18 handoff below.
 
 ## Implementation Sequence
 
@@ -147,3 +147,13 @@ Before release, confirm which environment the linked database represents and com
 - Every new subscription requires an end date. Monthly end dates are calculated from the start date; semester creation or purchase fails until a valid configured semester end date is available.
 - Apply `supabase/migrations/20261115210000_scheduled_subscription_status.sql`, then `20261115220000_scheduled_subscription_renewals.sql`, then `20261115230000_subscription_checkout_recovery.sql`. Reconcile pre-existing pending subscription checkouts before rollout; legacy pending checkouts without a saved Paystack URL are not automatically replaced. Do not apply migrations until the linked Supabase project is confirmed.
 - Focused date/allowance tests and TypeScript typecheck pass. Full build/test validation and live workflow smoke tests are still required; no migration has been applied remotely.
+
+## Semester Weekly Allowance Cap (2026-11-18)
+
+- Admin configures semester start date, end date, and a positive whole-number week count.
+- The Admin week-count field defaults to 17; if cleared, it returns to 17 on blur. Admins can override the value.
+- New semester subscriptions receive the first allowance at activation and subsequent credits on Sundays at 00:00 in `Africa/Lagos`. Total weekly credits are capped at the snapshotted semester-week count, regardless of how long the configured date range spans.
+- Maximum semester allowance is `weekly_limit_snapshot × semester_weeks_snapshot`. Unused allowance rolls over, and borrowing may advance an upcoming credit but cannot increase the cap.
+- The week count is snapshotted on new subscriptions and pending Paystack terms, so later settings changes do not alter existing subscriptions or a checkout already paid for.
+- Monthly plans keep the four-credits-per-subscription-month behavior. Existing semester subscriptions without a week-count snapshot retain their previous four-credits-per-subscription-month behavior.
+- Migrations: `supabase/migrations/20261118100000_semester_week_allowance_cap.sql` and `supabase/migrations/20261118110000_semester_week_default_backfill.sql`. The second sets semester weeks to 17, backfills existing semester subscription snapshots, and updates pending semester checkout snapshots. Apply only after confirming the intended Supabase environment. The local code validates settings for Admin plan creation and subscription purchase/grant paths.

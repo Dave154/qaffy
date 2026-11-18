@@ -131,6 +131,7 @@ export interface AppSettings {
   key: string
   semester_start_date: string | null
   semester_end_date: string | null
+  semester_weeks: number | null
   cashback_percent: number | null
   updated_at: string
 }
@@ -168,6 +169,7 @@ export interface Subscription {
   start_date: string
   end_date: string | null
   weekly_limit_snapshot: number
+  semester_weeks_snapshot: number | null
   covers_wash_snapshot: boolean
   covers_iron_snapshot: boolean
   price_snapshot: number | null
@@ -309,6 +311,7 @@ export interface Payment {
   subscription_start_date_snapshot: string | null
   subscription_end_date_snapshot: string | null
   subscription_weekly_limit_snapshot: number | null
+  subscription_semester_weeks_snapshot: number | null
   subscription_covers_wash_snapshot: boolean | null
   subscription_covers_iron_snapshot: boolean | null
   status: PaymentStatus

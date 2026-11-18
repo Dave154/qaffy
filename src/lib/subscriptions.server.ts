@@ -5,6 +5,7 @@ import {
   addCalendarDaysToDate,
   getSubscriptionEndDate,
   getSubscriptionStartState,
+  isValidSemesterWeeks,
   subscriptionPurchaseQuotesMatch,
 } from './subscription-terms'
 import type { SubscriptionPurchaseQuote } from './subscription-terms'
@@ -19,6 +20,7 @@ type SubscriptionSnapshotInput = {
   isQueuedRenewal?: boolean
   priceSnapshot?: number | null
   weeklyLimitSnapshot?: number
+  semesterWeeksSnapshot?: number | null
   coversWashSnapshot?: boolean
   coversIronSnapshot?: boolean
 }
@@ -97,13 +99,20 @@ export async function resolveSubscriptionPurchaseTerms(
   `
   if (!plan) throw new Error('This plan is no longer available.')
 
-  const [settings] = await tx<{ semester_end_date: Date | string | null }[]>`
-    select semester_end_date
+  const [settings] = await tx<{ semester_end_date: Date | string | null; semester_weeks: number | null }[]>`
+    select semester_end_date, semester_weeks
     from app_settings
     where key = 'semester'
     limit 1
   `
   const semesterEndDate = settings?.semester_end_date ? dateOnly(settings.semester_end_date) : null
+  const semesterWeeks = plan.type === 'semester' ? Number(settings?.semester_weeks) : null
+  if (plan.type === 'semester' && !isValidSemesterWeeks(semesterWeeks)) {
+    throw new Error('Set a valid number of semester weeks in Admin Plans before purchasing or creating a semester subscription.')
+  }
+  if (semesterWeeks !== null && !Number.isSafeInteger(Number(plan.weekly_limit) * semesterWeeks)) {
+    throw new Error('The semester allowance exceeds the supported unit limit. Update the semester weeks or plan weekly limit.')
+  }
   const endDate = getSubscriptionEndDate(plan.type as PlanType, startDate, semesterEndDate)
 
   return {
@@ -115,6 +124,7 @@ export async function resolveSubscriptionPurchaseTerms(
     endDate,
     scheduled,
     weeklyLimit: Number(plan.weekly_limit),
+    semesterWeeks,
     coversWash: Boolean(plan.covers_wash),
     coversIron: Boolean(plan.covers_iron),
   }
@@ -183,11 +193,13 @@ export async function createPendingSubscriptionPayment(
       insert into payments (
         customer_id, provider, reference, amount, balance_type, plan_id, status,
         subscription_checkout_state, subscription_start_date_snapshot, subscription_end_date_snapshot,
-        subscription_weekly_limit_snapshot, subscription_covers_wash_snapshot, subscription_covers_iron_snapshot
+        subscription_weekly_limit_snapshot, subscription_semester_weeks_snapshot,
+        subscription_covers_wash_snapshot, subscription_covers_iron_snapshot
       )
       values (
         ${customerId}, 'paystack', ${reference}, ${terms.amount}, 'subscription', ${planId}, 'pending',
-        'initializing', ${terms.startDate}, ${terms.endDate}, ${terms.weeklyLimit}, ${terms.coversWash}, ${terms.coversIron}
+        'initializing', ${terms.startDate}, ${terms.endDate}, ${terms.weeklyLimit}, ${terms.semesterWeeks},
+        ${terms.coversWash}, ${terms.coversIron}
       )
     `
     return terms
@@ -232,18 +244,20 @@ export async function insertSubscriptionWithSnapshot(tx: TransactionSql, input: 
   const [subscription] = await tx`
     insert into subscriptions (
       customer_id, plan_id, status, start_date, end_date,
-      weekly_limit_snapshot, covers_wash_snapshot, covers_iron_snapshot, price_snapshot, is_queued_renewal
+      weekly_limit_snapshot, semester_weeks_snapshot, covers_wash_snapshot, covers_iron_snapshot, price_snapshot, is_queued_renewal
     )
     values (
       ${input.customerId}, ${input.planId}, ${input.status ?? 'active'}, ${input.startDate}, ${input.endDate},
       ${input.weeklyLimitSnapshot ?? plan.weekly_limit},
+      ${input.semesterWeeksSnapshot ?? null},
       ${input.coversWashSnapshot ?? plan.covers_wash},
       ${input.coversIronSnapshot ?? plan.covers_iron},
       ${input.priceSnapshot ?? null},
       ${input.isQueuedRenewal ?? input.status === 'scheduled'}
     )
     returning id, customer_id, plan_id, status, start_date, end_date,
-      weekly_limit_snapshot, covers_wash_snapshot, covers_iron_snapshot, price_snapshot, is_queued_renewal, created_at
+      weekly_limit_snapshot, semester_weeks_snapshot, covers_wash_snapshot, covers_iron_snapshot,
+      price_snapshot, is_queued_renewal, created_at
   `
 
   return subscription
@@ -297,20 +311,27 @@ export async function createManualSubscriptionWithSnapshot(
     if (existing) throw new Error('Customer already has an active subscription.')
 
     const [plan] = await tx`
-      select type, active
+      select type, active, weekly_limit
       from plans
       where id = ${input.planId}
       for share
     `
     if (!plan || !plan.active) throw new Error('This plan is no longer available.')
 
-    const [semesterSettings] = await tx<{ semester_end_date: Date | string | null }[]>`
-      select semester_end_date
+    const [semesterSettings] = await tx<{ semester_end_date: Date | string | null; semester_weeks: number | null }[]>`
+      select semester_end_date, semester_weeks
       from app_settings
       where key = 'semester'
       limit 1
     `
     const semesterEndDate = semesterSettings?.semester_end_date ? dateOnly(semesterSettings.semester_end_date) : null
+    const semesterWeeks = plan.type === 'semester' ? Number(semesterSettings?.semester_weeks) : null
+    if (plan.type === 'semester' && !isValidSemesterWeeks(semesterWeeks)) {
+      throw new Error('Set a valid number of semester weeks in Admin Plans before creating a semester subscription.')
+    }
+    if (semesterWeeks !== null && !Number.isSafeInteger(Number(plan.weekly_limit) * semesterWeeks)) {
+      throw new Error('The semester allowance exceeds the supported unit limit. Update the semester weeks or plan weekly limit.')
+    }
     const endDate = getSubscriptionEndDate(plan.type as PlanType, input.startDate, semesterEndDate)
     const startState = getSubscriptionStartState(input.startDate, clock.today)
 
@@ -321,6 +342,7 @@ export async function createManualSubscriptionWithSnapshot(
       endDate,
       status: startState.status,
       isQueuedRenewal: startState.isQueuedRenewal,
+      semesterWeeksSnapshot: semesterWeeks,
     })
   })
 }

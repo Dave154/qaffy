@@ -1,9 +1,12 @@
 import type { PlanType } from '../types/database.types'
 
+export const DEFAULT_SEMESTER_WEEKS = 17
+
 export type SavedSubscriptionTerms = {
   startDate: string
   endDate: string
   weeklyLimit: number
+  semesterWeeks: number | null
   coversWash: boolean
   coversIron: boolean
 }
@@ -17,6 +20,7 @@ export type SubscriptionPurchaseQuote = {
   endDate: string
   scheduled: boolean
   weeklyLimit: number
+  semesterWeeks: number | null
   coversWash: boolean
   coversIron: boolean
 }
@@ -25,8 +29,13 @@ type SavedSubscriptionTermsInput = {
   startDate: Date | string | null
   endDate: Date | string | null
   weeklyLimit: number | null
+  semesterWeeks?: number | null
   coversWash: boolean | null
   coversIron: boolean | null
+}
+
+export function isValidSemesterWeeks(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) > 0 && Number(value) <= 2_147_483_647
 }
 
 function isCalendarDate(value: string) {
@@ -55,6 +64,9 @@ export function isSubscriptionPurchaseQuote(value: unknown): value is Subscripti
     typeof quote.scheduled === 'boolean' &&
     Number.isSafeInteger(quote.weeklyLimit) &&
     Number(quote.weeklyLimit) >= 0 &&
+    (quote.planType === 'monthly'
+      ? quote.semesterWeeks === null
+      : isValidSemesterWeeks(quote.semesterWeeks) && Number.isSafeInteger(Number(quote.weeklyLimit) * Number(quote.semesterWeeks))) &&
     typeof quote.coversWash === 'boolean' &&
     typeof quote.coversIron === 'boolean'
   )
@@ -73,6 +85,7 @@ export function subscriptionPurchaseQuotesMatch(
     left.endDate === right.endDate &&
     left.scheduled === right.scheduled &&
     left.weeklyLimit === right.weeklyLimit &&
+    left.semesterWeeks === right.semesterWeeks &&
     left.coversWash === right.coversWash &&
     left.coversIron === right.coversIron
   )
@@ -89,11 +102,19 @@ export function getSavedSubscriptionTerms(input: SavedSubscriptionTermsInput): S
   if (!isCalendarDate(startDate) || !isCalendarDate(endDate) || endDate < startDate || !Number.isSafeInteger(weeklyLimit) || weeklyLimit < 0) {
     throw new Error('The saved subscription payment terms are invalid.')
   }
+  const semesterWeeks = input.semesterWeeks == null ? null : Number(input.semesterWeeks)
+  if (
+    semesterWeeks !== null &&
+    (!isValidSemesterWeeks(semesterWeeks) || !Number.isSafeInteger(weeklyLimit * semesterWeeks))
+  ) {
+    throw new Error('The saved subscription payment terms are invalid.')
+  }
 
   return {
     startDate,
     endDate,
     weeklyLimit,
+    semesterWeeks,
     coversWash: Boolean(input.coversWash),
     coversIron: Boolean(input.coversIron),
   }

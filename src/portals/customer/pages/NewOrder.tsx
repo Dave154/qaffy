@@ -53,6 +53,7 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
     activePlan,
     addOrder,
     invoices,
+    removeOptimisticOrder,
     pickupLocations,
     preferredPickupLocationId,
     preferredPickupLocationName,
@@ -62,9 +63,8 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
     subscriptionBorrowedUnits,
     subscriptionNextBalanceAfterCredit,
   } = useCustomerStore()
-  const isReadOnly = Boolean(order)
   const [categories, setCategories] = useState<Category[]>([])
-  const [catalogState, setCatalogState] = useState<'loading' | 'ready' | 'empty' | 'error'>(isReadOnly ? 'ready' : 'loading')
+  const [catalogState, setCatalogState] = useState<'loading' | 'ready' | 'empty' | 'error'>(order ? 'ready' : 'loading')
   const [catalogError, setCatalogError] = useState('')
   const [category, setCategory] = useState<Category | null>(null)
   const [service, setService] = useState(() => getDefaultService(activePlan))
@@ -77,13 +77,19 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
   const itemsSectionRef = useRef<HTMLElement | null>(null)
   const [itemQuantityInputs, setItemQuantityInputs] = useState<Record<string, string>>({})
   const [pickupLocation, setPickupLocation] = useState(preferredPickupLocationName ?? '')
+  const [editPickupLocationId, setEditPickupLocationId] = useState(order?.pickupLocationId ?? '')
+  const [isEditing, setIsEditing] = useState(false)
   const [notes, setNotes] = useState('')
   const [notesError, setNotesError] = useState('')
   const [pickupLocationError, setPickupLocationError] = useState('')
   const [isSaving, setIsSaving] = useState(false)
+  const editFetcher = useFetcher<{ ok: boolean; intent?: string; orderId?: string; message?: string }>()
+  const handledEditResponse = useRef<typeof editFetcher.data>(null)
   const invoicePaymentFetcher = useFetcher<{ ok: boolean; message?: string }>()
   const cancelFetcher = useFetcher<{ ok: boolean; orderId?: string; message?: string }>()
   const handledCancelResponse = useRef<typeof cancelFetcher.data>(null)
+  const isReadOnly = Boolean(order && !isEditing)
+  const canEditOrder = Boolean(order && order.status === 'Awaiting pickup' && !order.pickedUp)
   const payableInvoice = order
     ? invoices.find((invoice) => invoice.orderId === order.id && invoice.status === 'Awaiting payment')
     : undefined
@@ -166,15 +172,31 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
 
     if (result.ok) {
       toast.success('Order cancelled.')
+      if (result.orderId) removeOptimisticOrder(result.orderId)
       onClose()
       return
     }
 
     toast.error(result.message ?? 'The order could not be cancelled.')
-  }, [cancelFetcher.data, cancelFetcher.state, onClose])
+  }, [cancelFetcher.data, cancelFetcher.state, onClose, removeOptimisticOrder])
+
+  useEffect(() => {
+    const result = editFetcher.data
+    if (editFetcher.state !== 'idle' || !result || result.intent !== 'update-order' || handledEditResponse.current === result) return
+    handledEditResponse.current = result
+
+    if (result.ok) {
+      toast.success('Order updated.')
+      onClose()
+      return
+    }
+
+    toast.error(result.message ?? 'The order could not be updated.')
+  }, [editFetcher.data, editFetcher.state, onClose])
 
   const draftLine: OrderLine | null = category
     ? {
+        categoryId: category.id,
         category: category.name,
         service: service.name,
         quantity,
@@ -182,26 +204,24 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
         subscriptionUnits: category.subscriptionUnits,
       }
     : null
-  const displayItems =
-    order?.lines ??
-    (order
-      ? [
+  const displayItems = isReadOnly
+    ? (order?.lines ?? [
           {
-            category: order.service,
-            service: order.service,
-            quantity: order.items,
-            unitPrice: order.items ? order.total / order.items : order.total,
+            category: order?.service ?? '',
+            service: order?.service ?? '',
+            quantity: order?.items ?? 0,
+            unitPrice: order?.items ? (order?.total ?? 0) / order.items : (order?.total ?? 0),
           },
-        ]
-      : items)
+        ])
+    : items
   const mixedServiceGroups = getMixedServiceGroups(displayItems)
-  const total = order?.total ?? items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0)
+  const total = isReadOnly ? order?.total ?? 0 : items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0)
   const itemCount = isReadOnly
     ? displayItems.reduce((sum, item) => sum + item.quantity, 0)
     : items.reduce((sum, item) => sum + item.quantity, 0)
   const availableCategories = categories
   const subscriptionBillingPreviews = useMemo(() => {
-    if (!activePlan) return null
+    if (!activePlan || order) return null
     const billingItems = items.map<SubscriptionBillingItem>((item, index) => {
         const categoryRow = categories.find((candidate) => candidate.name.trim().toLowerCase() === item.category.trim().toLowerCase())
         const regularWashPrice = categoryRow?.rates.Wash ?? item.unitPrice
@@ -232,7 +252,7 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
       borrowAllowancePreview,
       borrowUnitsNeeded: Math.max(0, borrowAllowancePreview.coveredUnits - regularAllowancePreview.coveredUnits),
     }
-  }, [activePlan, categories, items, subscriptionAvailableUnits, subscriptionBorrowableUnits])
+  }, [activePlan, categories, items, order, subscriptionAvailableUnits, subscriptionBorrowableUnits])
   const borrowEstimateKey = JSON.stringify({
     items: items.map((item) => [item.category, item.service, item.quantity, item.subscriptionUnits]),
     availableUnits: subscriptionAvailableUnits,
@@ -258,12 +278,13 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
         </span>
         <textarea
           rows={3}
+          maxLength={2000}
           placeholder={
             mixedServiceGroups.length > 0
               ? 'Kindly specify which are for washing and which are for washing and ironing'
               : 'Separate whites, handle silk carefully...'
           }
-          value={order?.notes ?? notes}
+          value={isReadOnly ? order?.notes ?? '' : notes}
           onChange={(event) => {
             setNotes(event.target.value)
             setNotesError('')
@@ -288,15 +309,16 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
           </span>
         )}
       </label>
-      {(!preferredPickupLocationId || isReadOnly) && (
+      {(!preferredPickupLocationId || isReadOnly || isEditing) && (
         <label className="mt-4 block">
           <span className="mb-1.5 block text-sm font-medium text-slate-600">
             Pickup location <span className="text-rose-600">*</span>
           </span>
           <select
-            value={order?.pickupLocation ?? pickupLocation}
+            value={isEditing ? editPickupLocationId : order ? (order.pickupLocationId ?? '') : pickupLocation}
             onChange={(event) => {
-              setPickupLocation(event.target.value)
+              if (isEditing) setEditPickupLocationId(event.target.value)
+              else setPickupLocation(event.target.value)
               setPickupLocationError('')
             }}
             disabled={isReadOnly}
@@ -306,13 +328,15 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
           >
             {!order && <option value="">Select a pickup location</option>}
             {pickupLocations.map((location) => (
-              <option key={location.id} value={location.name}>
+              <option key={location.id} value={order ? location.id : location.name}>
                 {location.name}
                 {location.address ? ` (${location.address})` : ''}
               </option>
             ))}
-            {order && !pickupLocations.some((location) => location.name === order.pickupLocation) && (
-              <option>{order.pickupLocation}</option>
+            {order &&
+              order.pickupLocationId &&
+              !pickupLocations.some((location) => location.id === order.pickupLocationId) && (
+                <option value={order.pickupLocationId}>{order.pickupLocation} (current)</option>
             )}
           </select>
           {pickupLocationError && (
@@ -322,7 +346,7 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
           )}
         </label>
       )}
-      {preferredPickupLocationId && !isReadOnly && (
+      {preferredPickupLocationId && !isReadOnly && !isEditing && !order && (
         <p className="mt-4 rounded-2xl bg-brand-soft p-3 text-sm text-brand-strong">
           Pickup location <span className="text-rose-600">*</span>: {preferredPickupLocationName}
         </p>
@@ -337,6 +361,62 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
     setCategory(category)
     setQuantity(1)
     setQuantityInput(null)
+  }
+
+  const startEditingOrder = () => {
+    if (!order || !canEditOrder) return
+    setCatalogState('loading')
+    setItems(order.lines?.map((item) => ({ ...item })) ?? [])
+    setNotes(order.notes)
+    setEditPickupLocationId(order.pickupLocationId ?? '')
+    setItemsError('')
+    setNotesError('')
+    setPickupLocationError('')
+    setBorrowConsentError('')
+    setIsEditing(true)
+  }
+
+  const handleSaveOrderEdit = () => {
+    if (!order || !canEditOrder) return
+    if (items.length === 0) {
+      setItemsError('Please keep at least one item in the order.')
+      itemsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      return
+    }
+    if (items.some((item) => !item.categoryId || !parsePositiveQuantity(String(item.quantity)))) {
+      setItemsError('Check that each item has a valid category and quantity.')
+      return
+    }
+    setItemsError('')
+    if (getMixedServiceGroups(items).length > 0 && !hasMinimumMixedServiceInstructions(notes)) {
+      setNotesError(
+        `Please provide at least ${MIN_MIXED_SERVICE_INSTRUCTION_LENGTH} characters explaining which items are for each service.`,
+      )
+      return
+    }
+    setNotesError('')
+    if (!editPickupLocationId) {
+      setPickupLocationError('Please select a pickup location before saving.')
+      return
+    }
+    setPickupLocationError('')
+    editFetcher.submit(
+      {
+        intent: 'update-order',
+        orderId: order.id,
+        pickupLocationId: editPickupLocationId,
+        notes,
+        items: JSON.stringify(
+          items.map((item) => ({
+            itemId: item.itemId,
+            categoryId: item.categoryId,
+            service: item.service === 'Wash + Iron' ? 'wash_iron' : item.service === 'Iron' ? 'iron' : 'wash',
+            quantity: item.quantity,
+          })),
+        ),
+      },
+      { method: 'post', action: '/orders' },
+    )
   }
 
   const handleCreateOrder = async () => {
@@ -398,10 +478,10 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
         <header className="flex items-start justify-between gap-4">
           <div>
             <h2 id="new-order-title" className="text-2xl font-bold tracking-tight text-[#121212]">
-              {isReadOnly ? 'Order details' : 'Create an order'}
+              {isEditing ? 'Edit order' : isReadOnly ? 'Order details' : 'Create an order'}
             </h2>
             <p className="mt-1.5 text-sm text-slate-500">
-              {isReadOnly ? (
+              {order ? (
                 <>
                   <CopyableOrderId id={order?.publicOrderNumber ?? ''} /> · {order?.status}
                 </>
@@ -413,7 +493,7 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
           <button
             type="button"
             onClick={onClose}
-            aria-label={isReadOnly ? 'Close order details' : 'Close new order'}
+            aria-label={order ? 'Close order details' : 'Close new order'}
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border-2 border-slate-200 bg-white text-xl text-slate-400 shadow-sm transition hover:border-slate-300 hover:text-slate-600 hover:shadow-md"
           >
             ×
@@ -553,7 +633,9 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
             <div className="mt-5 divide-y divide-slate-100 rounded-2xl border border-slate-200">
               {displayItems.map((item, index) => {
                 const subscriptionLineAmount = subscriptionBillingPreview?.lines[index]?.totalAmount ?? 0
-                const isCoveredSubscriptionLine = Boolean(subscription && !isReadOnly && subscriptionLineAmount === 0)
+                const isNewSubscriptionOrder = Boolean(subscription && !isReadOnly && !order)
+                const isSubscriptionOrderEdit = Boolean(isEditing && order?.isSubscriptionOrder)
+                const isCoveredSubscriptionLine = isNewSubscriptionOrder && subscriptionLineAmount === 0
                 const lineKey = getOrderLineKey(item)
                 return (
                   <div
@@ -606,7 +688,11 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
                           className="w-16 rounded-xl border border-slate-200 px-2 py-1 text-center font-semibold text-slate-900 focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
                         />
                       )}
-                      {subscription && !isReadOnly ? (
+                      {isSubscriptionOrderEdit ? (
+                        <span className="min-w-0 flex-1 text-right font-semibold text-slate-500">
+                          {item.quantity * (item.subscriptionUnits ?? 1)} units
+                        </span>
+                      ) : isNewSubscriptionOrder ? (
                         subscriptionLineAmount > 0 && (
                           <span className="min-w-0 flex-1 text-right font-semibold text-brand-strong">
                             + ₦{subscriptionLineAmount.toLocaleString()}
@@ -702,7 +788,7 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
           <section className="mt-6 rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">{pickupDetailsFields}</section>
         )}
 
-        {!isReadOnly && subscription && (
+        {!isReadOnly && subscription && !order && (
           <div className="mt-6 rounded-2xl border border-brand-border bg-brand-soft p-4 text-sm text-brand-strong shadow-sm">
             <p>
               Your {subscription.name} plan has {Math.max(0, subscriptionAvailableUnits ?? 0)} weighted units in its rollover balance. Up to{' '}
@@ -725,16 +811,22 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
               <p className="text-xs font-semibold capitalize tracking-[0.16em] text-brand-strong">
                 {isReadOnly ? 'Order total' : 'Order estimate'}
               </p>
-              {isReadOnly && !subscription && (
+              {isReadOnly && (
                 <p className="text-right text-base font-semibold text-brand-strong">
-                  {order?.total ? `₦${order.total.toLocaleString()}` : 'Final billing after review'}
+                  {order?.total
+                    ? `₦${order.total.toLocaleString()}`
+                    : order?.isSubscriptionOrder
+                      ? 'Plan order · final billing after review'
+                      : 'Final billing after review'}
                 </p>
               )}
               {!isReadOnly && (
                 <p className="mt-2.5 text-sm text-slate-600">
-                  {subscription
-                    ? `${subscriptionBillingPreview?.coveredUnits ?? 0} units covered by your plan`
-                    : `${itemCount} item${itemCount === 1 ? '' : 's'} across ${displayItems.length} item type${displayItems.length === 1 ? '' : 's'}`}
+                  {isEditing && order?.isSubscriptionOrder
+                    ? 'Saved plan coverage and borrowing consent are preserved. Final billing is calculated after vendor review.'
+                    : subscription && !order
+                      ? `${subscriptionBillingPreview?.coveredUnits ?? 0} units covered by your plan`
+                      : `${itemCount} item${itemCount === 1 ? '' : 's'} across ${displayItems.length} item type${displayItems.length === 1 ? '' : 's'}`}
                 </p>
               )}
             </div>
@@ -802,7 +894,9 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
                   )}
                 </div>
               )}
-            {!subscription && !isReadOnly && <p className="text-2xl font-bold text-brand-strong">₦{total.toLocaleString()}</p>}
+            {!isReadOnly && !order?.isSubscriptionOrder && (!subscription || Boolean(order)) && (
+              <p className="text-2xl font-bold text-brand-strong">₦{total.toLocaleString()}</p>
+            )}
           </div>
           {isReadOnly && order?.paymentStatus === 'Pending' && order.status !== 'Delivered' && order.total > 0 ? (
             <div className="mt-5 border-t border-brand-border/70 pt-4">
@@ -841,8 +935,15 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
               )}
             </div>
           ) : isReadOnly ? (
-            <div className="mt-5 flex flex-col gap-3">
-              {order?.status === 'Awaiting pickup' && (
+            canEditOrder ? (
+              <div className="mt-5 grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={startEditingOrder}
+                  className="rounded-2xl bg-brand-primary px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-primary-hover"
+                >
+                  Edit order
+                </button>
                 <cancelFetcher.Form
                   method="post"
                   action="/orders"
@@ -851,7 +952,7 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
                   }}
                 >
                   <input type="hidden" name="intent" value="cancel-order" />
-                  <input type="hidden" name="orderId" value={order.id} />
+                  <input type="hidden" name="orderId" value={order?.id ?? ''} />
                   <button
                     type="submit"
                     disabled={cancelFetcher.state !== 'idle'}
@@ -860,13 +961,25 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
                     {cancelFetcher.state !== 'idle' ? 'Cancelling…' : 'Cancel order'}
                   </button>
                 </cancelFetcher.Form>
-              )}
+              </div>
+            ) : null
+          ) : isEditing ? (
+            <div className="mt-5 flex flex-col gap-3">
               <button
                 type="button"
-                onClick={onClose}
-                className="w-full rounded-2xl bg-brand-primary px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-primary-hover hover:shadow-md"
+                onClick={handleSaveOrderEdit}
+                disabled={editFetcher.state !== 'idle'}
+                className="w-full rounded-2xl bg-brand-primary px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Close details
+                {editFetcher.state !== 'idle' ? 'Saving changes…' : 'Save changes'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsEditing(false)}
+                disabled={editFetcher.state !== 'idle'}
+                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancel editing
               </button>
             </div>
           ) : (

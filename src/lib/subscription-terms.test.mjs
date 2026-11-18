@@ -43,6 +43,7 @@ test('uses the saved payment quote even when service coverage is false', () => {
       startDate: '2026-11-17',
       endDate: '2026-12-17',
       weeklyLimit: 12,
+      semesterWeeks: null,
       coversWash: true,
       coversIron: false,
     }),
@@ -50,8 +51,30 @@ test('uses the saved payment quote even when service coverage is false', () => {
       startDate: '2026-11-17',
       endDate: '2026-12-17',
       weeklyLimit: 12,
+      semesterWeeks: null,
       coversWash: true,
       coversIron: false,
+    },
+  )
+})
+
+test('preserves the semester allowance cap from saved Paystack terms', () => {
+  assert.deepEqual(
+    getSavedSubscriptionTerms({
+      startDate: '2026-11-17',
+      endDate: '2027-03-17',
+      weeklyLimit: 20,
+      semesterWeeks: 17,
+      coversWash: true,
+      coversIron: true,
+    }),
+    {
+      startDate: '2026-11-17',
+      endDate: '2027-03-17',
+      weeklyLimit: 20,
+      semesterWeeks: 17,
+      coversWash: true,
+      coversIron: true,
     },
   )
 })
@@ -80,6 +103,7 @@ test('requires the complete displayed quote to match before checkout', () => {
     endDate: '2026-12-17',
     scheduled: true,
     weeklyLimit: 12,
+    semesterWeeks: null,
     coversWash: true,
     coversIron: false,
   }
@@ -88,4 +112,20 @@ test('requires the complete displayed quote to match before checkout', () => {
   assert.equal(subscriptionPurchaseQuotesMatch(quote, { ...quote, startDate: '2026-11-18' }), false)
   assert.equal(subscriptionPurchaseQuotesMatch(quote, { ...quote, coversIron: true }), false)
   assert.equal(isSubscriptionPurchaseQuote({ ...quote, endDate: '2026-11-16' }), false)
+  assert.equal(isSubscriptionPurchaseQuote({ ...quote, planType: 'semester', semesterWeeks: null }), false)
+  assert.equal(
+    isSubscriptionPurchaseQuote({
+      ...quote,
+      planType: 'semester',
+      semesterWeeks: 17,
+    }),
+    true,
+  )
+  assert.equal(
+    subscriptionPurchaseQuotesMatch(
+      { ...quote, planType: 'semester', semesterWeeks: 17 },
+      { ...quote, planType: 'semester', semesterWeeks: 18 },
+    ),
+    false,
+  )
 })

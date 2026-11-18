@@ -10,6 +10,17 @@ import { supabase } from '../../lib/supabase.client'
 
 const logisticsHistoryPageSize = 10
 
+function validDate(value: string | null): value is string {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const parsed = new Date(`${value}T00:00:00.000Z`)
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
+}
+
+function lagosDayBoundary(value: string, nextDay = false) {
+  const utcMidnight = new Date(`${value}T00:00:00.000Z`).getTime()
+  return new Date(utcMidnight + (nextDay ? 24 * 60 * 60 * 1000 : 0) - 60 * 60 * 1000).toISOString()
+}
+
 // eslint-disable-next-line react-refresh/only-export-components
 export async function loader({ request }: Route.LoaderArgs) {
   const auth = await requireRole(request, 'logistics')
@@ -36,15 +47,28 @@ export async function loader({ request }: Route.LoaderArgs) {
   }
   const url = new URL(request.url)
   const requestedRange = url.searchParams.get('range') ?? 'Today'
-  const range = (['Today', 'Yesterday', 'Last week', 'Last month', 'All time'].includes(requestedRange) ? requestedRange : 'Today') as
-    'Today' | 'Yesterday' | 'Last week' | 'Last month' | 'All time'
+  const range = (
+    ['Today', 'Yesterday', 'Last week', 'Last month', 'All time', 'Custom'].includes(requestedRange) ? requestedRange : 'Today'
+  ) as 'Today' | 'Yesterday' | 'Last week' | 'Last month' | 'All time' | 'Custom'
+  const customStartDate = validDate(url.searchParams.get('from')) ? url.searchParams.get('from') : null
+  const customEndDate = validDate(url.searchParams.get('to')) ? url.searchParams.get('to') : null
   const historyType = url.searchParams.get('history') === 'delivered' ? 'delivered' : 'picked_up'
   const requestedPage = Number.parseInt(url.searchParams.get('page') ?? '1', 10)
   const pageNumber = Number.isSafeInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1
   const requestedLocation = url.searchParams.get('location') ?? 'all'
-  const locationFilter = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestedLocation)
+  const requestedLocationId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    requestedLocation,
+  )
     ? requestedLocation
     : null
+  const { data: locations, error: locationsError } = await serverSupabase
+    .from('pickup_locations')
+    .select('id, name')
+    .eq('active', true)
+    .order('name')
+  if (locationsError) throw new Error(`Logistics locations could not be loaded: ${locationsError.message}`)
+  const locationFilter =
+    requestedLocationId && locations?.some((location) => location.id === requestedLocationId) ? requestedLocationId : null
   const lagosDateParts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Africa/Lagos',
     year: 'numeric',
@@ -63,11 +87,22 @@ export async function loader({ request }: Route.LoaderArgs) {
   } else if (range === 'Last month') {
     rangeStart.setUTCDate(1)
   }
-  const rangeStartIso = range === 'All time' ? null : rangeStart.toISOString()
-  const rangeEndIso = rangeEnd?.toISOString() ?? null
+  const rangeStartIso =
+    range === 'All time'
+      ? null
+      : range === 'Custom'
+        ? customStartDate
+          ? lagosDayBoundary(customStartDate)
+          : null
+        : rangeStart.toISOString()
+  const rangeEndIso =
+    range === 'Custom'
+      ? customEndDate
+        ? lagosDayBoundary(customEndDate, true)
+        : null
+      : rangeEnd?.toISOString() ?? null
 
-  const [{ data: locations, error: locationsError }, [summary], [historyPage]] = await Promise.all([
-    serverSupabase.from('pickup_locations').select('id, name').order('name'),
+  const [[summary], [historyPage]] = await Promise.all([
     sql<
       {
         picked_up: number
@@ -175,7 +210,6 @@ export async function loader({ request }: Route.LoaderArgs) {
       from total, page_info
     `,
   ])
-  if (locationsError) throw new Error(`Logistics locations could not be loaded: ${locationsError.message}`)
   const totalCount = Number(historyPage?.total_count ?? 0)
   return data(
     {

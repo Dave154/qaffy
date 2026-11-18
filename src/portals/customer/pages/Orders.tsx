@@ -6,12 +6,17 @@ import ProtectedOtp from '../../../components/ProtectedOtp'
 import DeliveryOtpPaywall from '../../../components/DeliveryOtpPaywall'
 import DeliveryOtpStatus from '../../../components/DeliveryOtpStatus'
 import RecoverableError from '../../../components/RecoverableError'
-import { type CustomerOrder } from '../customer-store'
+import {
+  CUSTOMER_MAX_UNPICKED_ORDERS,
+  CUSTOMER_UNPICKED_ORDER_CAP_MESSAGE,
+  type CustomerOrder,
+} from '../customer-store'
 import { useCustomerStore } from '../customer-store-hook'
 import { data, useFetcher, useNavigate, useSearchParams } from 'react-router'
 import type { Route } from './+types/Orders'
 import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
 import { sql } from '../../../lib/db.server'
+import { CustomerOrderEditError, updateCustomerOrder } from '../../../lib/customer-order-edit.server'
 import { chargeSubscriptionInvoice, debitOneOffInvoice, InsufficientBalanceError } from '../../../lib/wallet.server'
 import { sendCustomerNotification, walletInvoicePaidNotification } from '../../../lib/notifications.server'
 import { toast } from '../../../lib/toast'
@@ -27,6 +32,29 @@ export async function action({ request }: Route.ActionArgs) {
 
   const formData = await request.formData()
   const intent = String(formData.get('intent') ?? '')
+  if (intent === 'update-order') {
+    const orderId = String(formData.get('orderId') ?? '')
+    const pickupLocationId = String(formData.get('pickupLocationId') ?? '')
+    const notes = String(formData.get('notes') ?? '')
+    let items: unknown
+    try {
+      items = JSON.parse(String(formData.get('items') ?? ''))
+    } catch {
+      return data({ ok: false, intent, orderId, message: 'Order items are invalid.' }, { status: 400, headers })
+    }
+
+    try {
+      await updateCustomerOrder({ customerId: userData.user.id, orderId, pickupLocationId, notes, items })
+      return data({ ok: true, intent, orderId }, { headers })
+    } catch (error) {
+      if (error instanceof CustomerOrderEditError) {
+        return data({ ok: false, intent, orderId, message: error.message }, { status: error.status, headers })
+      }
+      console.error('[orders] Customer order edit failed', error)
+      return data({ ok: false, intent, orderId, message: 'The order could not be updated. Please try again.' }, { status: 500, headers })
+    }
+  }
+
   if (intent === 'cancel-order') {
     const orderId = String(formData.get('orderId') ?? '')
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(orderId)) {
@@ -85,7 +113,8 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function Orders() {
-  const { orders, balance, invoices, isDataLoading, dataLoadError, ordersPagination, retryDataLoad } = useCustomerStore()
+  const { orders, balance, invoices, unpickedOrderCount, isDataLoading, dataLoadError, ordersPagination, retryDataLoad } =
+    useCustomerStore()
   const cancelFetcher = useFetcher<typeof action>()
   const handledCancelResponse = useRef<typeof cancelFetcher.data>(null)
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false)
@@ -210,13 +239,24 @@ export default function Orders() {
         </div>
         <button
           type="button"
-          onClick={() => setIsOrderModalOpen(true)}
+          onClick={() => {
+            if (unpickedOrderCount >= CUSTOMER_MAX_UNPICKED_ORDERS) {
+              toast.error(CUSTOMER_UNPICKED_ORDER_CAP_MESSAGE)
+              return
+            }
+            setIsOrderModalOpen(true)
+          }}
           disabled={isDataLoading || Boolean(dataLoadError)}
           className="rounded-lg bg-brand-primary px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
         >
           New order
         </button>
       </header>
+      {unpickedOrderCount >= CUSTOMER_MAX_UNPICKED_ORDERS && (
+        <p role="alert" className="-mt-4 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+          {CUSTOMER_UNPICKED_ORDER_CAP_MESSAGE}
+        </p>
+      )}
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {stats.map((stat) => (

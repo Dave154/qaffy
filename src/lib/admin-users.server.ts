@@ -157,7 +157,9 @@ export async function loadUsers(request: Request, authOverride?: Awaited<ReturnT
   const roleFilter = USER_ROLES.includes(requestedRole as (typeof USER_ROLES)[number]) ? requestedRole : 'all'
   const requestedSubscription = params.get('subscription') ?? 'all'
   const subscriptionFilter =
-    requestedSubscription === 'active' || subscriptionPlans.some((plan) => plan.id === requestedSubscription)
+    requestedSubscription === 'active' ||
+    requestedSubscription === 'former' ||
+    subscriptionPlans.some((plan) => plan.id === requestedSubscription)
       ? requestedSubscription
       : 'all'
   const requestedDateMode = params.get('date') ?? 'all'
@@ -233,14 +235,42 @@ export async function loadUsers(request: Request, authOverride?: Awaited<ReturnT
     )
     and (
       ${subscriptionFilter} = 'all'
-      or exists (
-        select 1
-        from subscriptions current_subscription
-        where current_subscription.customer_id = p.id
-          and current_subscription.status in ('active', 'scheduled')
-          and current_subscription.start_date <= (now() at time zone 'Africa/Lagos')::date
-          and (current_subscription.end_date is null or current_subscription.end_date >= (now() at time zone 'Africa/Lagos')::date)
-          and (${subscriptionFilter} = 'active' or current_subscription.plan_id::text = ${subscriptionFilter})
+      or (
+        ${subscriptionFilter} = 'former'
+        and exists (
+          select 1
+          from subscriptions previous_subscription
+          where previous_subscription.customer_id = p.id
+            and previous_subscription.start_date <= (now() at time zone 'Africa/Lagos')::date
+            and (
+              previous_subscription.status in ('ended', 'cancelled')
+              or previous_subscription.end_date < (now() at time zone 'Africa/Lagos')::date
+            )
+        )
+        and not exists (
+          select 1
+          from subscriptions current_or_upcoming_subscription
+          where current_or_upcoming_subscription.customer_id = p.id
+            and current_or_upcoming_subscription.status in ('active', 'scheduled')
+            and (
+              current_or_upcoming_subscription.start_date > (now() at time zone 'Africa/Lagos')::date
+              or current_or_upcoming_subscription.end_date is null
+              or current_or_upcoming_subscription.end_date >= (now() at time zone 'Africa/Lagos')::date
+            )
+        )
+      )
+      or (
+        ${subscriptionFilter} <> 'former'
+        and ${subscriptionFilter} <> 'all'
+        and exists (
+          select 1
+          from subscriptions current_subscription
+          where current_subscription.customer_id = p.id
+            and current_subscription.status in ('active', 'scheduled')
+            and current_subscription.start_date <= (now() at time zone 'Africa/Lagos')::date
+            and (current_subscription.end_date is null or current_subscription.end_date >= (now() at time zone 'Africa/Lagos')::date)
+            and (${subscriptionFilter} = 'active' or current_subscription.plan_id::text = ${subscriptionFilter})
+        )
       )
     )
     and (${fromDate}::date is null or p.created_at >= ${fromDate}::date)

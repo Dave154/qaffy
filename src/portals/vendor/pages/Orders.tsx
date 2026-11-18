@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { data, useFetcher, useOutletContext, useRevalidator, useSearchParams } from 'react-router'
-import { Search } from 'lucide-react'
+import { data, Form, useFetcher, useNavigation, useOutletContext, useRevalidator, useSearchParams } from 'react-router'
+import { LoaderCircle, Search } from 'lucide-react'
 import { requireRole } from '../../../lib/auth.server'
 import { sql } from '../../../lib/db.server'
 import { isReadyForDispatch } from '../../../lib/orderLifecycle'
@@ -184,6 +184,7 @@ export default function Orders() {
   const { orders, rateCard, ordersPagination } = useOutletContext<VendorLayoutData>()
   const fetcher = useFetcher<typeof action>()
   const reviewFetcher = useFetcher<typeof vendorHomeAction>()
+  const navigation = useNavigation()
   const { revalidate } = useRevalidator()
   const handledFetcherData = useRef<typeof fetcher.data>(null)
   const handledReviewData = useRef<typeof reviewFetcher.data>(null)
@@ -194,7 +195,7 @@ export default function Orders() {
       : 'processing'
   ) as 'unclaimed' | 'processing' | 'ready' | 'dispatched' | 'delivered'
   const query = searchParams.get('search') ?? ''
-  const [searchDraft, setSearchDraft] = useState(query)
+  const isLoadingOrders = navigation.state === 'loading' && navigation.location?.pathname === '/vendor/orders'
   const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([])
   const [reviewOrderId, setReviewOrderId] = useState<string | null>(null)
   const [received, setReceived] = useState<Record<string, Record<string, number | undefined>>>({})
@@ -202,29 +203,6 @@ export default function Orders() {
     Array<{ categoryName: string; service: 'wash' | 'iron' | 'wash_iron'; quantity: number }>
   >([])
   const [reviewNotes, setReviewNotes] = useState('')
-  useEffect(() => {
-    if (searchDraft === query) return
-    const timer = window.setTimeout(() => setSearchDraft(query), 0)
-    return () => window.clearTimeout(timer)
-  }, [query, searchDraft])
-  useEffect(() => {
-    if (searchDraft.trim() === query) return
-    const timer = window.setTimeout(() => {
-      setSelectedOrderIds([])
-      setSearchParams(
-        (current) => {
-          const next = new URLSearchParams(current)
-          const search = searchDraft.trim().slice(0, 100)
-          if (search) next.set('search', search)
-          else next.delete('search')
-          next.delete('page')
-          return next
-        },
-        { replace: true },
-      )
-    }, 300)
-    return () => window.clearTimeout(timer)
-  }, [query, searchDraft, setSearchParams])
   const isDispatching = fetcher.state !== 'idle' && fetcher.formData?.get('intent') === 'dispatch'
   const isClaimingOrder = (orderId: string) =>
     fetcher.state !== 'idle' && fetcher.formData?.get('intent') === 'claim' && fetcher.formData?.get('orderId') === orderId
@@ -434,15 +412,22 @@ export default function Orders() {
 
       <section className="rounded-[10px] border border-[#e9e9e9] bg-white">
         <div className="flex flex-col gap-3 border-b border-[#ededed] p-4 md:flex-row md:items-center md:justify-between md:p-5">
-          <div className="relative w-full md:max-w-sm">
+          <Form
+            method="get"
+            action="/vendor/orders"
+            onSubmit={() => setSelectedOrderIds([])}
+            className="relative w-full md:max-w-sm"
+          >
+            <input type="hidden" name="tab" value={activeTab} />
             <Search size={16} className="absolute left-3 top-3 text-slate-400" />
             <input
-              value={searchDraft}
-              onChange={(event) => setSearchDraft(event.target.value)}
+              key={query}
+              name="search"
+              defaultValue={query}
               placeholder="Search orders or customers"
               className="h-10 w-full rounded-[8px] border border-[#dedede] pl-9 pr-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
             />
-          </div>
+          </Form>
           <div className="scrollbar-hidden flex flex-nowrap gap-2 overflow-x-auto pb-1">
             {[
               ['unclaimed', 'Unclaimed', orderCounts.available],
@@ -505,7 +490,12 @@ export default function Orders() {
             </div>
           )}
           <div className="space-y-3">
-            {filteredOrders.map((order) => (
+            {isLoadingOrders ? (
+              <div className="flex items-center justify-center gap-2 py-12 text-sm text-slate-500" role="status">
+                <LoaderCircle size={18} className="animate-spin text-brand-primary" />
+                Loading orders...
+              </div>
+            ) : filteredOrders.map((order) => (
               <article key={order.id} className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
@@ -586,7 +576,9 @@ export default function Orders() {
                 </div>
               </article>
             ))}
-            {filteredOrders.length === 0 && <p className="py-8 text-center text-sm text-slate-500">No matching orders.</p>}
+            {!isLoadingOrders && filteredOrders.length === 0 && (
+              <p className="py-8 text-center text-sm text-slate-500">No matching orders.</p>
+            )}
           </div>
         </div>
         <div className="hidden overflow-x-auto p-4 md:block md:p-5">
@@ -644,7 +636,16 @@ export default function Orders() {
               </tr>
             </thead>
             <tbody>
-              {filteredOrders.map((order) => (
+              {isLoadingOrders ? (
+                <tr>
+                  <td colSpan={8} className="px-4 py-12">
+                    <div className="flex items-center justify-center gap-2 text-sm text-slate-500" role="status">
+                      <LoaderCircle size={18} className="animate-spin text-brand-primary" />
+                      Loading orders...
+                    </div>
+                  </td>
+                </tr>
+              ) : filteredOrders.map((order) => (
                 <tr key={order.id} className="border-b border-[#f0f0f0] last:border-0">
                   <td className="px-4 py-4">
                     {isReadyForDispatch(order.status, order.invoice?.status) && (
@@ -717,7 +718,9 @@ export default function Orders() {
               ))}
             </tbody>
           </table>
-          {filteredOrders.length === 0 && <p className="py-8 text-center text-sm text-slate-500">No matching orders.</p>}
+          {!isLoadingOrders && filteredOrders.length === 0 && (
+            <p className="py-8 text-center text-sm text-slate-500">No matching orders.</p>
+          )}
         </div>
       </section>
       {ordersPagination && (
@@ -740,7 +743,7 @@ export default function Orders() {
                   return next
                 })
               }}
-              disabled={ordersPagination.page <= 1}
+              disabled={ordersPagination.page <= 1 || isLoadingOrders}
               className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
               Previous
@@ -755,7 +758,7 @@ export default function Orders() {
                   return next
                 })
               }}
-              disabled={ordersPagination.page * ordersPagination.pageSize >= ordersPagination.totalCount}
+              disabled={ordersPagination.page * ordersPagination.pageSize >= ordersPagination.totalCount || isLoadingOrders}
               className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
               Next

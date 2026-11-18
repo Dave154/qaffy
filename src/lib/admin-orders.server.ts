@@ -17,6 +17,28 @@ type AdminSettlementDetails = {
   status: 'pending' | 'paid' | 'cancelled'
   transfer_status: 'queued' | 'processing' | 'success' | 'failed' | 'reversed' | 'rejected' | null
 }
+type OrderHandoffEvent = {
+  id: string
+  event_type: 'picked_up' | 'delivered'
+  created_at: string
+  actor_type: 'logistics' | 'admin' | 'unknown'
+  actor_name: string | null
+  actor_email: string | null
+}
+type VendorClaimDetails = {
+  business_name: string
+  claimant_name: string | null
+  claimant_email: string | null
+}
+type OrderOperations = {
+  handoff_events: OrderHandoffEvent[]
+  vendor_claim: VendorClaimDetails | null
+}
+type OrderOperationsRow = {
+  id: string
+  handoff_events: Array<Omit<OrderHandoffEvent, 'created_at'> & { created_at: string | Date }>
+  vendor_claim: VendorClaimDetails | null
+}
 type AdminOrder = {
   id: string
   public_order_number: string
@@ -53,10 +75,22 @@ type AdminOrder = {
   cancellation: AdminCancellationDetails | null
   settlement: AdminSettlementDetails | null
   mismatches: Array<{ id: string; details: unknown }>
+  handoff_events: OrderHandoffEvent[]
+  vendor_claim: VendorClaimDetails | null
 }
 type OrderRow = Omit<
   AdminOrder,
-  'created_at' | 'picked_up_date' | 'delivery_date' | 'customer' | 'location' | 'items' | 'invoice' | 'cancellation' | 'mismatches'
+  | 'created_at'
+  | 'picked_up_date'
+  | 'delivery_date'
+  | 'customer'
+  | 'location'
+  | 'items'
+  | 'invoice'
+  | 'cancellation'
+  | 'mismatches'
+  | 'handoff_events'
+  | 'vendor_claim'
 > & {
   created_at: string | Date
   picked_up_date: string | Date | null
@@ -173,7 +207,7 @@ function normalizeBreakdown(value: unknown): BillingBreakdown | null {
   const regularAmount = Number(record.regularAmount)
   return [coveredUnits, subscriberAmount, regularAmount].every(Number.isFinite) ? { coveredUnits, subscriberAmount, regularAmount } : null
 }
-function normalizeOrder(row: OrderRow): AdminOrder {
+function normalizeOrder(row: OrderRow, operations?: OrderOperations): AdminOrder {
   return {
     ...row,
     created_at: timestamp(row.created_at) ?? '',
@@ -194,7 +228,77 @@ function normalizeOrder(row: OrderRow): AdminOrder {
           created_at: timestamp(row.cancellation.created_at) ?? '',
         }
       : null,
+    handoff_events: operations?.handoff_events ?? [],
+    vendor_claim: operations?.vendor_claim ?? null,
   }
+}
+
+async function loadOrderOperations(orderIds: string[]) {
+  if (orderIds.length === 0) return new Map<string, OrderOperations>()
+  const rows = await sql<OrderOperationsRow[]>`
+    select
+      o.id,
+      case when claimed_vendor.id is null then null else json_build_object(
+        'business_name', claimed_vendor.business_name,
+        'claimant_name', claimant.name,
+        'claimant_email', claimant.email
+      ) end as vendor_claim,
+      coalesce((
+        select json_agg(json_build_object(
+          'id', handoff.id,
+          'event_type', handoff.event_type,
+          'created_at', handoff.created_at,
+          'actor_type', case
+            when handoff.agent_profile_id is not null then 'logistics'
+            when admin_actor.admin_profile_id is not null then 'admin'
+            else 'unknown'
+          end,
+          'actor_name', case
+            when handoff.agent_profile_id is not null then logistics_profile.name
+            else admin_actor.name
+          end,
+          'actor_email', case
+            when handoff.agent_profile_id is not null then logistics_profile.email
+            else admin_actor.email
+          end
+        ) order by handoff.created_at, handoff.id)
+        from order_logistics_events handoff
+        left join profiles logistics_profile on logistics_profile.id = handoff.agent_profile_id
+        left join lateral (
+          select admin_event.admin_profile_id, admin_profile.name, admin_profile.email
+          from admin_audit_events admin_event
+          left join profiles admin_profile on admin_profile.id = admin_event.admin_profile_id
+          where admin_event.entity_type = 'order'
+            and admin_event.entity_id = o.id
+            and (
+              (handoff.event_type = 'picked_up' and admin_event.action = 'admin_order_marked_picked_up')
+              or (
+                handoff.event_type = 'delivered'
+                and admin_event.action in ('admin_order_marked_delivered', 'admin_offline_order_payment_recorded')
+              )
+            )
+          order by abs(extract(epoch from (admin_event.created_at - handoff.created_at))), admin_event.created_at desc
+          limit 1
+        ) admin_actor on true
+        where handoff.order_id = o.id
+      ), '[]'::json) as handoff_events
+    from orders o
+    left join vendors claimed_vendor on claimed_vendor.id = o.vendor_id
+    left join profiles claimant on claimant.id = claimed_vendor.profile_id
+    where o.id in ${sql(orderIds)}
+  `
+  return new Map(
+    rows.map((row) => [
+      row.id,
+      {
+        vendor_claim: row.vendor_claim,
+        handoff_events: row.handoff_events.map((event) => ({
+          ...event,
+          created_at: timestamp(event.created_at) ?? '',
+        })),
+      },
+    ]),
+  )
 }
 
 function parseSortRules(value: string | null): SortRule[] {
@@ -524,8 +628,10 @@ export async function loadAdminOrders(request: Request, authOverride?: Awaited<R
   }
 
   const pageRows = await orderQuery(PAGE_SIZE, (page - 1) * PAGE_SIZE, true)
-  const selectedFromPage = pageRows.find((order) => order.id === selectedOrderId)
-  let selectedOrder: AdminOrder | null = selectedFromPage ? normalizeOrder(selectedFromPage) : null
+  const pageOperations = await loadOrderOperations(pageRows.map((order) => order.id))
+  const normalizedPageRows = pageRows.map((order) => normalizeOrder(order, pageOperations.get(order.id)))
+  const selectedFromPage = normalizedPageRows.find((order) => order.id === selectedOrderId)
+  let selectedOrder: AdminOrder | null = selectedFromPage ?? null
   if (!selectedOrder && selectedOrderId && /^[0-9a-f-]{36}$/i.test(selectedOrderId)) {
     const [selected] = await sql<OrderRow[]>`
       select
@@ -558,11 +664,14 @@ export async function loadAdminOrders(request: Request, authOverride?: Awaited<R
       where o.id = ${selectedOrderId}
       limit 1
     `
-    if (selected) selectedOrder = normalizeOrder(selected)
+    if (selected) {
+      const selectedOperations = await loadOrderOperations([selected.id])
+      selectedOrder = normalizeOrder(selected, selectedOperations.get(selected.id))
+    }
   }
   return data<OrdersData>(
     {
-      orders: pageRows.map(normalizeOrder),
+      orders: normalizedPageRows,
       selectedOrder,
       page,
       pageSize: PAGE_SIZE,

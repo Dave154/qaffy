@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { NavLink, Outlet, data, redirect, useLoaderData, useLocation, useNavigate, useRevalidator } from 'react-router'
 import { useEffect } from 'react'
 import type { Route } from './+types/VendorLayout'
-import { Banknote, ClipboardList, History, LayoutDashboard, LogOut, Menu, Settings, X } from 'lucide-react'
+import { Banknote, ChevronLeft, ChevronRight, ClipboardList, History, LayoutDashboard, LogOut, Menu, Settings, X } from 'lucide-react'
 import QaffyLogo from '../../components/QaffyLogo'
 import { requireRole } from '../../lib/auth.server'
 import { changedRowStatus, createRefreshScheduler } from '../../lib/live-refresh.client'
@@ -11,6 +11,37 @@ import { supabase } from '../../lib/supabase.client'
 
 const vendorOrderPageSize = 20
 const vendorOverviewOrderPageSize = 10
+const overviewDateModes = ['all', 'today', 'this_week', 'last_week', 'this_month', 'last_month', 'custom'] as const
+const overviewSortColumns = ['pickup_date', 'order_type', 'customer', 'customer_id', 'location', 'status'] as const
+type OverviewDateMode = (typeof overviewDateModes)[number]
+type OverviewSortColumn = (typeof overviewSortColumns)[number]
+type OverviewSortRule = { column: OverviewSortColumn; direction: 'asc' | 'desc' }
+
+function validOverviewDate(value: string | null) {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null
+  const parsed = new Date(`${value}T00:00:00.000Z`)
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value ? value : null
+}
+
+function parseOverviewSortRules(value: string | null): OverviewSortRule[] {
+  if (!value) return []
+  const seen = new Set<OverviewSortColumn>()
+  return value
+    .split(',')
+    .flatMap((rule): OverviewSortRule[] => {
+      const [column, direction] = rule.split(':')
+      if (
+        !overviewSortColumns.includes(column as OverviewSortColumn) ||
+        (direction !== 'asc' && direction !== 'desc') ||
+        seen.has(column as OverviewSortColumn)
+      ) {
+        return []
+      }
+      seen.add(column as OverviewSortColumn)
+      return [{ column: column as OverviewSortColumn, direction }]
+    })
+    .slice(0, overviewSortColumns.length)
+}
 
 // eslint-disable-next-line react-refresh/only-export-components
 export async function loader({ request }: Route.LoaderArgs) {
@@ -35,8 +66,18 @@ export async function loader({ request }: Route.LoaderArgs) {
   const orderSearch = (requestUrl.searchParams.get('search') ?? '').trim().slice(0, 100)
   const requestedPage = Number.parseInt(requestUrl.searchParams.get('page') ?? '1', 10)
   const page = Number.isSafeInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1
-  const requestedOverviewRange = requestUrl.searchParams.get('range') ?? 'Today'
-  const overviewRange = ['Today', 'This week', 'All time'].includes(requestedOverviewRange) ? requestedOverviewRange : 'Today'
+  const legacyOverviewRange = requestUrl.searchParams.get('range')
+  const legacyOverviewMode =
+    legacyOverviewRange === 'Today' ? 'today' : legacyOverviewRange === 'This week' ? 'this_week' : legacyOverviewRange === 'All time' ? 'all' : null
+  const requestedOverviewMode = requestUrl.searchParams.get('date') ?? legacyOverviewMode ?? 'today'
+  const overviewDateMode: OverviewDateMode = overviewDateModes.includes(requestedOverviewMode as OverviewDateMode)
+    ? (requestedOverviewMode as OverviewDateMode)
+    : 'today'
+  const overviewFromDate = validOverviewDate(requestUrl.searchParams.get('from'))
+  const overviewToDate = validOverviewDate(requestUrl.searchParams.get('to'))
+  const overviewSortRules: OverviewSortRule[] = requestUrl.searchParams.has('sort')
+    ? parseOverviewSortRules(requestUrl.searchParams.get('sort'))
+    : [{ column: 'pickup_date', direction: 'desc' }]
   let pageOrderIds: string[] = []
   let overviewOrderIds: string[] | null = null
   let ordersPagination: {
@@ -163,76 +204,108 @@ export async function loader({ request }: Route.LoaderArgs) {
       },
     }
   } else if (vendor?.id && isOverviewPage) {
+    const overviewDateFilter = (() => {
+      switch (overviewDateMode) {
+        case 'today':
+          return sql`
+            o.picked_up_date >= (date_trunc('day', now() at time zone 'Africa/Lagos') at time zone 'Africa/Lagos')
+            and o.picked_up_date < ((date_trunc('day', now() at time zone 'Africa/Lagos') + interval '1 day') at time zone 'Africa/Lagos')
+          `
+        case 'this_week':
+          return sql`
+            o.picked_up_date >= (date_trunc('week', now() at time zone 'Africa/Lagos') at time zone 'Africa/Lagos')
+            and o.picked_up_date < ((date_trunc('week', now() at time zone 'Africa/Lagos') + interval '1 week') at time zone 'Africa/Lagos')
+          `
+        case 'last_week':
+          return sql`
+            o.picked_up_date >= ((date_trunc('week', now() at time zone 'Africa/Lagos') - interval '1 week') at time zone 'Africa/Lagos')
+            and o.picked_up_date < (date_trunc('week', now() at time zone 'Africa/Lagos') at time zone 'Africa/Lagos')
+          `
+        case 'this_month':
+          return sql`
+            o.picked_up_date >= (date_trunc('month', now() at time zone 'Africa/Lagos') at time zone 'Africa/Lagos')
+            and o.picked_up_date < ((date_trunc('month', now() at time zone 'Africa/Lagos') + interval '1 month') at time zone 'Africa/Lagos')
+          `
+        case 'last_month':
+          return sql`
+            o.picked_up_date >= ((date_trunc('month', now() at time zone 'Africa/Lagos') - interval '1 month') at time zone 'Africa/Lagos')
+            and o.picked_up_date < (date_trunc('month', now() at time zone 'Africa/Lagos') at time zone 'Africa/Lagos')
+          `
+        case 'custom':
+          return sql`
+            (${overviewFromDate}::date is null or o.picked_up_date >= (${overviewFromDate}::date::timestamp at time zone 'Africa/Lagos'))
+            and (${overviewToDate}::date is null or o.picked_up_date < ((${overviewToDate}::date + 1)::timestamp at time zone 'Africa/Lagos'))
+          `
+        default:
+          return sql`true`
+      }
+    })()
+    const sortExpression = (column: OverviewSortColumn) => {
+      switch (column) {
+        case 'pickup_date':
+          return sql`picked_up_date`
+        case 'order_type':
+          return sql`order_type`
+        case 'customer':
+          return sql`customer_name`
+        case 'customer_id':
+          return sql`customer_qaffy_id`
+        case 'location':
+          return sql`location_name`
+        case 'status':
+          return sql`order_status`
+      }
+    }
+    const overviewOrderBy = overviewSortRules.length
+      ? overviewSortRules.slice(1).reduce(
+          (order, rule) => sql`
+            ${order}, ${sortExpression(rule.column)} ${rule.direction === 'asc' ? sql`asc` : sql`desc`} nulls last
+          `,
+          sql`${sortExpression(overviewSortRules[0].column)} ${overviewSortRules[0].direction === 'asc' ? sql`asc` : sql`desc`} nulls last`,
+        )
+      : sql`id desc`
     const [metrics] = await sql<
       {
-        today_pending: number
-        today_active: number
-        today_dispatched: number
-        today_completed: number
-        week_pending: number
-        week_active: number
-        week_dispatched: number
-        week_completed: number
-        all_pending: number
-        all_active: number
-        all_dispatched: number
-        all_completed: number
+        pending: number
+        active: number
+        dispatched: number
+        completed: number
       }[]
     >`
       select
-        count(*) filter (where status = 'picked_up' and coalesce(picked_up_date, created_at) >= (date_trunc('day', now() at time zone 'Africa/Lagos') at time zone 'Africa/Lagos'))::int as today_pending,
-        count(*) filter (where status in ('at_vendor', 'invoiced', 'paid') and coalesce(picked_up_date, created_at) >= (date_trunc('day', now() at time zone 'Africa/Lagos') at time zone 'Africa/Lagos'))::int as today_active,
-        count(*) filter (where status = 'out_for_delivery' and coalesce(picked_up_date, created_at) >= (date_trunc('day', now() at time zone 'Africa/Lagos') at time zone 'Africa/Lagos'))::int as today_dispatched,
-        count(*) filter (where status = 'delivered' and coalesce(picked_up_date, created_at) >= (date_trunc('day', now() at time zone 'Africa/Lagos') at time zone 'Africa/Lagos'))::int as today_completed,
-        count(*) filter (where status = 'picked_up' and coalesce(picked_up_date, created_at) >= ((date_trunc('day', now() at time zone 'Africa/Lagos') - interval '6 days') at time zone 'Africa/Lagos'))::int as week_pending,
-        count(*) filter (where status in ('at_vendor', 'invoiced', 'paid') and coalesce(picked_up_date, created_at) >= ((date_trunc('day', now() at time zone 'Africa/Lagos') - interval '6 days') at time zone 'Africa/Lagos'))::int as week_active,
-        count(*) filter (where status = 'out_for_delivery' and coalesce(picked_up_date, created_at) >= ((date_trunc('day', now() at time zone 'Africa/Lagos') - interval '6 days') at time zone 'Africa/Lagos'))::int as week_dispatched,
-        count(*) filter (where status = 'delivered' and coalesce(picked_up_date, created_at) >= ((date_trunc('day', now() at time zone 'Africa/Lagos') - interval '6 days') at time zone 'Africa/Lagos'))::int as week_completed,
-        count(*) filter (where status = 'picked_up')::int as all_pending,
-        count(*) filter (where status in ('at_vendor', 'invoiced', 'paid'))::int as all_active,
-        count(*) filter (where status = 'out_for_delivery')::int as all_dispatched,
-        count(*) filter (where status = 'delivered')::int as all_completed
-      from orders
-      where status <> 'cancelled'
-        and (vendor_id = ${vendor.id} or (vendor_id is null and status = 'picked_up'))
+        count(*) filter (where o.status = 'picked_up')::int as pending,
+        count(*) filter (where o.status in ('at_vendor', 'invoiced', 'paid'))::int as active,
+        count(*) filter (where o.status = 'out_for_delivery')::int as dispatched,
+        count(*) filter (where o.status = 'delivered')::int as completed
+      from orders o
+      where o.status <> 'cancelled'
+        and (o.vendor_id = ${vendor.id} or (o.vendor_id is null and o.status = 'picked_up'))
+        and ${overviewDateFilter}
     `
     overviewMetrics = {
-      Today: {
-        pending: Number(metrics?.today_pending ?? 0),
-        active: Number(metrics?.today_active ?? 0),
-        dispatched: Number(metrics?.today_dispatched ?? 0),
-        completed: Number(metrics?.today_completed ?? 0),
-      },
-      'This week': {
-        pending: Number(metrics?.week_pending ?? 0),
-        active: Number(metrics?.week_active ?? 0),
-        dispatched: Number(metrics?.week_dispatched ?? 0),
-        completed: Number(metrics?.week_completed ?? 0),
-      },
-      'All time': {
-        pending: Number(metrics?.all_pending ?? 0),
-        active: Number(metrics?.all_active ?? 0),
-        dispatched: Number(metrics?.all_dispatched ?? 0),
-        completed: Number(metrics?.all_completed ?? 0),
+      [overviewDateMode]: {
+        pending: Number(metrics?.pending ?? 0),
+        active: Number(metrics?.active ?? 0),
+        dispatched: Number(metrics?.dispatched ?? 0),
+        completed: Number(metrics?.completed ?? 0),
       },
     }
     const [overviewOrderPage] = await sql<{ order_ids: string[]; total_count: number; page: number; page_count: number }[]>`
       with matching_orders as (
-        select id, coalesce(picked_up_date, created_at) as order_date, created_at
-        from orders
-        where status = 'picked_up'
-          and vendor_id is null
-          and (
-            ${overviewRange} = 'All time'
-            or (
-              ${overviewRange} = 'Today'
-              and coalesce(picked_up_date, created_at) >= (date_trunc('day', now() at time zone 'Africa/Lagos') at time zone 'Africa/Lagos')
-            )
-            or (
-              ${overviewRange} = 'This week'
-              and coalesce(picked_up_date, created_at) >= ((date_trunc('day', now() at time zone 'Africa/Lagos') - interval '6 days') at time zone 'Africa/Lagos')
-            )
-          )
+        select
+          o.id,
+          o.picked_up_date,
+          o.order_type::text as order_type,
+          o.status::text as order_status,
+          customer.name as customer_name,
+          coalesce(customer.qaffy_id, o.customer_id::text) as customer_qaffy_id,
+          location.name as location_name
+        from orders o
+        left join profiles customer on customer.id = o.customer_id
+        left join pickup_locations location on location.id = o.pickup_location_id
+        where o.status = 'picked_up'
+          and o.vendor_id is null
+          and ${overviewDateFilter}
       ),
       total as (
         select count(*)::int as total_count from matching_orders
@@ -250,7 +323,7 @@ export async function loader({ request }: Route.LoaderArgs) {
         coalesce(array(
           select id
           from matching_orders
-          order by order_date desc, created_at desc, id desc
+          order by ${overviewOrderBy}, picked_up_date desc nulls last, id desc
           offset ((select page from page_info) - 1) * ${vendorOverviewOrderPageSize}
           limit ${vendorOverviewOrderPageSize}
         ), '{}'::uuid[]) as order_ids,
@@ -387,6 +460,7 @@ const navigation = [
 export default function VendorLayout() {
   const loaderData = useLoaderData<typeof loader>()
   const [menuOpen, setMenuOpen] = useState(false)
+  const [isCollapsed, setIsCollapsed] = useState(false)
   const [payoutPromptDismissed, setPayoutPromptDismissed] = useState(false)
   const location = useLocation()
   const navigate = useNavigate()
@@ -424,7 +498,7 @@ export default function VendorLayout() {
       : (navigation.find((item) => item.to !== '/vendor' && location.pathname.startsWith(item.to))?.label ?? 'Overview')
 
   return (
-    <div className="min-h-screen bg-[#f8f8f8] text-[#121212]">
+    <div className="min-h-screen bg-[#fafafa] text-slate-900">
       {!loaderData.payoutAccountReady && !payoutPromptDismissed && (
         <div
           className="fixed inset-0 z-100 flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[3px]"
@@ -483,91 +557,174 @@ export default function VendorLayout() {
 
       <header className="sticky top-0 z-20 border-b border-[#f2f3f3] bg-white lg:hidden">
         <div className="mx-auto flex max-w-3xl items-center justify-between px-4 py-3.5 sm:px-6">
-          <div className="flex flex-col items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setMenuOpen(true)}
+            aria-label="Open vendor navigation"
+            aria-expanded={menuOpen}
+            className="flex h-9 w-9 items-center justify-center rounded-lg border border-[#e7e7e7] bg-white text-slate-600"
+          >
+            <Menu size={18} />
+          </button>
+          <div className="flex flex-1 flex-col items-center gap-1">
             <NavLink
               to="/vendor"
               aria-label="Go to vendor home"
               className="inline-flex rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary"
             >
-              <QaffyLogo className="inline-flex" />
+              <QaffyLogo className="scale-[0.82]" />
             </NavLink>
             <p className="text-[10px] font-semibold capitalize tracking-[0.18em] text-brand-primary">Vendor</p>
           </div>
-          <button
-            type="button"
-            onClick={() => setMenuOpen((open) => !open)}
-            aria-label="Open vendor menu"
-            className="flex h-9 w-9 items-center justify-center rounded-lg border border-[#e7e7e7] bg-white text-slate-600"
-          >
-            {menuOpen ? <X size={22} /> : <Menu size={22} />}
-          </button>
+          <div className="h-9 w-9" aria-hidden="true" />
         </div>
       </header>
 
       <div className="min-h-screen">
         <aside
-          className={`${menuOpen ? 'translate-x-0' : '-translate-x-full'} fixed inset-y-0 left-0 z-30 flex w-[221px] flex-col overflow-y-auto border-r border-[#ececec] bg-white px-[13px] py-7 transition-transform lg:translate-x-0`}
+          className={`fixed left-0 top-0 z-30 hidden h-screen max-h-screen shrink-0 self-start flex-col overflow-visible border-r border-[#f2f3f3] bg-white py-7 shadow-[1px_0_8px_rgba(18,18,18,0.04)] transition-[width] duration-300 lg:flex ${isCollapsed ? 'w-[76px] px-3' : 'w-[221px] px-[13px]'}`}
         >
-          <div className="flex flex-col items-center gap-3 px-3">
-            <NavLink
-              to="/vendor"
-              aria-label="Go to vendor home"
-              onClick={() => setMenuOpen(false)}
-              className="inline-flex rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary"
-            >
-              <QaffyLogo className="inline-flex" />
-            </NavLink>
-            <p className="text-[10px] font-semibold capitalize tracking-[0.18em] text-brand-primary">Vendor</p>
-            <button
-              type="button"
-              onClick={() => setMenuOpen(false)}
-              className="ml-auto flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 lg:hidden"
-              aria-label="Close vendor menu"
-            >
-              <X size={16} />
-            </button>
-          </div>
-          <nav className="mx-auto mt-12 w-[194px] space-y-1">
-            {navigation.map(({ to, label, icon: Icon, end }) => (
-              <NavLink
-                key={to}
-                to={to}
-                end={end}
-                prefetch="intent"
-                onClick={() => setMenuOpen(false)}
-                className={({ isActive }) =>
-                  `flex h-10 items-center gap-3 rounded-[8px] px-4 text-sm font-medium transition ${isActive ? 'bg-brand-surface text-brand-strong' : 'text-[#121212] hover:bg-[#f8f8f8]'}`
-                }
-              >
-                <span className="flex h-5 w-5 items-center justify-center rounded-[5px]">
-                  <Icon size={16} />
-                </span>
-                {label}
-              </NavLink>
-            ))}
-          </nav>
-          <div className="mt-auto space-y-1">
+          <div className="scrollbar-hidden flex min-h-0 flex-1 flex-col overflow-y-auto">
+            <div className={`mb-8 flex flex-col gap-3 ${isCollapsed ? 'items-center text-center' : ''}`}>
+              {isCollapsed ? (
+                <NavLink
+                  to="/vendor"
+                  aria-label="Go to vendor home"
+                  title="Vendor home"
+                  className="mt-2 rounded-sm text-3xl leading-[33px] text-brand-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary"
+                  style={{ fontFamily: 'Pacifico, cursive' }}
+                >
+                  Q
+                </NavLink>
+              ) : (
+                <NavLink
+                  to="/vendor"
+                  aria-label="Go to vendor home"
+                  className="inline-flex rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary"
+                >
+                  <QaffyLogo className="mt-2 origin-left px-3 scale-[0.78]" />
+                </NavLink>
+              )}
+              <p className={`text-[10px] font-semibold capitalize tracking-[0.22em] text-brand-primary ${isCollapsed ? 'sr-only' : 'px-3'}`}>
+                Vendor
+              </p>
+            </div>
+            <nav className={`mx-auto space-y-2 ${isCollapsed ? 'w-full' : 'w-[194px]'}`}>
+              {navigation.map(({ to, label, icon: Icon, end }) => (
+                <NavLink
+                  key={to}
+                  to={to}
+                  end={end}
+                  prefetch="intent"
+                  className={({ isActive }) =>
+                    `group relative flex h-11 items-center rounded-xl text-sm font-medium transition ${isCollapsed ? 'justify-center px-0' : 'gap-3 px-4'} ${isActive ? 'bg-brand-soft text-brand-primary' : 'text-[#121212] hover:bg-brand-soft hover:text-brand-primary'}`
+                  }
+                >
+                  <Icon size={17} strokeWidth={1.8} aria-hidden="true" />
+                  <span className={isCollapsed ? 'sr-only' : ''}>{label}</span>
+                  {isCollapsed && (
+                    <span
+                      role="tooltip"
+                      className="pointer-events-none absolute left-[calc(100%+12px)] z-20 hidden whitespace-nowrap rounded-md bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-white shadow-lg group-hover:block group-focus-visible:block"
+                    >
+                      {label}
+                    </span>
+                  )}
+                </NavLink>
+              ))}
+            </nav>
             <button
               type="button"
               onClick={() => void handleLogout()}
-              className="flex h-10 w-full items-center gap-3 rounded-[8px] px-4 text-sm font-medium text-red-600 hover:bg-red-50"
+              aria-label="Log out"
+              className={`group relative mt-auto flex h-10 w-full items-center rounded-[10px] text-left text-sm font-medium text-red-600 hover:bg-red-50 hover:text-red-700 ${isCollapsed ? 'justify-center px-0' : 'gap-3 px-4'}`}
             >
-              <LogOut size={16} />
-              <span>Log out</span>
+              <LogOut size={17} strokeWidth={1.8} aria-hidden="true" className="text-red-600 group-hover:text-red-700" />
+              <span className={`${isCollapsed ? 'sr-only' : ''} text-red-600 group-hover:text-red-700`}>Log out</span>
+              {isCollapsed && (
+                <span
+                  role="tooltip"
+                  className="pointer-events-none absolute left-[calc(100%+12px)] z-20 hidden whitespace-nowrap rounded-md bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-white shadow-lg group-hover:block group-focus-visible:block"
+                >
+                  Log out
+                </span>
+              )}
             </button>
           </div>
+          <button
+            type="button"
+            onClick={() => setIsCollapsed((collapsed) => !collapsed)}
+            aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            className="absolute -right-3 top-7 z-20 flex h-6 w-6 items-center justify-center rounded-full border border-[#f0eeee] bg-white text-slate-400 shadow-[0_2px_8px_rgba(0,0,0,0.05)] transition hover:text-brand-primary"
+          >
+            {isCollapsed ? <ChevronRight size={13} /> : <ChevronLeft size={13} />}
+          </button>
         </aside>
 
         {menuOpen && (
-          <button
-            type="button"
-            aria-label="Close vendor menu overlay"
-            onClick={() => setMenuOpen(false)}
-            className="fixed inset-0 z-20 bg-slate-950/20 lg:hidden"
-          />
+          <div className="fixed inset-0 z-40 lg:hidden">
+            <button
+              type="button"
+              aria-label="Close vendor navigation overlay"
+              onClick={() => setMenuOpen(false)}
+              className="absolute inset-0 bg-slate-950/35"
+            />
+            <aside className="relative z-10 flex h-full w-[84%] max-w-sm flex-col overflow-y-auto border-r border-[#e7e7e7] bg-white px-[13px] py-5 shadow-xl">
+              <div className="mb-6 flex items-center justify-between">
+                <div className="flex flex-1 flex-col items-start gap-3">
+                  <NavLink
+                    to="/vendor"
+                    aria-label="Go to vendor home"
+                    onClick={() => setMenuOpen(false)}
+                    className="inline-flex rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary"
+                  >
+                    <QaffyLogo className="origin-left scale-[0.78] px-0" />
+                  </NavLink>
+                  <p className="text-[10px] font-semibold capitalize tracking-[0.22em] text-brand-primary">Vendor</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setMenuOpen(false)}
+                  aria-label="Close vendor navigation"
+                  className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-600"
+                >
+                  <X size={17} />
+                </button>
+              </div>
+              <nav className="space-y-2">
+                {navigation.map(({ to, label, icon: Icon, end }) => (
+                  <NavLink
+                    key={to}
+                    to={to}
+                    end={end}
+                    prefetch="intent"
+                    onClick={() => setMenuOpen(false)}
+                    className={({ isActive }) =>
+                      `flex h-11 items-center gap-3 rounded-xl px-4 text-sm font-medium transition ${isActive ? 'bg-brand-soft text-brand-primary' : 'text-[#121212] hover:bg-brand-soft hover:text-brand-primary'}`
+                    }
+                  >
+                    <Icon size={17} strokeWidth={1.8} aria-hidden="true" />
+                    {label}
+                  </NavLink>
+                ))}
+              </nav>
+              <button
+                type="button"
+                onClick={() => {
+                  setMenuOpen(false)
+                  void handleLogout()
+                }}
+                aria-label="Log out"
+                className="mt-auto flex h-10 w-full items-center rounded-[10px] px-4 text-left text-sm font-medium text-red-600 hover:bg-red-50 hover:text-red-700"
+              >
+                <LogOut size={17} strokeWidth={1.8} aria-hidden="true" className="mr-3" />
+                Log out
+              </button>
+            </aside>
+          </div>
         )}
 
-        <div className="min-w-0 lg:ml-[221px]">
+        <div className={`min-w-0 transition-[margin] duration-300 ${isCollapsed ? 'lg:ml-[76px]' : 'lg:ml-[221px]'}`}>
           <header className="hidden h-[70px] items-center justify-between gap-4 border-b border-[#f2f3f3] bg-white px-7 pt-[22px] lg:sticky lg:top-0 lg:z-10 lg:flex">
             <div className="flex items-center justify-between gap-4">
               <h1 className="text-2xl font-bold text-slate-900">{pageTitle}</h1>

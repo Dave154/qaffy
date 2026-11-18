@@ -264,7 +264,8 @@ function UserFilterDrawer({
                 className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
               >
                 <option value="all">All users</option>
-                <option value="active">All subscriptions</option>
+                <option value="active">Active subscribers</option>
+                <option value="former">Inactive subscribers</option>
                 {subscriptionPlans.map((plan) => (
                   <option key={plan.id} value={plan.id}>
                     {plan.name}({plan.type === 'semester' ? 'Semester' : 'Monthly'})
