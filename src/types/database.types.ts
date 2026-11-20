@@ -219,6 +219,7 @@ export interface Order {
   subscription_units_applied_at: string | null
   subscription_borrow_consent_units: number
   status: OrderStatus
+  vendor_claimed_at: string | null
   pickup_otp: string | null
   delivery_otp: string | null
   pickup_location_id: string | null

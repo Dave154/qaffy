@@ -94,6 +94,7 @@ type AdminOrder = {
     business_name: string
     claimant_name: string | null
     claimant_email: string | null
+    claimed_at: string | null
   } | null
 }
 type BillingBreakdown = { coveredUnits: number; subscriberAmount: number; regularAmount: number }
@@ -1056,6 +1057,15 @@ const formatDate = (value: string | null) =>
         minute: '2-digit',
       })
     : 'Not recorded'
+const formatClaimTime = (value: string) =>
+  new Date(value).toLocaleString('en-GB', {
+      timeZone: 'Africa/Lagos',
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+  })
 const money = (value: number) => `\u20A6${value.toLocaleString()}`
 const inputDate = (date: Date) =>
   `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
@@ -1619,6 +1629,11 @@ function OrderDetails({
                     {order.vendor_claim.claimant_email && order.vendor_claim.claimant_name
                       ? ` · ${order.vendor_claim.claimant_email}`
                       : ''}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    {order.vendor_claim.claimed_at
+                      ? `Claimed at ${formatClaimTime(order.vendor_claim.claimed_at)}`
+                      : 'Claim time not recorded'}
                   </p>
                 </>
               ) : (

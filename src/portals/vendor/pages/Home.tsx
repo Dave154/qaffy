@@ -45,7 +45,7 @@ export async function action({ request }: Route.ActionArgs) {
     try {
       ;[claimedOrder] = await sql`
         update orders
-        set status = 'at_vendor', vendor_id = ${vendor.id}
+        set status = 'at_vendor', vendor_id = ${vendor.id}, vendor_claimed_at = now()
         where id = ${orderId}
           and status = 'picked_up'
           and vendor_id is null
