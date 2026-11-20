@@ -6,7 +6,7 @@
   ],
   "crons": [
     { "path": "/api/notifications/subscriptions", "schedule": "0 8 * * *" },
-    { "path": "/api/subscriptions/reconcile-payments", "schedule": "*/15 * * * *" },
+    { "path": "/api/subscriptions/reconcile-payments", "schedule": "0 2 * * *" },
     { "path": "/api/logistics/used-otp-cleanup", "schedule": "15 0 * * *" }
   ]
 }
