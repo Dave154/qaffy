@@ -76,7 +76,10 @@ export default function App() {
     initializePwaInstall()
   }, [])
 
+  const isAdminUserDetailsUpdate =
+    /^\/admin\/users\/[^/]+$/.test(location.pathname) && navigation.location?.pathname === location.pathname
   const isInPageTableUpdate =
+    isAdminUserDetailsUpdate ||
     ['/admin/users', '/admin/orders', '/admin/mismatches', '/logistics', '/vendor', '/vendor/orders'].some(
       (pathname) => location.pathname === pathname && navigation.location?.pathname === pathname,
     )

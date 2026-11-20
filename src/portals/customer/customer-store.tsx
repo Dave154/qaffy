@@ -23,8 +23,8 @@ export type OrderLine = {
   quantity: number
   unitPrice: number
   subscriptionUnits?: number
-  vendorCountDifference?: number
-  vendorAdded?: boolean
+  customerQuantity?: number
+  vendorQuantity?: number
 }
 
 export type PickupLocationOption = {
@@ -93,6 +93,7 @@ export type CustomerInvoice = {
   reference: string
   status: 'Paid' | 'Awaiting payment' | 'Refunded' | 'Cancelled'
   total: number
+  paymentMethod: 'wallet' | 'offline' | 'subscription_units' | null
   dueDate: string
   items: Array<{ label: string; quantity: string; amount: number }>
   originalCount: number | null
@@ -370,6 +371,7 @@ function mapDatabaseInvoice(
             ? 'Cancelled'
             : 'Awaiting payment',
     total: Number(invoice.amount),
+    paymentMethod: invoice.payment_method,
     dueDate: invoice.paid_at ? new Date(invoice.paid_at).toLocaleDateString() : 'Due today',
     items: [
       {
@@ -481,16 +483,17 @@ function mapDatabaseOrder(
       .filter((item) => item.order_id === order.id)
       .map((item) => {
         const mismatchLine = mismatchLines.find((line) => line.itemId === item.id)
+        const vendorQuantity = item.confirmed_quantity ?? mismatchLine?.confirmedQuantity
         return {
           itemId: item.id,
           categoryId: item.category_id,
           category: item.category_name,
           service: item.service === 'wash_iron' ? 'Wash + Iron' : item.service === 'iron' ? 'Iron' : 'Wash',
-          quantity: item.confirmed_quantity ?? item.quantity,
+          quantity: vendorQuantity ?? item.quantity,
           unitPrice: Number(item.unit_price),
           subscriptionUnits: item.subscription_units_snapshot === null ? undefined : Number(item.subscription_units_snapshot),
-          vendorCountDifference: item.confirmed_quantity == null ? undefined : item.confirmed_quantity - item.quantity,
-          vendorAdded: mismatchLine?.originalQuantity === 0 && mismatchLine.confirmedQuantity > 0,
+          customerQuantity: mismatchLine?.originalQuantity ?? item.quantity,
+          vendorQuantity,
         }
       }),
     mismatch: mismatch

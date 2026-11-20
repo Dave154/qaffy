@@ -31,7 +31,10 @@ export async function getSubscriptionUsageTotals(
       ), 0)::int as used_this_week
     from orders order_row
     where order_row.customer_id = ${input.customerId}::uuid
-      and order_row.is_subscription_order = true
+      and (
+        order_row.is_subscription_order = true
+        or order_row.subscription_allowance_subscription_id is not null
+      )
       and order_row.status <> 'cancelled'
       and order_row.clothes_count_vendor is not null
       and order_row.subscription_units_applied is not null

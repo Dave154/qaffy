@@ -174,6 +174,7 @@ export interface Subscription {
   covers_iron_snapshot: boolean
   price_snapshot: number | null
   is_queued_renewal: boolean
+  retroactive_allowance_units: number
   created_at: string
 }
 
@@ -207,6 +208,8 @@ export interface Order {
   vendor_id: string | null
   subscription_id: string | null
   subscription_allowance_subscription_id: string | null
+  retroactive_subscription_id: string | null
+  retroactive_units_applied: number | null
   order_type: OrderType
   clothes_count_customer: number
   clothes_count_customer_units: number | null
@@ -268,7 +271,7 @@ export interface Invoice {
   order_id: string
   amount: number
   status: InvoiceStatus
-  payment_method: 'wallet' | 'offline' | null
+  payment_method: 'wallet' | 'offline' | 'subscription_units' | null
   billing_breakdown: { coveredUnits: number; subscriberAmount: number; regularAmount: number } | null
   paid_at: string | null
   voided_at: string | null

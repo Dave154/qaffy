@@ -167,21 +167,24 @@ export function calculateSubscriptionAllowance(
     endDate: string | null
     usedUnits: number
     semesterWeeks?: number | null
+    retroactiveUnits?: number
   },
   reference = new Date(),
 ): SubscriptionAllowance {
   const weeklyLimit = Math.max(0, Math.floor(input.weeklyLimit))
   const usedUnits = Math.max(0, Math.floor(input.usedUnits))
+  const retroactiveUnits = Math.max(0, Math.floor(input.retroactiveUnits ?? 0))
   const semesterWeeks = input.semesterWeeks ?? null
+  const startAt = retroactiveUnits > 0 ? getSundayMidnightLagos(input.startDate).toISOString() : input.startAt ?? null
   const { accruedUnits, nextCredit } = getAllowanceCredits(
     input.startDate,
-    input.startAt ?? null,
+    startAt,
     input.endDate,
     reference,
     weeklyLimit,
     semesterWeeks,
   )
-  const balance = accruedUnits - usedUnits
+  const balance = accruedUnits - retroactiveUnits - usedUnits
   const nextWeekStart = new Date(getSubscriptionWeekStart(reference).getTime() + subscriptionWeekMilliseconds)
   const canBorrow = nextCredit !== null && nextCredit.getTime() <= nextWeekStart.getTime()
 
@@ -195,6 +198,43 @@ export function calculateSubscriptionAllowance(
   }
 }
 
+export function calculateRetroactiveSubscriptionUnits(
+  input: {
+    weeklyLimit: number
+    startDate: string
+    startAt: string
+    endDate: string | null
+    semesterWeeks?: number | null
+  },
+  reference = new Date(),
+) {
+  const weeklyLimit = Math.max(0, Math.floor(input.weeklyLimit))
+  const semesterWeeks = input.semesterWeeks ?? null
+  const backdatedStartAt = getSundayMidnightLagos(input.startDate).toISOString()
+  const effectiveWeekStart = getSubscriptionWeekStart(new Date(backdatedStartAt))
+  const creationWeekStart = getSubscriptionWeekStart(reference)
+  const backdated = getAllowanceCredits(
+    input.startDate,
+    backdatedStartAt,
+    input.endDate,
+    reference,
+    weeklyLimit,
+    semesterWeeks,
+  )
+  if (effectiveWeekStart.getTime() < creationWeekStart.getTime()) return backdated.accruedUnits
+
+  const current = getAllowanceCredits(
+    input.startDate,
+    input.startAt,
+    input.endDate,
+    reference,
+    weeklyLimit,
+    semesterWeeks,
+  )
+
+  return Math.max(0, backdated.accruedUnits - current.accruedUnits)
+}
+
 export function calculateSubscriptionAllowanceThroughCurrentMonth(
   input: {
     weeklyLimit: number
@@ -203,6 +243,7 @@ export function calculateSubscriptionAllowanceThroughCurrentMonth(
     endDate: string | null
     usedUnits: number
     semesterWeeks?: number | null
+    retroactiveUnits?: number
   },
   reference = new Date(),
 ) {
@@ -222,9 +263,11 @@ export function calculateSubscriptionAllowanceThroughCurrentMonth(
   const referenceAtEndOfAllowance = new Date(`${cappedEndDate}T23:59:59.999+01:00`)
   const weeklyLimit = Math.max(0, Math.floor(input.weeklyLimit))
   const usedUnits = Math.max(0, Math.floor(input.usedUnits))
+  const retroactiveUnits = Math.max(0, Math.floor(input.retroactiveUnits ?? 0))
+  const startAt = retroactiveUnits > 0 ? getSundayMidnightLagos(input.startDate).toISOString() : input.startAt ?? null
   const { accruedUnits } = getAllowanceCredits(
     input.startDate,
-    input.startAt ?? null,
+    startAt,
     cappedEndDate,
     referenceAtEndOfAllowance,
     weeklyLimit,
@@ -234,8 +277,8 @@ export function calculateSubscriptionAllowanceThroughCurrentMonth(
   return {
     accruedUnits,
     usedUnits,
-    balance: accruedUnits - usedUnits,
-    unitsAvailableForConfirmation: Math.max(0, accruedUnits - usedUnits),
+    balance: accruedUnits - retroactiveUnits - usedUnits,
+    unitsAvailableForConfirmation: Math.max(0, accruedUnits - retroactiveUnits - usedUnits),
   }
 }
 
@@ -272,7 +315,7 @@ export function calculateSubscriptionUnitsApplied(
   return orders
     .filter((order) => {
       if (
-        !order.is_subscription_order ||
+        (!order.is_subscription_order && !order.subscription_allowance_subscription_id) ||
         order.status === 'cancelled' ||
         order.clothes_count_vendor === null ||
         order.subscription_units_applied === null
@@ -302,7 +345,7 @@ export function calculateSubscriptionUnitsUsed(orders: readonly SubscriptionUsag
     .filter((order) => {
       const appliedAt = order.subscription_units_applied_at ?? order.created_at
       return (
-        order.is_subscription_order &&
+        (order.is_subscription_order || Boolean(order.subscription_allowance_subscription_id)) &&
         order.status !== 'cancelled' &&
         order.clothes_count_vendor !== null &&
         order.subscription_units_applied !== null &&

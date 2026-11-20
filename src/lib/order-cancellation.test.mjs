@@ -18,6 +18,14 @@ test('offline refunds are credited to the ordinary one-off wallet', () => {
   ])
 })
 
+test('subscription-unit settlement has no monetary refund source', () => {
+  assert.deepEqual(getRefundAllocations(0, 'subscription_units', []), [])
+  assert.throws(
+    () => getRefundAllocations(1, 'subscription_units', []),
+    RefundAccountingError,
+  )
+})
+
 test('wallet refunds reject allocations that do not exactly match the invoice', () => {
   assert.throws(
     () => getRefundAllocations(50, 'wallet', [{ balanceType: 'one_off', amount: 49, referralRewardId: null }]),

@@ -97,6 +97,9 @@ export default function Invoice() {
   const paymentBreakdown = [
     { label: 'Invoice total', value: total },
     { label: 'Status', value: invoice.status },
+    ...(invoice.paymentMethod === 'subscription_units'
+      ? [{ label: 'Payment method', value: 'Subscription units' }]
+      : []),
   ]
 
   return (

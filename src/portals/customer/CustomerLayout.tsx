@@ -628,7 +628,7 @@ async function loadCustomerLayoutData(request: Request) {
       serverSupabase
         .from('subscriptions')
         .select(
-          'id, customer_id, plan_id, status, start_date, end_date, weekly_limit_snapshot, semester_weeks_snapshot, covers_wash_snapshot, covers_iron_snapshot, price_snapshot, is_queued_renewal, created_at',
+          'id, customer_id, plan_id, status, start_date, end_date, weekly_limit_snapshot, semester_weeks_snapshot, retroactive_allowance_units, covers_wash_snapshot, covers_iron_snapshot, price_snapshot, is_queued_renewal, created_at',
         )
         .eq('customer_id', userData.user.id)
         .in('status', ['active', 'scheduled'])
@@ -640,7 +640,7 @@ async function loadCustomerLayoutData(request: Request) {
       serverSupabase
         .from('subscriptions')
         .select(
-          'id, customer_id, plan_id, status, start_date, end_date, weekly_limit_snapshot, semester_weeks_snapshot, covers_wash_snapshot, covers_iron_snapshot, price_snapshot, created_at',
+          'id, customer_id, plan_id, status, start_date, end_date, weekly_limit_snapshot, semester_weeks_snapshot, retroactive_allowance_units, covers_wash_snapshot, covers_iron_snapshot, price_snapshot, created_at',
         )
         .eq('customer_id', userData.user.id)
         .eq('status', 'scheduled')
@@ -812,6 +812,7 @@ async function loadCustomerLayoutData(request: Request) {
               startDate: subscription.start_date,
               startAt: subscription.created_at,
               endDate: subscription.end_date,
+              retroactiveUnits: Number(subscription.retroactive_allowance_units),
               usedUnits:
                 subscriptionUsageTotalsRows?.usedUnits ??
                 calculateSubscriptionUnitsApplied(subscriptionUsageOrders ?? [], {

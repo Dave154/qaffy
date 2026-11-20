@@ -1,17 +1,33 @@
 import { ArrowLeft, Copy, Pencil, Save, WalletCards } from 'lucide-react'
-import { data, Form, Link, redirect, useActionData, useFetcher, useLoaderData, useLocation, useNavigation } from 'react-router'
+import { data, Form, Link, redirect, useActionData, useFetcher, useLoaderData, useLocation, useNavigation, useRevalidator } from 'react-router'
 import { useEffect, useRef, useState } from 'react'
 import type { Route } from './+types/UserDetails'
 import { requireRole } from '../../../lib/auth.server'
-import { adjustWallet, creditAdminWallet } from '../../../lib/wallet.server'
+import { activateSubscriptionFromPayment, adjustWallet, creditAdminWallet } from '../../../lib/wallet.server'
 import { createManualSubscriptionWithSnapshot, lockCustomerSubscription } from '../../../lib/subscriptions.server'
 import { sql } from '../../../lib/db.server'
 import { addCalendarMonthsToDate } from '../../../lib/subscription-terms'
 import { toast } from '../../../lib/toast'
 import { calculateSubscriptionAllowance } from '../../../lib/subscription-week'
 import { getSubscriptionUsageTotals } from '../../../lib/subscription-usage.server'
+import { sendCustomerNotification } from '../../../lib/notifications.server'
+import { getRetroactiveSubscriptionOrderCandidates } from '../../../lib/retroactive-subscription.server'
 
 const userHistoryPageSize = 20
+
+type OrderHistoryFilter = 'all' | 'paid' | 'unpaid' | 'backdated-paid'
+type OrderHistorySort = 'newest' | 'oldest' | 'invoice-high' | 'invoice-low'
+
+type OrderHistoryRow = {
+  id: string
+  public_order_number: string | null
+  status: string
+  created_at: string | Date
+  customer_count: number
+  vendor_count: number | null
+  invoice_amount: number | string | null
+  invoice_status: string | null
+}
 
 type DetailOrder = {
   id: string
@@ -37,6 +53,7 @@ type DetailPayment = {
   reference: string
   amount: number
   status: string
+  subscriptionId: string | null
   createdAt: string
   succeededAt: string | null
   planName: string | null
@@ -75,13 +92,19 @@ type UserDetailsData = {
     activeSubscriptions: number
   }
   wallet: { oneOff: number; subscription: number }
+  activeSubscriptionId: string | null
   activeSubscriptionAllowance: {
     weeklyUnits: number
     availableUnits: number
     usedThisWeek: number
     totalUnitsUsed: number
     reservedUnits: number
+    backdatedUnitsTotal: number
+    backdatedUnitsUsed: number
+    backdatedUnitsAvailable: number
   } | null
+  backdatedSubscription: NonNullable<Awaited<ReturnType<typeof getRetroactiveSubscriptionOrderCandidates>>> | null
+  orderControls: { search: string; filter: OrderHistoryFilter; sort: OrderHistorySort }
   orders: DetailOrder[]
   subscriptions: DetailSubscription[]
   payments: DetailPayment[]
@@ -102,6 +125,12 @@ type UserDetailsData = {
     semesterEndDate: string | null
     active: boolean
   }>
+}
+type ManualSubscriptionActionData = {
+  ok: boolean
+  message: string
+  backdatedSubscription?: UserDetailsData['backdatedSubscription']
+  backdatedOrdersError?: boolean
 }
 
 function money(value: number) {
@@ -186,6 +215,14 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   if (!auth || !customerId) return data<UserDetailsData | null>(null, { status: 404 })
   const { supabase, headers } = auth
   const url = new URL(request.url)
+  const requestedBackdatedSubscriptionId = url.searchParams.get('backdatedSubscriptionId')
+  const backdatedSubscriptionId =
+    requestedBackdatedSubscriptionId &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      requestedBackdatedSubscriptionId,
+    )
+      ? requestedBackdatedSubscriptionId
+      : null
   const pageKeys = ['orders', 'subscriptions', 'payments', 'transactions', 'referrals'] as const
   type PageKey = (typeof pageKeys)[number]
   const requestedPages = Object.fromEntries(
@@ -194,12 +231,65 @@ export async function loader({ request, params }: Route.LoaderArgs) {
       return [key, Number.isSafeInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1]
     }),
   ) as Record<PageKey, number>
+  const orderSearch = (url.searchParams.get('ordersSearch') ?? '').trim().slice(0, 100)
+  const requestedOrderFilter = url.searchParams.get('ordersFilter')
+  const orderFilter: OrderHistoryFilter =
+    requestedOrderFilter === 'paid' ||
+    requestedOrderFilter === 'unpaid' ||
+    requestedOrderFilter === 'backdated-paid'
+      ? requestedOrderFilter
+      : 'all'
+  const requestedOrderSort = url.searchParams.get('ordersSort')
+  const orderSort: OrderHistorySort =
+    requestedOrderSort === 'oldest' ||
+    requestedOrderSort === 'invoice-high' ||
+    requestedOrderSort === 'invoice-low'
+      ? requestedOrderSort
+      : 'newest'
+  const orderFilters = sql`
+    (
+      ${orderSearch} = ''
+      or o.public_order_number ilike '%' || ${orderSearch} || '%'
+      or o.status::text ilike '%' || ${orderSearch} || '%'
+    )
+    and (
+      ${orderFilter} = 'all'
+      or (${orderFilter} = 'paid' and latest_invoice.status = 'paid')
+      or (${orderFilter} = 'unpaid' and coalesce(latest_invoice.status::text, 'unpaid') = 'unpaid')
+      or (
+        ${orderFilter} = 'backdated-paid'
+        and o.retroactive_subscription_id is not null
+        and latest_invoice.status = 'paid'
+      )
+    )
+  `
+  const ordersFrom = sql`
+    from orders o
+    left join lateral (
+      select amount, status
+      from invoices invoice
+      where invoice.order_id = o.id
+      order by invoice.created_at desc, invoice.id desc
+      limit 1
+    ) latest_invoice on true
+    where o.customer_id = ${customerId}::uuid
+      and ${orderFilters}
+  `
+  const orderBy =
+    orderSort === 'oldest'
+      ? sql`o.created_at asc`
+      : orderSort === 'invoice-high'
+        ? sql`latest_invoice.amount desc nulls last`
+        : orderSort === 'invoice-low'
+          ? sql`latest_invoice.amount asc nulls last`
+          : sql`o.created_at desc`
   const today = dateInput(new Date())
   const [
     { data: profile },
     { data: roles },
     { data: wallet },
-    { data: orders, count: orderCount, error: ordersError },
+    orderRows,
+    orderCountRows,
     { data: subscriptions, count: subscriptionCount, error: subscriptionsError },
     { data: activeSubscription },
     { data: plans },
@@ -210,16 +300,25 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     supabase.from('profiles').select('id, qaffy_id, name, email, phone, created_at').eq('id', customerId).maybeSingle(),
     supabase.from('profile_roles').select('role').eq('profile_id', customerId).eq('status', 'approved'),
     supabase.from('wallets').select('one_off_balance, subscription_balance').eq('customer_id', customerId).maybeSingle(),
-    supabase
-      .from('orders')
-      .select(
-        'id, public_order_number, status, clothes_count_vendor, created_at',
-        { count: 'exact' },
-      )
-      .eq('customer_id', customerId)
-      .order('created_at', { ascending: false })
-      .order('id', { ascending: false })
-      .range((requestedPages.orders - 1) * userHistoryPageSize, requestedPages.orders * userHistoryPageSize - 1),
+    sql<OrderHistoryRow[]>`
+      select
+        o.id,
+        o.public_order_number,
+        o.status::text as status,
+        o.created_at,
+        (select coalesce(sum(item.quantity), 0)::int from order_items item where item.order_id = o.id) as customer_count,
+        o.clothes_count_vendor as vendor_count,
+        latest_invoice.amount as invoice_amount,
+        latest_invoice.status::text as invoice_status
+      ${ordersFrom}
+      order by ${orderBy}, o.created_at desc, o.id desc
+      limit ${userHistoryPageSize}
+      offset ${(requestedPages.orders - 1) * userHistoryPageSize}
+    `,
+    sql<{ total: number }[]>`
+      select count(*)::int as total
+      ${ordersFrom}
+    `,
     supabase
       .from('subscriptions')
       .select('id, plan_id, status, start_date, end_date, created_at', { count: 'exact' })
@@ -232,7 +331,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
       ),
     supabase
       .from('subscriptions')
-      .select('id, plan_id, status, start_date, end_date, weekly_limit_snapshot, semester_weeks_snapshot, created_at')
+      .select('id, plan_id, status, start_date, end_date, weekly_limit_snapshot, semester_weeks_snapshot, retroactive_allowance_units, created_at')
       .eq('customer_id', customerId)
       .in('status', ['active', 'scheduled'])
       .lte('start_date', today)
@@ -243,7 +342,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     supabase.from('plans').select('id, name, type, semester_end_date, active').order('created_at', { ascending: false }),
     supabase
       .from('payments')
-      .select('id, provider, reference, amount, status, plan_id, created_at, succeeded_at', { count: 'exact' })
+      .select('id, provider, reference, amount, status, plan_id, subscription_id, created_at, succeeded_at', { count: 'exact' })
       .eq('customer_id', customerId)
       .order('created_at', { ascending: false })
       .order('id', { ascending: false })
@@ -266,11 +365,10 @@ export async function loader({ request, params }: Route.LoaderArgs) {
       .order('id', { ascending: false })
       .range((requestedPages.referrals - 1) * userHistoryPageSize, requestedPages.referrals * userHistoryPageSize - 1),
   ])
-  const historyQueryError =
-    ordersError ?? subscriptionsError ?? paymentsError ?? transactionsError ?? referralsError
+  const historyQueryError = subscriptionsError ?? paymentsError ?? transactionsError ?? referralsError
   if (historyQueryError) throw new Error(`Customer history could not be loaded: ${historyQueryError.message}`)
   const countByKey: Record<PageKey, number> = {
-    orders: orderCount ?? 0,
+    orders: Number(orderCountRows[0]?.total ?? 0),
     subscriptions: subscriptionCount ?? 0,
     payments: paymentCount ?? 0,
     transactions: transactionCount ?? 0,
@@ -291,26 +389,6 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     throw redirect(`${url.pathname}${url.search}`, { headers })
   }
 
-  const orderIds = (orders ?? []).map((order) => order.id)
-  const { data: orderItems, error: orderItemsError } =
-    orderIds.length > 0
-      ? await supabase.from('order_items').select('order_id, quantity').in('order_id', orderIds)
-      : { data: [], error: null }
-  if (orderItemsError) throw new Error(`Customer order items could not be loaded: ${orderItemsError.message}`)
-  const { data: invoices, error: invoicesError } =
-    orderIds.length > 0
-      ? await supabase
-          .from('invoices')
-          .select('order_id, amount, status, created_at, id')
-          .in('order_id', orderIds)
-          .order('created_at', { ascending: false })
-          .order('id', { ascending: false })
-      : { data: [], error: null }
-  if (invoicesError) throw new Error(`Customer invoices could not be loaded: ${invoicesError.message}`)
-  const itemCountByOrder = new Map<string, number>()
-  for (const item of orderItems ?? []) {
-    itemCountByOrder.set(item.order_id, (itemCountByOrder.get(item.order_id) ?? 0) + item.quantity)
-  }
   const [semesterSettings] = await sql<{ semester_end_date: Date | string | null }[]>`
     select semester_end_date
     from app_settings
@@ -319,10 +397,6 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   `
   if (!profile) return data<UserDetailsData | null>(null, { headers, status: 404 })
   const planById = new Map((plans ?? []).map((plan) => [plan.id, plan]))
-  const invoiceByOrder = new Map<string, (typeof invoices)[number]>()
-  for (const invoice of invoices ?? []) {
-    if (!invoiceByOrder.has(invoice.order_id)) invoiceByOrder.set(invoice.order_id, invoice)
-  }
   const allowanceReference = new Date()
   const subscriptionUsage = activeSubscription
     ? await getSubscriptionUsageTotals(
@@ -346,10 +420,26 @@ export async function loader({ request, params }: Route.LoaderArgs) {
           startAt: activeSubscription.created_at,
           endDate: activeSubscription.end_date,
           usedUnits: subscriptionUsage.usedUnits,
+          retroactiveUnits: Number(activeSubscription.retroactive_allowance_units),
         },
         allowanceReference,
       )
     : null
+  const backdatedSubscription = backdatedSubscriptionId
+    ? await getRetroactiveSubscriptionOrderCandidates({
+        customerId,
+        subscriptionId: backdatedSubscriptionId,
+      })
+    : null
+  const activeBackdatedSubscription =
+    activeSubscription && activeSubscription.id === backdatedSubscription?.subscriptionId
+      ? backdatedSubscription
+      : activeSubscription && Number(activeSubscription.retroactive_allowance_units) > 0
+        ? await getRetroactiveSubscriptionOrderCandidates({
+            customerId,
+            subscriptionId: activeSubscription.id,
+          })
+        : null
   const stats = {
     totalOrders: 0,
     completedOrders: 0,
@@ -403,6 +493,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
         oneOff: Number(wallet?.one_off_balance ?? 0),
         subscription: Number(wallet?.subscription_balance ?? 0),
       },
+      activeSubscriptionId: activeSubscription?.id ?? null,
       activeSubscriptionAllowance: activeSubscriptionAllowance
         ? {
             weeklyUnits: Number(activeSubscription?.weekly_limit_snapshot ?? 0),
@@ -410,17 +501,22 @@ export async function loader({ request, params }: Route.LoaderArgs) {
             usedThisWeek: subscriptionUsage.usedThisWeek,
             totalUnitsUsed: subscriptionUsage.usedUnits,
             reservedUnits: Math.max(0, -activeSubscriptionAllowance.balance),
+            backdatedUnitsTotal: Number(activeSubscription?.retroactive_allowance_units ?? 0),
+            backdatedUnitsUsed: activeBackdatedSubscription?.usedUnits ?? 0,
+            backdatedUnitsAvailable: activeBackdatedSubscription?.remainingUnits ?? 0,
           }
         : null,
-      orders: (orders ?? []).map((order) => ({
+      backdatedSubscription,
+      orderControls: { search: orderSearch, filter: orderFilter, sort: orderSort },
+      orders: orderRows.map((order) => ({
         id: order.id,
-        publicOrderNumber: order.public_order_number,
+        publicOrderNumber: order.public_order_number ?? 'QO-UNKNOWN',
         status: order.status,
-        createdAt: order.created_at,
-        customerCount: itemCountByOrder.get(order.id) ?? 0,
-        vendorCount: order.clothes_count_vendor,
-        invoiceAmount: invoiceByOrder.get(order.id) ? Number(invoiceByOrder.get(order.id)?.amount) : null,
-        invoiceStatus: invoiceByOrder.get(order.id)?.status ?? null,
+        createdAt: order.created_at instanceof Date ? order.created_at.toISOString() : order.created_at,
+        customerCount: Number(order.customer_count ?? 0),
+        vendorCount: order.vendor_count,
+        invoiceAmount: order.invoice_amount === null ? null : Number(order.invoice_amount),
+        invoiceStatus: order.invoice_status,
       })),
       subscriptions: (subscriptions ?? []).map((subscription) => ({
         id: subscription.id,
@@ -436,6 +532,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
         reference: payment.reference,
         amount: Number(payment.amount),
         status: payment.status,
+        subscriptionId: payment.subscription_id,
         createdAt: payment.created_at,
         succeededAt: payment.succeeded_at,
         planName: payment.plan_id ? (planById.get(payment.plan_id)?.name ?? 'Subscription plan') : null,
@@ -515,6 +612,121 @@ export async function action({ request, params }: Route.ActionArgs) {
       )
     }
   }
+  if (intent === 'reconcile-subscription-payment') {
+    if (process.env.NODE_ENV !== 'development') {
+      return data({ ok: false, message: 'Payment reconciliation is only available in local development.' }, { status: 404 })
+    }
+    const reference = String(formData.get('reference') ?? '').trim()
+    if (!reference || reference.length > 200) {
+      return data({ ok: false, message: 'A valid payment reference is required.' }, { status: 400, headers: auth.headers })
+    }
+    const secretKey = process.env.PAYSTACK_SECRET_KEY
+    if (!secretKey) {
+      return data({ ok: false, message: 'Paystack is not configured.' }, { status: 503, headers: auth.headers })
+    }
+
+    try {
+      const [payment] = await sql`
+        select amount
+        from payments
+        where customer_id = ${customerId}
+          and reference = ${reference}
+          and provider = 'paystack'
+          and plan_id is not null
+          and status in ('pending', 'success')
+        limit 1
+      `
+      if (!payment) {
+        return data(
+          { ok: false, message: 'No unreconciled subscription payment with that reference was found.' },
+          { status: 404, headers: auth.headers },
+        )
+      }
+
+      const verificationResponse = await fetch(
+        `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
+        { headers: { Authorization: `Bearer ${secretKey}` } },
+      )
+      if (verificationResponse.status === 404) {
+        return data(
+          { ok: false, message: 'Paystack could not find this transaction. No subscription changes were made.' },
+          { status: 409, headers: auth.headers },
+        )
+      }
+      const verification = (await verificationResponse.json()) as {
+        status?: boolean
+        message?: string
+        data?: { status?: string; reference?: string; amount?: number; currency?: string }
+      }
+      if (!verificationResponse.ok || verification.status === false) {
+        console.error('[admin-user-details] Paystack payment verification failed', {
+          reference,
+          message: verification.message,
+        })
+        return data(
+          { ok: false, message: 'Paystack could not confirm this payment. No subscription changes were made.' },
+          { status: 502, headers: auth.headers },
+        )
+      }
+
+      const verifiedPayment = verification.data
+      if (
+        verifiedPayment?.status !== 'success' ||
+        verifiedPayment.reference !== reference ||
+        Number(verifiedPayment.amount) !== Number(payment.amount) * 100 ||
+        verifiedPayment.currency !== 'NGN'
+      ) {
+        return data(
+          {
+            ok: false,
+            message:
+              verifiedPayment?.status === 'pending'
+                ? 'Paystack still reports this payment as pending. No subscription changes were made.'
+                : 'The Paystack transaction did not match this payment or was not successful. No subscription changes were made.',
+          },
+          { status: 409, headers: auth.headers },
+        )
+      }
+
+      const activation = await activateSubscriptionFromPayment(customerId, reference)
+      if (!activation.alreadyActivated) {
+        await sendCustomerNotification({
+          eventKey: activation.scheduled
+            ? `subscription:${activation.subscriptionId}:scheduled`
+            : `subscription:${activation.subscriptionId}:activated`,
+          customerId,
+          notificationType: activation.scheduled ? 'subscription_renewal_scheduled' : 'subscription_activated',
+          subscriptionId: activation.subscriptionId,
+          payload: {
+            title: activation.scheduled ? 'Plan renewal scheduled' : 'Plan activated',
+            body: activation.scheduled
+              ? `Your ${activation.planName} renewal is scheduled to start on ${activation.startDate}.`
+              : `Your ${activation.planName} plan is now active.`,
+            details: activation.scheduled
+              ? [`Plan: ${activation.planName}`, `Starts: ${activation.startDate}`, `Ends: ${activation.endDate}`]
+              : [`Plan: ${activation.planName}`, 'Your subscription benefits are now available.'],
+            url: '/plans',
+            tag: `subscription:${activation.subscriptionId}`,
+          },
+        })
+      }
+      return data(
+        {
+          ok: true,
+          message: activation.alreadyActivated
+            ? 'This paid subscription was already activated.'
+            : 'Payment confirmed and subscription activated.',
+        },
+        { headers: auth.headers },
+      )
+    } catch (error) {
+      console.error('[admin-user-details] Subscription payment reconciliation failed', error)
+      return data(
+        { ok: false, message: 'The subscription payment could not be reconciled. Please try again.' },
+        { status: 500, headers: auth.headers },
+      )
+    }
+  }
   if (intent === 'subscription') {
     const planId = String(formData.get('planId') ?? '')
     const startDate = String(formData.get('startDate') ?? '').trim()
@@ -528,11 +740,50 @@ export async function action({ request, params }: Route.ActionArgs) {
       return data({ ok: false, message: 'Enter a valid subscription start date.' }, { status: 400 })
     }
     try {
-      await createManualSubscriptionWithSnapshot({ customerId, planId, startDate })
-      return data({ ok: true, message: 'Subscription created.' })
+      const created = await createManualSubscriptionWithSnapshot({
+        customerId,
+        planId,
+        startDate,
+      })
+      let backdatedSubscription: UserDetailsData['backdatedSubscription']
+      try {
+        backdatedSubscription = await getRetroactiveSubscriptionOrderCandidates({
+          customerId,
+          subscriptionId: created.subscription.id,
+        })
+      } catch (error) {
+        console.error('[admin-user-details] Subscription created but backdated orders could not be loaded', error)
+        return data(
+          {
+            ok: true,
+            message: 'Subscription created, but its backdated order list could not be loaded. Refresh and check the required database migration.',
+            backdatedOrdersError: true,
+          },
+          { headers: auth.headers },
+        )
+      }
+      return data(
+        {
+          ok: true,
+          message: 'Subscription created.',
+          backdatedSubscription,
+        },
+        { headers: auth.headers },
+      )
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Subscription could not be created.'
-      return data({ ok: false, message }, { status: /already has (an active subscription|a renewal scheduled)/i.test(message) ? 409 : 400 })
+      const status = /already has|already awaiting confirmation|no longer eligible/i.test(message)
+        ? 409
+        : /plan (not found|is no longer available)|valid number of semester weeks|semester allowance|end date is required/i.test(
+              message,
+            )
+          ? 400
+          : 500
+      if (status === 500) console.error('[admin-user-details] Manual subscription creation failed', error)
+      return data(
+        { ok: false, message },
+        { status, headers: auth.headers },
+      )
     }
   }
   if (intent === 'cancel-subscription') {
@@ -685,18 +936,41 @@ function UserStats({ stats }: { stats: UserDetailsData['stats'] }) {
 function ManualSubscription({
   plans,
   semesterEndDate,
-  isSaving,
+  onCreated,
 }: {
   plans: UserDetailsData['plans']
   semesterEndDate: string | null
-  isSaving: boolean
+  onCreated: (subscription: UserDetailsData['backdatedSubscription']) => void
 }) {
   const today = dateInput(new Date())
+  const fetcher = useFetcher<ManualSubscriptionActionData>()
+  const { revalidate } = useRevalidator()
+  const handledResponse = useRef<typeof fetcher.data>(null)
   const [planId, setPlanId] = useState('')
   const [startDate, setStartDate] = useState(today)
   const [endDate, setEndDate] = useState('')
+  const isSaving = fetcher.state !== 'idle'
   const selectedPlan = plans.find((candidate) => candidate.id === planId)
   const endDateIsValid = Boolean(endDate && endDate >= startDate)
+  useEffect(() => {
+    const result = fetcher.data
+    if (fetcher.state !== 'idle' || !result || handledResponse.current === result) return
+    handledResponse.current = result
+    if (!result.ok) {
+      toast.error(result.message)
+      revalidate()
+      return
+    }
+    if (result.backdatedOrdersError) {
+      toast.error(result.message)
+      revalidate()
+      return
+    }
+    if ('backdatedSubscription' in result) onCreated(result.backdatedSubscription ?? null)
+    toast.success(result.message)
+    revalidate()
+  }, [fetcher.data, fetcher.state, onCreated, revalidate])
+
   const updatePlanDates = (nextPlanId: string, nextStartDate = startDate) => {
     const plan = plans.find((candidate) => candidate.id === nextPlanId)
     setPlanId(nextPlanId)
@@ -715,7 +989,7 @@ function ManualSubscription({
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5">
       <h3 className="font-bold text-slate-900">Manual subscription</h3>
-      <Form method="post" className="mt-4 space-y-3">
+      <fetcher.Form method="post" className="mt-4 space-y-3">
         <input type="hidden" name="intent" value="subscription" />
         <select
           name="planId"
@@ -771,26 +1045,110 @@ function ManualSubscription({
           disabled={isSaving || !endDateIsValid}
           className="rounded-lg bg-brand-primary px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
         >
-          Create subscription
+          {isSaving ? 'Creating subscription...' : 'Create subscription'}
         </button>
-      </Form>
+      </fetcher.Form>
     </div>
+  )
+}
+
+function BackdatedSubscriptionOrders({
+  customerId,
+  subscription,
+  activeSubscriptionId,
+}: {
+  customerId: string
+  subscription: NonNullable<UserDetailsData['backdatedSubscription']>
+  activeSubscriptionId: string | null
+}) {
+  if (subscription.orders.length === 0) return null
+  const showSeparateBalanceCard = subscription.subscriptionId !== activeSubscriptionId
+  return (
+    <section className="rounded-2xl border border-brand-border bg-brand-soft p-5 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="font-bold text-slate-900">Backdated orders</h3>
+          <p className="mt-1 text-sm text-slate-600">
+            {subscription.planName} · {subscription.startDate} to {subscription.endDate ?? 'No end date'}
+          </p>
+        </div>
+        {showSeparateBalanceCard && subscription.remainingUnits > 0 && (
+          <div className="min-w-36 rounded-xl border border-brand-border bg-white/80 p-3">
+            <p className="text-xs font-medium text-slate-500">Backdated units</p>
+            <p className="mt-1 text-2xl font-bold text-brand-primary">{subscription.remainingUnits}</p>
+            <p className="mt-1 text-xs text-slate-500">
+              Used {subscription.usedUnits} of {subscription.totalUnits}
+            </p>
+          </div>
+        )}
+      </div>
+      <p className="mt-3 text-sm text-slate-600">
+        Open an eligible unpaid order to apply this subscription’s units. Any amount still due remains unpaid.
+      </p>
+      <div className="mt-3 space-y-2">
+        {subscription.orders.map((order) => (
+          <div key={order.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-brand-border bg-white/80 p-3">
+            <div>
+              <p className="font-semibold text-slate-900">{order.publicOrderNumber}</p>
+              <p className="mt-1 text-xs text-slate-500">
+                {new Date(order.createdAt).toLocaleString('en-GB', { timeZone: 'Africa/Lagos' })} · {order.itemCount} items · {money(order.amount)} due
+              </p>
+            </div>
+            <Link
+              to={`/admin/orders?orderId=${encodeURIComponent(order.id)}&backdatedSubscriptionId=${encodeURIComponent(subscription.subscriptionId)}`}
+              state={{ returnTo: `/admin/users/${customerId}?backdatedSubscriptionId=${encodeURIComponent(subscription.subscriptionId)}` }}
+              className="rounded-lg border border-brand-primary/30 bg-white px-3 py-2 text-xs font-semibold text-brand-primary hover:bg-brand-soft"
+            >
+              View order details
+            </Link>
+          </div>
+        ))}
+      </div>
+    </section>
   )
 }
 
 export default function UserDetails() {
   const details = useLoaderData<typeof loader>()
   const location = useLocation()
+  const preservedOrderParams = new URLSearchParams(location.search)
+  for (const key of ['ordersPage', 'ordersSearch', 'ordersFilter', 'ordersSort']) {
+    preservedOrderParams.delete(key)
+  }
   const ordersReturnPath = getOrdersReturnPath(location.state)
   const actionData = useActionData<typeof action>()
   const navigation = useNavigation()
+  const ordersSectionRef = useRef<HTMLElement | null>(null)
+  const previousHistoryLocation = useRef({ pathname: location.pathname, search: location.search })
+  const isHistoryUpdating =
+    navigation.state === 'loading' && navigation.location?.pathname === location.pathname
   const handledActionResponse = useRef<typeof actionData>(null)
   const cancelFetcher = useFetcher<typeof action>()
   const handledCancelResponse = useRef<typeof cancelFetcher.data>(null)
+  const paymentReconcileFetcher = useFetcher<typeof action>()
+  const handledPaymentReconcileResponse = useRef<typeof paymentReconcileFetcher.data>(null)
   const subscriptionDateFetcher = useFetcher<typeof action>()
   const handledSubscriptionDateResponse = useRef<typeof subscriptionDateFetcher.data>(null)
   const [editingSubscriptionId, setEditingSubscriptionId] = useState<string | null>(null)
   const [subscriptionEndDateDraft, setSubscriptionEndDateDraft] = useState('')
+  const [createdBackdatedSubscription, setCreatedBackdatedSubscription] = useState<{
+    customerId: string
+    subscription: NonNullable<UserDetailsData['backdatedSubscription']>
+  } | null>(null)
+  useEffect(() => {
+    const previous = previousHistoryLocation.current
+    if (previous.pathname === location.pathname) {
+      const previousParams = new URLSearchParams(previous.search)
+      const currentParams = new URLSearchParams(location.search)
+      const orderHistoryChanged = ['ordersSearch', 'ordersFilter', 'ordersSort', 'ordersPage'].some(
+        (key) => previousParams.get(key) !== currentParams.get(key),
+      )
+      if (orderHistoryChanged) {
+        ordersSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }
+    }
+    previousHistoryLocation.current = { pathname: location.pathname, search: location.search }
+  }, [location.pathname, location.search])
   useEffect(() => {
     if (navigation.state !== 'idle' || !actionData?.message || handledActionResponse.current === actionData) return
     handledActionResponse.current = actionData
@@ -805,6 +1163,13 @@ export default function UserDetails() {
     else toast.error(result.message)
   }, [cancelFetcher.data, cancelFetcher.state])
   useEffect(() => {
+    const result = paymentReconcileFetcher.data
+    if (paymentReconcileFetcher.state !== 'idle' || !result || handledPaymentReconcileResponse.current === result) return
+    handledPaymentReconcileResponse.current = result
+    if (result.ok) toast.success(result.message)
+    else toast.error(result.message)
+  }, [paymentReconcileFetcher.data, paymentReconcileFetcher.state])
+  useEffect(() => {
     const result = subscriptionDateFetcher.data
     if (subscriptionDateFetcher.state !== 'idle' || !result || handledSubscriptionDateResponse.current === result) return
     handledSubscriptionDateResponse.current = result
@@ -812,6 +1177,10 @@ export default function UserDetails() {
     else toast.error(result.message)
   }, [subscriptionDateFetcher.data, subscriptionDateFetcher.state])
   if (!details) return <div className="rounded-2xl border border-slate-200 bg-white p-8 text-sm text-slate-500">Customer not found.</div>
+  const backdatedSubscription =
+    createdBackdatedSubscription?.customerId === details.profile.id
+      ? createdBackdatedSubscription.subscription
+      : details.backdatedSubscription
   const isSaving = navigation.state !== 'idle'
   return (
     <div className="space-y-6">
@@ -890,12 +1259,20 @@ export default function UserDetails() {
             </button>
           </Form>
         </div>
-        <ManualSubscription plans={details.plans} semesterEndDate={details.semesterEndDate} isSaving={isSaving} />
+        <ManualSubscription
+          plans={details.plans}
+          semesterEndDate={details.semesterEndDate}
+          onCreated={(subscription) => {
+            if (subscription) {
+              setCreatedBackdatedSubscription({ customerId: details.profile.id, subscription })
+            }
+          }}
+        />
       </section>
       {details.activeSubscriptionAllowance && (
         <section className="rounded-2xl border border-brand-border bg-brand-soft p-5 shadow-sm">
           <h3 className="font-bold text-slate-900">Subscription units</h3>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
             <div className="rounded-xl border border-brand-border bg-white/80 p-3">
               <p className="text-xs font-medium text-slate-500">Weekly allowance</p>
               <p className="mt-1 text-2xl font-bold text-brand-primary">{details.activeSubscriptionAllowance.weeklyUnits}</p>
@@ -913,8 +1290,26 @@ export default function UserDetails() {
               <p className="text-xs font-medium text-slate-500">Borrowed from next week</p>
               <p className="mt-1 text-2xl font-bold text-brand-primary">{details.activeSubscriptionAllowance.reservedUnits}</p>
             </div>
+            {details.activeSubscriptionAllowance.backdatedUnitsAvailable > 0 && (
+              <div className="rounded-xl border border-brand-border bg-white/80 p-3">
+                <p className="text-xs font-medium text-slate-500">Backdated units</p>
+                <p className="mt-1 text-2xl font-bold text-brand-primary">
+                  {details.activeSubscriptionAllowance.backdatedUnitsAvailable}
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Used {details.activeSubscriptionAllowance.backdatedUnitsUsed} of {details.activeSubscriptionAllowance.backdatedUnitsTotal}
+                </p>
+              </div>
+            )}
           </div>
         </section>
+      )}
+      {backdatedSubscription && (
+        <BackdatedSubscriptionOrders
+          customerId={details.profile.id}
+          subscription={backdatedSubscription}
+          activeSubscriptionId={details.activeSubscriptionId}
+        />
       )}
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <h3 className="font-bold text-slate-900">Subscriptions</h3>
@@ -1028,9 +1423,72 @@ export default function UserDetails() {
           search={location.search}
         />
       </section>
-      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <section
+        id="orders-and-invoices"
+        ref={ordersSectionRef}
+        className="scroll-mt-24 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+      >
         <h3 className="font-bold text-slate-900">Orders and invoices</h3>
-        <div className="mt-4 overflow-x-auto">
+        <Form method="get" className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {Array.from(preservedOrderParams.entries()).map(([key, value], index) => (
+            <input key={`${key}-${index}`} type="hidden" name={key} value={value} />
+          ))}
+          <label className="block text-xs font-medium text-slate-600">
+            Search order
+            <input
+              key={details.orderControls.search}
+              type="search"
+              name="ordersSearch"
+              defaultValue={details.orderControls.search}
+              placeholder="Order reference or status"
+              className="mt-1 h-10 w-full rounded-lg border border-slate-200 px-3 text-sm font-normal text-slate-900 outline-none focus:border-brand-primary"
+            />
+          </label>
+          <label className="block text-xs font-medium text-slate-600">
+            Payment filter
+            <select
+              key={details.orderControls.filter}
+              name="ordersFilter"
+              defaultValue={details.orderControls.filter}
+              className="mt-1 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-normal text-slate-900 outline-none focus:border-brand-primary"
+            >
+              <option value="all">All orders</option>
+              <option value="paid">Paid orders</option>
+              <option value="unpaid">Unpaid orders</option>
+              <option value="backdated-paid">Backdated paid orders</option>
+            </select>
+          </label>
+          <label className="block text-xs font-medium text-slate-600">
+            Sort by
+            <select
+              key={details.orderControls.sort}
+              name="ordersSort"
+              defaultValue={details.orderControls.sort}
+              className="mt-1 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-normal text-slate-900 outline-none focus:border-brand-primary"
+            >
+              <option value="newest">Newest first</option>
+              <option value="oldest">Oldest first</option>
+              <option value="invoice-high">Highest invoice</option>
+              <option value="invoice-low">Lowest invoice</option>
+            </select>
+          </label>
+          <button
+            type="submit"
+            disabled={navigation.state !== 'idle'}
+            className="h-10 self-end rounded-lg bg-brand-primary px-4 text-sm font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-wait disabled:opacity-50"
+          >
+            Apply
+          </button>
+        </Form>
+        {isHistoryUpdating && (
+          <p className="mt-3 text-xs text-slate-500" role="status">
+            Updating customer history…
+          </p>
+        )}
+        <div
+          className={`mt-4 overflow-x-auto ${isHistoryUpdating ? 'opacity-60' : ''}`}
+          aria-busy={isHistoryUpdating}
+        >
           <table className="w-full min-w-[760px] text-left text-sm">
             <thead className="text-xs capitalize tracking-[0.12em] text-slate-500">
               <tr>
@@ -1065,7 +1523,13 @@ export default function UserDetails() {
               ))}
             </tbody>
           </table>
-          {details.orders.length === 0 && <p className="text-sm text-slate-500">No orders recorded.</p>}
+          {details.orders.length === 0 && (
+            <p className="text-sm text-slate-500">
+              {details.orderControls.search || details.orderControls.filter !== 'all'
+                ? 'No orders match this search or filter.'
+                : 'No orders recorded.'}
+            </p>
+          )}
         </div>
         <HistoryPagination
           section="orders"
@@ -1093,6 +1557,25 @@ export default function UserDetails() {
                     <span className="block text-xs text-slate-500">
                       {payment.succeededAt ? `Paid ${date(payment.succeededAt)}` : `Created ${date(payment.createdAt)}`}
                     </span>
+                    {payment.planName &&
+                      payment.provider === 'paystack' &&
+                      import.meta.env.DEV &&
+                      (payment.status === 'pending' || (payment.status === 'success' && !payment.subscriptionId)) && (
+                      <paymentReconcileFetcher.Form method="post" className="mt-2">
+                        <input type="hidden" name="intent" value="reconcile-subscription-payment" />
+                        <input type="hidden" name="reference" value={payment.reference} />
+                        <button
+                          type="submit"
+                          disabled={paymentReconcileFetcher.state !== 'idle'}
+                          className="rounded-lg border border-brand-border px-3 py-1.5 text-xs font-semibold text-brand-primary hover:bg-brand-soft disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {paymentReconcileFetcher.state !== 'idle' &&
+                          paymentReconcileFetcher.formData?.get('reference') === payment.reference
+                            ? 'Checking with Paystack…'
+                            : 'Verify and activate'}
+                        </button>
+                      </paymentReconcileFetcher.Form>
+                    )}
                   </span>
                   <strong className="shrink-0 text-right">
                     {money(payment.amount)} | {payment.status}

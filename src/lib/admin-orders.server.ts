@@ -55,6 +55,7 @@ type AdminOrder = {
   notes: string | null
   is_subscription_order: boolean
   subscription_id: string | null
+  retroactive_subscription_id: string | null
   customer: { id: string; name: string | null; qaffy_id: string | null; email: string | null; phone: string | null } | null
   location: { name: string } | null
   items: Array<{
@@ -68,7 +69,7 @@ type AdminOrder = {
   invoice: {
     amount: number
     status: 'unpaid' | 'paid' | 'void' | 'refunded'
-    payment_method: 'wallet' | 'offline' | null
+    payment_method: 'wallet' | 'offline' | 'subscription_units' | null
     paid_at: string | null
     billing_breakdown: BillingBreakdown | null
   } | null
@@ -484,6 +485,7 @@ export async function loadAdminOrders(request: Request, authOverride?: Awaited<R
       o.notes,
       o.is_subscription_order,
       o.subscription_id,
+      o.retroactive_subscription_id,
       case when customer.id is null then null else json_build_object(
         'id', customer.id, 'name', customer.name, 'qaffy_id', customer.qaffy_id, 'email', customer.email, 'phone', customer.phone
       ) end as customer,
@@ -642,7 +644,7 @@ export async function loadAdminOrders(request: Request, authOverride?: Awaited<R
         o.order_type, o.status,
         o.clothes_count_customer,
         (select coalesce(sum(oi_count.quantity), 0)::int from order_items oi_count where oi_count.order_id = o.id) as item_count,
-        o.clothes_count_vendor, o.notes, o.is_subscription_order, o.subscription_id,
+        o.clothes_count_vendor, o.notes, o.is_subscription_order, o.subscription_id, o.retroactive_subscription_id,
         json_build_object('id', customer.id, 'name', customer.name, 'qaffy_id', customer.qaffy_id, 'email', customer.email, 'phone', customer.phone) as customer,
         case when location.id is null then null else json_build_object('name', location.name) end as location,
         coalesce((select json_agg(json_build_object(

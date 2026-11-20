@@ -5,6 +5,7 @@ import {
   calculateSubscriptionAllowanceThroughCurrentMonth,
   calculateSubscriptionUnitsApplied,
   calculateSubscriptionUnitsUsed,
+  calculateRetroactiveSubscriptionUnits,
   getAuthorizedSubscriptionBorrowUnits,
   getSubscriptionWeekStart,
 } from './subscription-week.ts'
@@ -195,6 +196,55 @@ test('does not accrue backdated weekly credits before subscription creation', ()
   assert.equal(allowance.accruedUnits, 40)
   assert.equal(allowance.balance, 40)
   assert.equal(allowance.nextCreditAt, '2026-11-07T23:00:00.000Z')
+})
+
+test('separates historical credits from the current allowance without duplicating creation-week credit', () => {
+  const createdAt = '2026-11-14T12:00:00.000Z'
+  const reference = new Date(createdAt)
+  const sharedInput = {
+    weeklyLimit: 10,
+    startAt: createdAt,
+    endDate: '2026-12-04',
+  }
+
+  assert.equal(
+    calculateRetroactiveSubscriptionUnits(
+      { ...sharedInput, startDate: '2026-11-04' },
+      reference,
+    ),
+    20,
+  )
+  const afterBackdatedGrant = calculateSubscriptionAllowance(
+    { ...sharedInput, startDate: '2026-11-04', usedUnits: 0, retroactiveUnits: 20 },
+    reference,
+  )
+  assert.equal(afterBackdatedGrant.balance, 0)
+  assert.equal(afterBackdatedGrant.nextCreditAt, '2026-11-14T23:00:00.000Z')
+  const followingWeek = calculateSubscriptionAllowance(
+    {
+      ...sharedInput,
+      startDate: '2026-11-04',
+      usedUnits: 0,
+      retroactiveUnits: 20,
+    },
+    new Date('2026-11-15T12:00:00.000Z'),
+  )
+  assert.equal(followingWeek.balance, 10)
+
+  assert.equal(
+    calculateRetroactiveSubscriptionUnits(
+      { ...sharedInput, startDate: '2026-11-11' },
+      reference,
+    ),
+    0,
+  )
+  assert.equal(
+    calculateSubscriptionAllowance(
+      { ...sharedInput, startDate: '2026-11-11', usedUnits: 0 },
+      reference,
+    ).accruedUnits,
+    10,
+  )
 })
 
 test('permits borrowing from the next weekly credit and reports the resulting balance', () => {
@@ -396,4 +446,36 @@ test('attributes retroactively applied units to their allowance subscription acr
     ),
     12,
   )
+  assert.equal(
+    calculateSubscriptionUnitsApplied(
+      orders,
+      { id: 'order-time-subscription', startDate: '2026-10-01', endDate: '2026-11-01' },
+      new Date('2026-10-07T12:00:00.000Z'),
+    ),
+    9,
+  )
+})
+
+test('counts current allowance spent on a retroactively billed one-time order', () => {
+  const order = {
+    subscription_id: null,
+    subscription_allowance_subscription_id: 'active-subscription',
+    is_subscription_order: false,
+    status: 'paid',
+    clothes_count_vendor: 2,
+    subscription_units_applied: 4,
+    subscription_units_applied_at: '2026-10-06T12:00:00.000Z',
+    created_at: '2026-10-05T12:00:00.000Z',
+  }
+  const reference = new Date('2026-10-07T12:00:00.000Z')
+
+  assert.equal(
+    calculateSubscriptionUnitsApplied(
+      [order],
+      { id: 'active-subscription', startDate: '2026-10-01', endDate: '2026-11-01' },
+      reference,
+    ),
+    4,
+  )
+  assert.equal(calculateSubscriptionUnitsUsed([order], reference), 4)
 })
