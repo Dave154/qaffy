@@ -513,7 +513,13 @@ export async function finalizeVendorOrder(
     let subscriptionUnitsBorrowed = 0
     let subscriptionBalanceAfterNextCredit: number | null = null
     let appliedSubscriptionId: string | null = order.subscription_id ?? null
-    let billingBreakdown: { coveredUnits: number; subscriberAmount: number; regularAmount: number } | null = null
+    let billingBreakdown: {
+      coveredUnits: number
+      subscriberAmount: number
+      regularAmount: number
+      items?: Array<{ itemId: string; creditsUsed: number }>
+    } | null = null
+    const legacyItemCreditUsage: Array<{ itemId: string; creditsUsed: number }> = []
     if (order.is_subscription_order) {
       let weeklyLimit: number
       let semesterWeeks: number | null
@@ -662,6 +668,7 @@ export async function finalizeVendorOrder(
           coveredUnits: billing.coveredUnits,
           subscriberAmount: Math.round(billing.subscriberAmount * 100) / 100,
           regularAmount: Math.round(billing.regularAmount * 100) / 100,
+          items: billing.lines.map((line) => ({ itemId: line.id, creditsUsed: line.coveredUnits })),
         }
         const originalLineAmounts = new Map(originalBilling.lines.map((line) => [line.id, line.totalAmount]))
         mismatchItems = items
@@ -692,11 +699,21 @@ export async function finalizeVendorOrder(
         )
         for (const item of items) {
           const coveredQuantity = subscriptionCoverage.get(item.id) ?? 0
-          subscriptionUnitsApplied += coveredQuantity * Number(item.subscription_units)
+          const creditsUsed = coveredQuantity * Number(item.subscription_units)
+          subscriptionUnitsApplied += creditsUsed
+          legacyItemCreditUsage.push({ itemId: item.id, creditsUsed })
           invoiceAmount += (Number(confirmedQuantityById.get(item.id) ?? 0) - coveredQuantity) * Number(item.unit_price)
         }
       }
       invoiceAmount = Math.round(invoiceAmount * 100) / 100
+      if (order.subscription_id === null) {
+        billingBreakdown = {
+          coveredUnits: subscriptionUnitsApplied,
+          subscriberAmount: 0,
+          regularAmount: invoiceAmount,
+          items: legacyItemCreditUsage,
+        }
+      }
       if (allowance?.nextBalanceAfterCredit !== null && allowance?.nextBalanceAfterCredit !== undefined) {
         subscriptionUnitsBorrowed = Math.max(0, subscriptionUnitsApplied - currentBalanceUnits)
         subscriptionBalanceAfterNextCredit = allowance.nextBalanceAfterCredit - subscriptionUnitsApplied

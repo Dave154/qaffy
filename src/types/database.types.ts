@@ -273,7 +273,12 @@ export interface Invoice {
   amount: number
   status: InvoiceStatus
   payment_method: 'wallet' | 'offline' | 'subscription_units' | null
-  billing_breakdown: { coveredUnits: number; subscriberAmount: number; regularAmount: number } | null
+  billing_breakdown: {
+    coveredUnits: number
+    subscriberAmount: number
+    regularAmount: number
+    items?: Array<{ itemId: string; creditsUsed: number }>
+  } | null
   paid_at: string | null
   voided_at: string | null
   refunded_at: string | null

@@ -2,7 +2,23 @@ import { data } from 'react-router'
 import { requireRole } from './auth.server'
 import { sql } from './db.server'
 
-type BillingBreakdown = { coveredUnits: number; subscriberAmount: number; regularAmount: number }
+type BillingBreakdown = {
+  coveredUnits: number
+  subscriberAmount: number
+  regularAmount: number
+  items?: Array<{ itemId: string; creditsUsed: number }>
+}
+type PlanOption = {
+  id: string
+  name: string
+  type: 'monthly' | 'semester'
+  price: number
+  weekly_limit: number
+}
+type PlanOptionRow = Omit<PlanOption, 'price' | 'weekly_limit'> & {
+  price: number | string
+  weekly_limit: number | string
+}
 type AdminCancellationDetails = {
   reason: string
   refund_requested: boolean
@@ -57,6 +73,7 @@ type AdminOrder = {
   is_subscription_order: boolean
   subscription_id: string | null
   retroactive_subscription_id: string | null
+  subscription_coverage?: { wash: boolean; iron: boolean } | null
   customer: { id: string; name: string | null; qaffy_id: string | null; email: string | null; phone: string | null } | null
   location: { name: string } | null
   items: Array<{
@@ -65,6 +82,10 @@ type AdminOrder = {
     confirmed_quantity: number | null
     service: 'wash' | 'iron' | 'wash_iron'
     unit_price: number
+    subscription_units_snapshot: number | null
+    current_subscription_units: number | null
+    regular_wash_price_snapshot: number | null
+    regular_iron_price_snapshot: number | null
     category: { name: string } | null
   }>
   invoice: {
@@ -113,6 +134,9 @@ export type OrdersData = {
   query: string
   statusFilter: string
   paymentFilter: 'all' | 'pending' | 'paid'
+  billingMode: 'all' | 'subscription' | 'one-time'
+  planFilter: string
+  planOptions: PlanOption[]
   dateType: 'created' | 'pickup' | 'delivery'
   sortBy: SortColumn
   sortDirection: 'asc' | 'desc'
@@ -207,7 +231,17 @@ function normalizeBreakdown(value: unknown): BillingBreakdown | null {
   const coveredUnits = Number(record.coveredUnits)
   const subscriberAmount = Number(record.subscriberAmount)
   const regularAmount = Number(record.regularAmount)
-  return [coveredUnits, subscriberAmount, regularAmount].every(Number.isFinite) ? { coveredUnits, subscriberAmount, regularAmount } : null
+  if (![coveredUnits, subscriberAmount, regularAmount].every(Number.isFinite)) return null
+  const items = Array.isArray(record.items)
+    ? record.items.flatMap((item) => {
+        if (!item || typeof item !== 'object') return []
+        const itemRecord = item as Record<string, unknown>
+        const itemId = itemRecord.itemId
+        const creditsUsed = Number(itemRecord.creditsUsed)
+        return typeof itemId === 'string' && Number.isFinite(creditsUsed) && creditsUsed >= 0 ? [{ itemId, creditsUsed }] : []
+      })
+    : undefined
+  return { coveredUnits, subscriberAmount, regularAmount, ...(items ? { items } : {}) }
 }
 function normalizeOrder(row: OrderRow, operations?: OrderOperations): AdminOrder {
   return {
@@ -215,7 +249,36 @@ function normalizeOrder(row: OrderRow, operations?: OrderOperations): AdminOrder
     created_at: timestamp(row.created_at) ?? '',
     picked_up_date: timestamp(row.picked_up_date),
     delivery_date: timestamp(row.delivery_date),
-    items: row.items.map((item) => ({ ...item, unit_price: Number(item.unit_price) })),
+    items: row.items.map((item) => {
+      const subscriptionUnitsSnapshot =
+        item.subscription_units_snapshot === null || item.subscription_units_snapshot === undefined
+          ? null
+          : Number(item.subscription_units_snapshot)
+      const currentSubscriptionUnits =
+        item.current_subscription_units === null || item.current_subscription_units === undefined
+          ? null
+          : Number(item.current_subscription_units)
+      const regularWashPriceSnapshot =
+        item.regular_wash_price_snapshot === null || item.regular_wash_price_snapshot === undefined
+          ? null
+          : Number(item.regular_wash_price_snapshot)
+      const regularIronPriceSnapshot =
+        item.regular_iron_price_snapshot === null || item.regular_iron_price_snapshot === undefined
+          ? null
+          : Number(item.regular_iron_price_snapshot)
+      return {
+        ...item,
+        unit_price: Number(item.unit_price),
+        subscription_units_snapshot:
+          subscriptionUnitsSnapshot !== null && Number.isFinite(subscriptionUnitsSnapshot) ? subscriptionUnitsSnapshot : null,
+        current_subscription_units:
+          currentSubscriptionUnits !== null && Number.isFinite(currentSubscriptionUnits) ? currentSubscriptionUnits : null,
+        regular_wash_price_snapshot:
+          regularWashPriceSnapshot !== null && Number.isFinite(regularWashPriceSnapshot) ? regularWashPriceSnapshot : null,
+        regular_iron_price_snapshot:
+          regularIronPriceSnapshot !== null && Number.isFinite(regularIronPriceSnapshot) ? regularIronPriceSnapshot : null,
+      }
+    }),
     invoice: row.invoice
       ? {
           ...row.invoice,
@@ -233,6 +296,89 @@ function normalizeOrder(row: OrderRow, operations?: OrderOperations): AdminOrder
     handoff_events: operations?.handoff_events ?? [],
     vendor_claim: operations?.vendor_claim ?? null,
   }
+}
+
+function isNonNegativeSafeInteger(value: number): boolean {
+  return Number.isSafeInteger(value) && value >= 0
+}
+
+async function reconstructHistoricalItemCreditUsage(order: AdminOrder): Promise<AdminOrder> {
+  const breakdown = order.invoice?.billing_breakdown
+  const coverage = order.subscription_coverage
+  if (
+    !breakdown ||
+    !coverage ||
+    breakdown.items ||
+    !Number.isSafeInteger(breakdown.coveredUnits) ||
+    breakdown.coveredUnits <= 0 ||
+    order.items.length < 2
+  ) {
+    return order
+  }
+
+  let totalEligibleCredits = 0
+  const itemCredits = []
+  for (const item of order.items) {
+    const quantity = item.confirmed_quantity
+    if (quantity === null || !isNonNegativeSafeInteger(quantity)) return order
+
+    let eligible: boolean
+    switch (item.service) {
+      case 'wash':
+        eligible = coverage.wash
+        break
+      case 'iron':
+        eligible = coverage.iron
+        break
+      case 'wash_iron':
+        eligible = coverage.wash || coverage.iron
+        break
+      default:
+        return order
+    }
+
+    let creditsUsed = 0
+    if (eligible) {
+      const unitsPerItem = item.subscription_units_snapshot
+      if (unitsPerItem === null || !Number.isSafeInteger(unitsPerItem) || unitsPerItem <= 0) return order
+      creditsUsed = quantity * unitsPerItem
+      if (!Number.isSafeInteger(creditsUsed)) return order
+      totalEligibleCredits += creditsUsed
+    }
+    itemCredits.push({ itemId: item.id, creditsUsed })
+  }
+
+  if (totalEligibleCredits !== breakdown.coveredUnits) return order
+
+  return {
+    ...order,
+    invoice: {
+      ...order.invoice!,
+      billing_breakdown: { ...breakdown, items: itemCredits },
+    },
+  }
+}
+
+async function loadSubscriptionCoverage(orderId: string): Promise<{ wash: boolean; iron: boolean } | null> {
+  const [coverage] = await sql<Array<{ covers_wash_snapshot: boolean | null; covers_iron_snapshot: boolean | null }>>`
+    select allowance.covers_wash_snapshot, allowance.covers_iron_snapshot
+    from orders o
+    left join subscriptions allowance
+      on allowance.id = coalesce(
+        o.subscription_allowance_subscription_id,
+        o.retroactive_subscription_id,
+        o.subscription_id
+      )
+    where o.id = ${orderId}
+  `
+  if (
+    !coverage ||
+    typeof coverage.covers_wash_snapshot !== 'boolean' ||
+    typeof coverage.covers_iron_snapshot !== 'boolean'
+  ) {
+    return null
+  }
+  return { wash: coverage.covers_wash_snapshot, iron: coverage.covers_iron_snapshot }
 }
 
 async function loadOrderOperations(orderIds: string[]) {
@@ -336,6 +482,9 @@ export async function loadAdminOrders(request: Request, authOverride?: Awaited<R
         query: '',
         statusFilter: 'all',
         paymentFilter: 'all',
+        billingMode: 'all',
+        planFilter: 'all',
+        planOptions: [],
         dateType: 'created',
         sortBy: 'created',
         sortDirection: 'desc',
@@ -354,6 +503,9 @@ export async function loadAdminOrders(request: Request, authOverride?: Awaited<R
   const statusFilter = ORDER_STATUSES.includes(requestedStatus as (typeof ORDER_STATUSES)[number]) ? requestedStatus : 'all'
   const requestedPayment = params.get('payment') ?? 'all'
   const paymentFilter = requestedPayment === 'paid' || requestedPayment === 'pending' ? requestedPayment : 'all'
+  const requestedBillingMode = params.get('billingMode')
+  const billingMode: OrdersData['billingMode'] =
+    requestedBillingMode === 'subscription' || requestedBillingMode === 'one-time' ? requestedBillingMode : 'all'
   const requestedDateMode = params.get('date') ?? 'all'
   const dateMode = DATE_MODES.includes(requestedDateMode as (typeof DATE_MODES)[number])
     ? (requestedDateMode as OrdersData['dateMode'])
@@ -379,6 +531,25 @@ export async function loadAdminOrders(request: Request, authOverride?: Awaited<R
   const requestedPage = Number.parseInt(params.get('page') ?? '1', 10)
   const requestedPageNumber = Number.isSafeInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1
   const isCsvExport = url.pathname === '/admin/orders/export'
+  const planOptionRows = isCsvExport
+    ? []
+    : await sql<PlanOptionRow[]>`
+        select id::text as id, name, type::text as type, price, weekly_limit
+        from plans
+        order by lower(name), type, price, id
+      `
+  const planOptions: PlanOption[] = planOptionRows.map((plan) => ({
+    ...plan,
+    price: Number(plan.price),
+    weekly_limit: Number(plan.weekly_limit),
+  }))
+  const requestedPlanId = params.get('planId')
+  const planFilter =
+    requestedPlanId &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestedPlanId) &&
+    (isCsvExport || planOptions.some((plan) => plan.id === requestedPlanId))
+      ? requestedPlanId
+      : 'all'
   const selectedOrderId = params.get('orderId')
   const sortExpression = (column: SortColumn) => {
     switch (column) {
@@ -466,6 +637,23 @@ export async function loadAdminOrders(request: Request, authOverride?: Awaited<R
         where payment_invoice.order_id = o.id and payment_invoice.status in ('paid', 'refunded', 'void')
       ))
     )
+    and (
+      ${billingMode} = 'all'
+      or (${billingMode} = 'subscription' and o.is_subscription_order)
+      or (${billingMode} = 'one-time' and not o.is_subscription_order)
+    )
+    and (
+      ${planFilter} = 'all'
+      or (
+        o.is_subscription_order
+        and exists (
+          select 1
+          from subscriptions plan_subscription
+          where plan_subscription.id = o.subscription_id
+            and plan_subscription.plan_id::text = ${planFilter}
+        )
+      )
+    )
     and ${dateRangeFilter}
   `
   const orderQuery = (limit: number, offset: number, includeDetails: boolean) => sql<OrderRow[]>`
@@ -496,10 +684,15 @@ export async function loadAdminOrders(request: Request, authOverride?: Awaited<R
         select json_agg(json_build_object(
           'id', oi.id, 'quantity', oi.quantity, 'confirmed_quantity', oi.confirmed_quantity,
           'service', oi.service, 'unit_price', oi.unit_price,
+          'subscription_units_snapshot', oi.subscription_units_snapshot,
+          'regular_wash_price_snapshot', oi.regular_wash_price_snapshot,
+          'regular_iron_price_snapshot', oi.regular_iron_price_snapshot,
+          'current_subscription_units', category_rates.subscription_units,
           'category', case when category.id is null then null else json_build_object('name', category.name) end
         ) order by oi.id)
         from order_items oi
         left join cloth_categories category on category.id = oi.category_id
+        left join cloth_category_rates category_rates on category_rates.category_id = oi.category_id
         where oi.order_id = o.id
       ), '[]'::json) else '[]'::json end as items,
       (
@@ -652,9 +845,14 @@ export async function loadAdminOrders(request: Request, authOverride?: Awaited<R
         coalesce((select json_agg(json_build_object(
           'id', oi.id, 'quantity', oi.quantity, 'confirmed_quantity', oi.confirmed_quantity,
           'service', oi.service, 'unit_price', oi.unit_price,
+          'subscription_units_snapshot', oi.subscription_units_snapshot,
+          'regular_wash_price_snapshot', oi.regular_wash_price_snapshot,
+          'regular_iron_price_snapshot', oi.regular_iron_price_snapshot,
+          'current_subscription_units', category_rates.subscription_units,
           'category', case when category.id is null then null else json_build_object('name', category.name) end
         ) order by oi.id)
           from order_items oi left join cloth_categories category on category.id = oi.category_id
+            left join cloth_category_rates category_rates on category_rates.category_id = oi.category_id
           where oi.order_id = o.id), '[]'::json) as items,
         (select json_build_object('amount', invoice.amount, 'status', invoice.status,
           'payment_method', invoice.payment_method, 'paid_at', invoice.paid_at,
@@ -673,6 +871,13 @@ export async function loadAdminOrders(request: Request, authOverride?: Awaited<R
       selectedOrder = normalizeOrder(selected, selectedOperations.get(selected.id))
     }
   }
+  if (selectedOrder) {
+    selectedOrder = {
+      ...selectedOrder,
+      subscription_coverage: await loadSubscriptionCoverage(selectedOrder.id),
+    }
+    selectedOrder = await reconstructHistoricalItemCreditUsage(selectedOrder)
+  }
   return data<OrdersData>(
     {
       orders: normalizedPageRows,
@@ -683,6 +888,9 @@ export async function loadAdminOrders(request: Request, authOverride?: Awaited<R
       query,
       statusFilter,
       paymentFilter,
+      billingMode,
+      planFilter,
+      planOptions,
       dateType,
       sortBy,
       sortDirection,
