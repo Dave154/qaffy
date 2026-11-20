@@ -53,6 +53,7 @@ type AdminOrder = {
   is_subscription_order: boolean
   subscription_id: string | null
   retroactive_subscription_id: string | null
+  subscription_coverage?: { wash: boolean; iron: boolean } | null
   customer: { id: string; name: string | null; qaffy_id: string | null; email: string | null; phone: string | null } | null
   location: { name: string } | null
   items: Array<{
@@ -61,6 +62,10 @@ type AdminOrder = {
     confirmed_quantity: number | null
     service: 'wash' | 'iron' | 'wash_iron'
     unit_price: number
+    subscription_units_snapshot: number | null
+    current_subscription_units: number | null
+    regular_wash_price_snapshot: number | null
+    regular_iron_price_snapshot: number | null
     category: { name: string } | null
   }>
   invoice: {
@@ -97,7 +102,12 @@ type AdminOrder = {
     claimed_at: string | null
   } | null
 }
-type BillingBreakdown = { coveredUnits: number; subscriberAmount: number; regularAmount: number }
+type BillingBreakdown = {
+  coveredUnits: number
+  subscriberAmount: number
+  regularAmount: number
+  items?: Array<{ itemId: string; creditsUsed: number }>
+}
 type SortColumn =
   'created' | 'order' | 'pickup' | 'delivery' | 'customer' | 'qaffy_id' | 'order_type' | 'location' | 'items' | 'payment' | 'status'
 type SortRule = { column: SortColumn; direction: 'asc' | 'desc' }
@@ -393,6 +403,7 @@ async function getOfflinePaymentCalculation(
         coveredUnits: billing.coveredUnits,
         subscriberAmount: roundCurrency(billing.subscriberAmount),
         regularAmount: roundCurrency(billing.regularAmount),
+        items: billing.lines.map((line) => ({ itemId: line.id, creditsUsed: line.coveredUnits })),
       },
       mismatchItems,
     },
@@ -1118,6 +1129,68 @@ function OrderDetails({
     order.clothes_count_vendor,
   )
   const hasCompleteReceivedCounts = order.items.every((item) => receivedCounts[item.id] !== undefined)
+  const itemCreditBreakdown = order.invoice?.billing_breakdown?.items
+  const creditsUsedByItem = new Map((itemCreditBreakdown ?? []).map((item) => [item.itemId, item.creditsUsed]))
+  const subscriptionCoverage = order.subscription_coverage
+  const showComponentRates =
+    order.is_subscription_order &&
+    subscriptionCoverage !== null &&
+    subscriptionCoverage !== undefined &&
+    subscriptionCoverage.wash !== subscriptionCoverage.iron
+  const legacySingleItemCreditUnits =
+    itemCreditBreakdown === undefined && order.items.length === 1 && order.invoice?.billing_breakdown
+      ? order.invoice.billing_breakdown.coveredUnits
+      : null
+  const componentRateCell = (
+    item: (typeof order.items)[number],
+    component: 'wash' | 'iron',
+    confirmedQuantity: number | undefined,
+    creditsUsed: number | null,
+  ) => {
+    if (item.service !== component && item.service !== 'wash_iron') return <span>—</span>
+
+    const rate = component === 'wash' ? item.regular_wash_price_snapshot : item.regular_iron_price_snapshot
+    if (rate === null) return <span>Not recorded</span>
+
+    const componentCovered = subscriptionCoverage?.[component] === true
+    const unitsPerItem = item.subscription_units_snapshot
+    const fullyCovered =
+      componentCovered &&
+      confirmedQuantity !== undefined &&
+      unitsPerItem !== null &&
+      creditsUsed !== null &&
+      creditsUsed >= confirmedQuantity * unitsPerItem
+    const detail = componentCovered
+      ? fullyCovered
+        ? 'Covered by plan'
+        : creditsUsed === null
+          ? 'Credit allocation not recorded'
+          : creditsUsed > 0
+            ? 'Partially covered'
+            : 'No credits applied'
+      : confirmedQuantity === undefined
+        ? 'Confirmed count not recorded'
+        : `${money(rate)} × ${confirmedQuantity} = ${money(rate * confirmedQuantity)}`
+
+    return (
+      <div className="min-w-[112px]">
+        <p>{money(rate)} / item</p>
+        <p className="mt-1 text-[10px] text-slate-400">{detail}</p>
+      </div>
+    )
+  }
+  const washOnlyCoverage = subscriptionCoverage?.wash === true && subscriptionCoverage.iron === false
+  const ironOnlyCoverage = subscriptionCoverage?.iron === true && subscriptionCoverage.wash === false
+  const coveredUnitsLabel = washOnlyCoverage
+    ? 'Wash covered by plan'
+    : ironOnlyCoverage
+      ? 'Iron covered by plan'
+      : 'Covered units'
+  const regularRateLabel = washOnlyCoverage
+    ? 'Iron charges (not covered)'
+    : ironOnlyCoverage
+      ? 'Wash charges (not covered)'
+      : 'Regular-rate charges'
   const oneTimeInvoiceLineTotal =
     !order.is_subscription_order && hasCompleteReceivedCounts
       ? order.items.reduce((total, item) => total + Number(receivedCounts[item.id]) * item.unit_price, 0)
@@ -1677,19 +1750,45 @@ function OrderDetails({
             {order.items.length === 0 ? (
               <p className="text-sm text-slate-500">No item details recorded.</p>
             ) : (
-              <table className="w-full min-w-[640px] text-left text-sm">
+              <table className="w-full min-w-[760px] text-left text-sm">
                 <thead>
                   <tr className="border-b border-slate-200 text-xs text-slate-500">
                     <th className="px-2 py-2 font-semibold">Item / service</th>
                     <th className="px-2 py-2 text-right font-semibold">Customer</th>
                     <th className="px-2 py-2 text-right font-semibold">Vendor received</th>
-                    <th className="px-2 py-2 text-right font-semibold">Unit price</th>
-                    <th className="px-2 py-2 text-right font-semibold">Invoice line</th>
+                    {order.is_subscription_order ? (
+                      <>
+                        {showComponentRates ? (
+                          <>
+                            <th className="px-2 py-2 text-right font-semibold">Wash rate</th>
+                            <th className="px-2 py-2 text-right font-semibold">Iron rate</th>
+                          </>
+                        ) : (
+                          <th className="px-2 py-2 text-right font-semibold">Unit price</th>
+                        )}
+                        <th className="px-2 py-2 text-right font-semibold">Credits / unit</th>
+                        <th className="px-2 py-2 text-right font-semibold">Credits used</th>
+                      </>
+                    ) : (
+                      <>
+                        <th className="px-2 py-2 text-right font-semibold">Unit price</th>
+                        <th className="px-2 py-2 text-right font-semibold">Invoice line</th>
+                      </>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
                   {order.items.map((item) => {
                     const confirmedQuantity = receivedCounts[item.id]
+                    const unitCredits = item.subscription_units_snapshot ?? item.current_subscription_units
+                    const isCurrentUnitRate =
+                      item.subscription_units_snapshot === null && item.current_subscription_units !== null
+                    const creditsUsed =
+                      itemCreditBreakdown !== undefined
+                        ? (creditsUsedByItem.get(item.id) ?? 0)
+                        : order.invoice?.billing_breakdown?.coveredUnits === 0
+                          ? 0
+                          : legacySingleItemCreditUnits
                     const lineAmount =
                       order.is_subscription_order || confirmedQuantity === undefined ? null : confirmedQuantity * item.unit_price
                     return (
@@ -1699,10 +1798,44 @@ function OrderDetails({
                         </td>
                         <td className="px-2 py-3 text-right text-slate-600">{item.quantity}</td>
                         <td className="px-2 py-3 text-right font-semibold text-slate-800">{confirmedQuantity ?? 'Not recorded'}</td>
-                        <td className="px-2 py-3 text-right text-slate-600">{money(item.unit_price)}</td>
-                        <td className="px-2 py-3 text-right font-semibold text-slate-800">
-                          {lineAmount === null ? (order.is_subscription_order ? 'Plan breakdown' : 'Not available') : money(lineAmount)}
-                        </td>
+                        {order.is_subscription_order ? (
+                          <>
+                            {showComponentRates ? (
+                              <>
+                                <td className="px-2 py-3 text-right text-slate-600">
+                                  {componentRateCell(item, 'wash', confirmedQuantity, creditsUsed)}
+                                </td>
+                                <td className="px-2 py-3 text-right text-slate-600">
+                                  {componentRateCell(item, 'iron', confirmedQuantity, creditsUsed)}
+                                </td>
+                              </>
+                            ) : (
+                              <td className="px-2 py-3 text-right text-slate-600">{money(item.unit_price)}</td>
+                            )}
+                            <td className="px-2 py-3 text-right text-slate-600">
+                              {typeof unitCredits === 'number' && Number.isFinite(unitCredits) && unitCredits >= 0 ? (
+                                <>
+                                  {unitCredits} {unitCredits === 1 ? 'credit' : 'credits'}
+                                  {isCurrentUnitRate && <span className="mt-1 block text-[10px] text-slate-400">Current rate</span>}
+                                </>
+                              ) : (
+                                'Not recorded'
+                              )}
+                            </td>
+                            <td className="px-2 py-3 text-right text-slate-600">
+                              {creditsUsed === null
+                                ? 'Not recorded'
+                                : `${creditsUsed} ${creditsUsed === 1 ? 'credit' : 'credits'}`}
+                            </td>
+                          </>
+                        ) : (
+                          <>
+                            <td className="px-2 py-3 text-right text-slate-600">{money(item.unit_price)}</td>
+                            <td className="px-2 py-3 text-right font-semibold text-slate-800">
+                              {lineAmount === null ? 'Not available' : money(lineAmount)}
+                            </td>
+                          </>
+                        )}
                       </tr>
                     )
                   })}
@@ -1729,9 +1862,21 @@ function OrderDetails({
         </section>
         {order.is_subscription_order && order.invoice?.billing_breakdown && (
           <section className="mt-3 grid gap-4 rounded-2xl border border-slate-200 bg-white p-4 sm:grid-cols-3">
-            <Detail label="Covered units" value={order.invoice.billing_breakdown.coveredUnits} />
+            <Detail
+              label={coveredUnitsLabel}
+              value={`${order.invoice.billing_breakdown.coveredUnits} ${
+                order.invoice.billing_breakdown.coveredUnits === 1 ? 'credit' : 'credits'
+              }`}
+            />
             <Detail label="Subscriber-rate charges" value={money(order.invoice.billing_breakdown.subscriberAmount)} />
-            <Detail label="Regular-rate charges" value={money(order.invoice.billing_breakdown.regularAmount)} />
+            <Detail label={regularRateLabel} value={money(order.invoice.billing_breakdown.regularAmount)} />
+            {(washOnlyCoverage || ironOnlyCoverage) && (
+              <p className="text-xs text-slate-500 sm:col-span-3">
+                {washOnlyCoverage
+                  ? 'Wash was covered by subscription credits. Iron was charged at the per-item rates shown above.'
+                  : 'Iron was covered by subscription credits. Wash was charged at the per-item rates shown above.'}
+              </p>
+            )}
           </section>
         )}
         {order.is_subscription_order && order.invoice && !order.invoice.billing_breakdown && (
@@ -1951,6 +2096,11 @@ function OrderFilterDrawer({
   setStatusFilter,
   paymentFilter,
   setPaymentFilter,
+  billingMode,
+  setBillingMode,
+  planFilter,
+  setPlanFilter,
+  planOptions,
   dateType,
   setDateType,
   dateMode,
@@ -1968,6 +2118,11 @@ function OrderFilterDrawer({
   setStatusFilter: (value: string) => void
   paymentFilter: 'all' | 'pending' | 'paid'
   setPaymentFilter: (value: 'all' | 'pending' | 'paid') => void
+  billingMode: 'all' | 'subscription' | 'one-time'
+  setBillingMode: (value: 'all' | 'subscription' | 'one-time') => void
+  planFilter: string
+  setPlanFilter: (value: string) => void
+  planOptions: Array<{ id: string; name: string; type: 'monthly' | 'semester'; price: number; weekly_limit: number }>
   dateType: 'created' | 'pickup' | 'delivery'
   setDateType: (value: 'created' | 'pickup' | 'delivery') => void
   dateMode: 'all' | 'today' | 'this_month' | 'last_month' | 'custom'
@@ -2043,6 +2198,35 @@ function OrderFilterDrawer({
                 <option value="pending">Pending</option>
                 <option value="paid">Paid</option>
               </select>
+            </label>
+            <label className="block">
+              <span className="mb-2.5 block text-xs font-semibold text-slate-500">Billing mode</span>
+              <select
+                value={billingMode}
+                onChange={(event) => setBillingMode(event.target.value as typeof billingMode)}
+                className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
+              >
+                <option value="all">All billing modes</option>
+                <option value="subscription">Subscription orders</option>
+                <option value="one-time">One-time orders</option>
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-2.5 block text-xs font-semibold text-slate-500">Subscription plan</span>
+              <select
+                value={planFilter}
+                onChange={(event) => setPlanFilter(event.target.value)}
+                className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
+              >
+                <option value="all">All plans</option>
+                {planOptions.map((plan) => (
+                  <option key={plan.id} value={plan.id}>
+                    {plan.name} · {plan.type === 'semester' ? 'Semester' : 'Monthly'} · {money(plan.price)} ·{' '}
+                    {plan.weekly_limit} credits/week
+                  </option>
+                ))}
+              </select>
+              <span className="mt-1.5 block text-xs text-slate-400">Shows orders associated with the selected plan.</span>
             </label>
             <label className="block">
               <span className="mb-2.5 block text-xs font-semibold text-slate-500">Date applies to</span>
@@ -2136,6 +2320,9 @@ function OrdersPage({ pageData }: { pageData: OrdersData }) {
     query,
     statusFilter,
     paymentFilter,
+    billingMode,
+    planFilter,
+    planOptions,
     dateType,
     sortRules,
     dateMode,
@@ -2150,6 +2337,8 @@ function OrdersPage({ pageData }: { pageData: OrdersData }) {
   const [isFilterOpen, setIsFilterOpen] = useState(false)
   const [draftStatusFilter, setDraftStatusFilter] = useState(statusFilter)
   const [draftPaymentFilter, setDraftPaymentFilter] = useState(paymentFilter)
+  const [draftBillingMode, setDraftBillingMode] = useState(billingMode)
+  const [draftPlanFilter, setDraftPlanFilter] = useState(planFilter)
   const [draftDateType, setDraftDateType] = useState(dateType)
   const [draftDateMode, setDraftDateMode] = useState(dateMode)
   const [draftStartDate, setDraftStartDate] = useState(startDate)
@@ -2177,6 +2366,8 @@ function OrdersPage({ pageData }: { pageData: OrdersData }) {
     query?: string
     statusFilter?: string
     paymentFilter?: typeof paymentFilter
+    billingMode?: typeof billingMode
+    planFilter?: string
     dateType?: typeof dateType
     sortRules?: SortRule[]
     dateMode?: typeof dateMode
@@ -2188,6 +2379,8 @@ function OrdersPage({ pageData }: { pageData: OrdersData }) {
     if (values.query) params.set('q', values.query)
     if (values.statusFilter && values.statusFilter !== 'all') params.set('status', values.statusFilter)
     if (values.paymentFilter && values.paymentFilter !== 'all') params.set('payment', values.paymentFilter)
+    if (values.billingMode && values.billingMode !== 'all') params.set('billingMode', values.billingMode)
+    if (values.planFilter && values.planFilter !== 'all') params.set('planId', values.planFilter)
     if (values.dateType && values.dateType !== 'created') params.set('dateType', values.dateType)
     if (values.sortRules) {
       if (values.sortRules.length === 0) {
@@ -2204,6 +2397,8 @@ function OrdersPage({ pageData }: { pageData: OrdersData }) {
   const updateFilters = (filters: {
     statusFilter?: string
     paymentFilter?: typeof paymentFilter
+    billingMode?: typeof billingMode
+    planFilter?: string
     dateType?: typeof dateType
     dateMode?: typeof dateMode
     startDate?: string
@@ -2215,6 +2410,8 @@ function OrdersPage({ pageData }: { pageData: OrdersData }) {
         query,
         statusFilter: filters.statusFilter ?? statusFilter,
         paymentFilter: filters.paymentFilter ?? paymentFilter,
+        billingMode: filters.billingMode ?? billingMode,
+        planFilter: filters.planFilter ?? planFilter,
         dateType: filters.dateType ?? dateType,
         sortRules,
         dateMode: filters.dateMode ?? dateMode,
@@ -2231,6 +2428,8 @@ function OrdersPage({ pageData }: { pageData: OrdersData }) {
         query,
         statusFilter,
         paymentFilter,
+        billingMode,
+        planFilter,
         dateType,
         sortRules: updatedRules,
         dateMode,
@@ -2270,6 +2469,8 @@ function OrdersPage({ pageData }: { pageData: OrdersData }) {
   const openFilterDrawer = () => {
     setDraftStatusFilter(statusFilter)
     setDraftPaymentFilter(paymentFilter)
+    setDraftBillingMode(billingMode)
+    setDraftPlanFilter(planFilter)
     setDraftDateType(dateType)
     setDraftDateMode(dateMode)
     setDraftStartDate(startDate)
@@ -2280,6 +2481,8 @@ function OrdersPage({ pageData }: { pageData: OrdersData }) {
     updateFilters({
       statusFilter: draftStatusFilter,
       paymentFilter: draftPaymentFilter,
+      billingMode: draftBillingMode,
+      planFilter: draftPlanFilter,
       dateType: draftDateType,
       dateMode: draftDateMode,
       startDate: draftStartDate,
@@ -2290,6 +2493,8 @@ function OrdersPage({ pageData }: { pageData: OrdersData }) {
   const clearDraftFilters = () => {
     setDraftStatusFilter('all')
     setDraftPaymentFilter('all')
+    setDraftBillingMode('all')
+    setDraftPlanFilter('all')
     setDraftDateType('created')
     setDraftDateMode('all')
     setDraftStartDate('')
@@ -2302,6 +2507,8 @@ function OrdersPage({ pageData }: { pageData: OrdersData }) {
         query,
         statusFilter,
         paymentFilter,
+        billingMode,
+        planFilter,
         dateType,
         sortRules: nextSortRules,
         dateMode,
@@ -2323,6 +2530,8 @@ function OrdersPage({ pageData }: { pageData: OrdersData }) {
             <Form method="get" className="w-full lg:min-w-0 lg:flex-1">
               <input type="hidden" name="status" value={statusFilter} />
               <input type="hidden" name="payment" value={paymentFilter} />
+              <input type="hidden" name="billingMode" value={billingMode} />
+              <input type="hidden" name="planId" value={planFilter === 'all' ? '' : planFilter} />
               <input type="hidden" name="dateType" value={dateType} />
               <input type="hidden" name="sort" value={sortRules.map((rule) => `${rule.column}:${rule.direction}`).join(',')} />
               <input type="hidden" name="date" value={dateMode} />
@@ -2347,7 +2556,12 @@ function OrdersPage({ pageData }: { pageData: OrdersData }) {
                 className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-slate-200 text-slate-600 hover:border-brand-primary hover:text-brand-primary"
               >
                 <SlidersHorizontal className="h-4 w-4" />
-                {(statusFilter !== 'all' || paymentFilter !== 'all' || dateMode !== 'all' || dateType !== 'created') && (
+                {(statusFilter !== 'all' ||
+                  paymentFilter !== 'all' ||
+                  billingMode !== 'all' ||
+                  planFilter !== 'all' ||
+                  dateMode !== 'all' ||
+                  dateType !== 'created') && (
                   <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-brand-primary" aria-label="Filters active" />
                 )}
               </button>
@@ -2472,6 +2686,11 @@ function OrdersPage({ pageData }: { pageData: OrdersData }) {
         setStatusFilter={setDraftStatusFilter}
         paymentFilter={draftPaymentFilter}
         setPaymentFilter={setDraftPaymentFilter}
+        billingMode={draftBillingMode}
+        setBillingMode={setDraftBillingMode}
+        planFilter={draftPlanFilter}
+        setPlanFilter={setDraftPlanFilter}
+        planOptions={planOptions}
         dateType={draftDateType}
         setDateType={setDraftDateType}
         dateMode={draftDateMode}
@@ -2497,7 +2716,7 @@ function OrdersPage({ pageData }: { pageData: OrdersData }) {
               type="button"
               onClick={() =>
                 navigate(
-                  buildSearch({ page: page - 1, query, statusFilter, paymentFilter, dateType, sortRules, dateMode, startDate, endDate }),
+                  buildSearch({ page: page - 1, query, statusFilter, paymentFilter, billingMode, planFilter, dateType, sortRules, dateMode, startDate, endDate }),
                 )
               }
               disabled={page === 1 || isLoadingPage}
@@ -2513,7 +2732,7 @@ function OrdersPage({ pageData }: { pageData: OrdersData }) {
               type="button"
               onClick={() =>
                 navigate(
-                  buildSearch({ page: page + 1, query, statusFilter, paymentFilter, dateType, sortRules, dateMode, startDate, endDate }),
+                  buildSearch({ page: page + 1, query, statusFilter, paymentFilter, billingMode, planFilter, dateType, sortRules, dateMode, startDate, endDate }),
                 )
               }
               disabled={page === pageCount || isLoadingPage}

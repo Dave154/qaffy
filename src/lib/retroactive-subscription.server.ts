@@ -383,6 +383,7 @@ export async function applyRetroactiveSubscriptionOrders(
             coveredUnits: billing.coveredUnits,
             subscriberAmount: Math.round(billing.subscriberAmount * 100) / 100,
             regularAmount: Math.round(billing.regularAmount * 100) / 100,
+            items: billing.lines.map((line) => ({ itemId: line.id, creditsUsed: line.coveredUnits })),
           })}::jsonb
       where id = ${order.invoice_id}::uuid
     `
