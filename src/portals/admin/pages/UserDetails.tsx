@@ -3,7 +3,7 @@ import { data, Form, Link, redirect, useActionData, useFetcher, useLoaderData, u
 import { useEffect, useRef, useState } from 'react'
 import type { Route } from './+types/UserDetails'
 import { requireRole } from '../../../lib/auth.server'
-import { activateSubscriptionFromPayment, adjustWallet, creditAdminWallet } from '../../../lib/wallet.server'
+import { adjustWallet, creditAdminWallet } from '../../../lib/wallet.server'
 import { createManualSubscriptionWithSnapshot, lockCustomerSubscription } from '../../../lib/subscriptions.server'
 import {
   reconcileCustomerSubscriptionPayments,
