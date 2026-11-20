@@ -46,6 +46,14 @@ export async function action({ request }: { request: Request }) {
       set status = 'failed', subscription_checkout_state = case
         when plan_id is not null then 'failed'
         else subscription_checkout_state
+      end,
+      subscription_reconciliation_checked_at = case
+        when plan_id is not null then now()
+        else subscription_reconciliation_checked_at
+      end,
+      subscription_reconciliation_result = case
+        when plan_id is not null then 'failed'
+        else subscription_reconciliation_result
       end
       where reference = ${reference}
         and provider = 'paystack'
@@ -70,7 +78,7 @@ export async function action({ request }: { request: Request }) {
   if (Number(payment.amount) * 100 !== amountInKobo) return data({ ok: false, message: 'Payment amount does not match.' }, { status: 409 })
   if (payment.status === 'success') {
     if (payment.plan_id) {
-      const activation = await activateSubscriptionFromPayment(payment.customer_id, reference)
+      const activation = await activateSubscriptionFromPayment(payment.customer_id, reference, true)
       if (!activation.alreadyActivated)
         await sendCustomerNotification({
           eventKey: activation.scheduled
@@ -96,7 +104,7 @@ export async function action({ request }: { request: Request }) {
   }
 
   if (payment.plan_id) {
-    const activation = await activateSubscriptionFromPayment(payment.customer_id, reference)
+    const activation = await activateSubscriptionFromPayment(payment.customer_id, reference, true)
     if (!activation.alreadyActivated)
       await sendCustomerNotification({
         eventKey: activation.scheduled

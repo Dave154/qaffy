@@ -311,6 +311,19 @@ export interface Payment {
   subscription_activation_processed_at: string | null
   authorization_url: string | null
   subscription_checkout_state: 'legacy' | 'initializing' | 'ready' | 'failed' | 'completed'
+  subscription_reconciliation_checked_at: string | null
+  subscription_reconciliation_attempts: number
+  subscription_reconciliation_result:
+    | 'checking'
+    | 'success'
+    | 'failed'
+    | 'abandoned'
+    | 'pending'
+    | 'not_found'
+    | 'unavailable'
+    | 'mismatch'
+    | 'unknown'
+    | null
   subscription_start_date_snapshot: string | null
   subscription_end_date_snapshot: string | null
   subscription_weekly_limit_snapshot: number | null

@@ -1041,7 +1041,11 @@ export async function purchaseSubscriptionWithWallet(
 }
 
 /** Completes a paid subscription transaction without changing either wallet balance. */
-export async function activateSubscriptionFromPayment(customerId: string, paymentReference: string) {
+export async function activateSubscriptionFromPayment(
+  customerId: string,
+  paymentReference: string,
+  verifiedPaystackSuccess = false,
+) {
   return sql.begin(async (tx) => {
     await lockCustomerSubscription(tx, customerId)
     const [payment] = await tx`
@@ -1058,7 +1062,21 @@ export async function activateSubscriptionFromPayment(customerId: string, paymen
       for update
     `
     if (!payment) throw new Error('Subscription payment was not found')
-    if (payment.subscription_id) return { alreadyActivated: true }
+    if (payment.subscription_id) {
+      if (payment.status !== 'success') {
+        await tx`
+          update payments
+          set status = 'success',
+              succeeded_at = coalesce(succeeded_at, now()),
+              subscription_checkout_state = 'completed',
+              subscription_reconciliation_checked_at = coalesce(subscription_reconciliation_checked_at, now()),
+              subscription_reconciliation_result = 'success'
+          where id = ${payment.id}
+            and status in ('pending', 'failed')
+        `
+      }
+      return { alreadyActivated: true }
+    }
     if (payment.subscription_activation_processed_at && payment.subscription_start_date_snapshot) {
       const [existingSubscription] = await tx`
         select id
@@ -1073,14 +1091,22 @@ export async function activateSubscriptionFromPayment(customerId: string, paymen
       if (existingSubscription) {
         await tx`
           update payments
-          set subscription_id = ${existingSubscription.id}
+          set status = 'success',
+              succeeded_at = coalesce(succeeded_at, now()),
+              subscription_id = ${existingSubscription.id},
+              subscription_activation_processed_at = coalesce(subscription_activation_processed_at, now()),
+              subscription_checkout_state = 'completed',
+              subscription_reconciliation_checked_at = coalesce(subscription_reconciliation_checked_at, now()),
+              subscription_reconciliation_result = 'success'
           where id = ${payment.id}
             and subscription_id is null
         `
         return { alreadyActivated: true }
       }
     }
-    if (!['pending', 'success'].includes(payment.status)) throw new Error('Subscription payment is not successful')
+    if (!['pending', 'success'].includes(payment.status) && !(payment.status === 'failed' && verifiedPaystackSuccess)) {
+      throw new Error('Subscription payment is not successful')
+    }
 
     const savedTerms = getSavedSubscriptionTerms({
       startDate: payment.subscription_start_date_snapshot,
@@ -1137,7 +1163,9 @@ export async function activateSubscriptionFromPayment(customerId: string, paymen
           succeeded_at = coalesce(succeeded_at, now()),
           subscription_id = ${subscription.id},
           subscription_activation_processed_at = now(),
-          subscription_checkout_state = 'completed'
+          subscription_checkout_state = 'completed',
+          subscription_reconciliation_checked_at = coalesce(subscription_reconciliation_checked_at, now()),
+          subscription_reconciliation_result = 'success'
       where id = ${payment.id}
     `
     return {

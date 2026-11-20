@@ -137,11 +137,18 @@ export async function ensureNoPendingSubscriptionPayment(tx: TransactionSql, cus
     from payments
     where customer_id = ${customerId}
       and plan_id is not null
-      and status = 'pending'
+      and (
+        status = 'pending'
+        or (status = 'success' and subscription_id is null)
+      )
     limit 1
     for update
   `
-  if (pending) throw new Error('A subscription payment is already awaiting confirmation. Complete or wait for that checkout before starting another.')
+  if (pending) {
+    throw new Error(
+      'A subscription payment is already awaiting confirmation or activation. Complete or wait for that checkout before starting another.',
+    )
+  }
 }
 
 export async function getPendingSubscriptionPayment(customerId: string) {
