@@ -10,6 +10,7 @@ import {
 } from './subscription-terms'
 import type { SubscriptionPurchaseQuote } from './subscription-terms'
 import type { SubscriptionCheckoutState } from './subscription-checkout'
+import { calculateRetroactiveSubscriptionUnits } from './subscription-week'
 
 type SubscriptionSnapshotInput = {
   customerId: string
@@ -335,7 +336,7 @@ export async function createManualSubscriptionWithSnapshot(
     const endDate = getSubscriptionEndDate(plan.type as PlanType, input.startDate, semesterEndDate)
     const startState = getSubscriptionStartState(input.startDate, clock.today)
 
-    return insertSubscriptionWithSnapshot(tx, {
+    const subscription = await insertSubscriptionWithSnapshot(tx, {
       customerId: input.customerId,
       planId: input.planId,
       startDate: input.startDate,
@@ -344,5 +345,24 @@ export async function createManualSubscriptionWithSnapshot(
       isQueuedRenewal: startState.isQueuedRenewal,
       semesterWeeksSnapshot: semesterWeeks,
     })
+    const createdAt = subscription.created_at instanceof Date
+      ? subscription.created_at.toISOString()
+      : String(subscription.created_at)
+    const retroactiveAllowanceUnits = calculateRetroactiveSubscriptionUnits(
+      {
+        weeklyLimit: Number(subscription.weekly_limit_snapshot),
+        semesterWeeks: subscription.semester_weeks_snapshot,
+        startDate: input.startDate,
+        startAt: createdAt,
+        endDate,
+      },
+      new Date(createdAt),
+    )
+    await tx`
+      update subscriptions
+      set retroactive_allowance_units = ${retroactiveAllowanceUnits}
+      where id = ${subscription.id}
+    `
+    return { subscription, retroactiveAllowanceUnits }
   })
 }

@@ -1,7 +1,7 @@
 import { sql } from '@/lib/db.server'
-import { randomInt } from 'node:crypto'
 import type { WalletBalanceType } from '@/types/database.types'
 import type { TransactionSql } from 'postgres'
+import { generateFourDigitOtp } from './order-otp.server'
 import {
   sendAdminWalletTopUpNotification,
   sendCustomerNotification,
@@ -32,35 +32,6 @@ class InsufficientBalanceError extends Error {
 
 function toDateOnly(value: Date | string) {
   return value instanceof Date ? value.toISOString().slice(0, 10) : value.slice(0, 10)
-}
-
-async function generateFourDigitOtp(tx: TransactionSql) {
-  await tx`select pg_advisory_xact_lock(22017, 1)`
-  for (let attempt = 0; attempt < 10000; attempt += 1) {
-    const candidate = String(randomInt(0, 10000)).padStart(4, '0')
-    const [collision] = await tx`
-      select exists (
-        select 1
-        from orders
-        where status in ('pending_pickup', 'paid', 'out_for_delivery')
-          and (
-            right(regexp_replace(coalesce(pickup_otp, ''), '[^0-9]', '', 'g'), 4) = ${candidate}
-            or right(regexp_replace(coalesce(delivery_otp, ''), '[^0-9]', '', 'g'), 4) = ${candidate}
-          )
-      ) or exists (
-        select 1
-        from logistics_used_otps
-        where otp_hash = (
-          select encode(extensions.hmac(convert_to(${candidate}, 'UTF8'), secret, 'sha256'), 'hex')
-          from private.logistics_otp_lookup_key
-        )
-          and expires_at > now()
-      ) as collision
-    `
-    if (!collision?.collision) return candidate
-  }
-
-  throw new Error('Unable to generate an unused delivery OTP.')
 }
 
 async function getCashbackPercentForTransaction(tx: TransactionSql) {
@@ -549,10 +520,11 @@ export async function finalizeVendorOrder(
       let startDate: string | null
       let startAt: string | null
       let endDate: string | null
+      let retroactiveUnits: number
       let coverage = { wash: true, iron: true }
       if (order.subscription_id) {
         const [snapshot] = await tx`
-          select weekly_limit_snapshot, semester_weeks_snapshot, covers_wash_snapshot, covers_iron_snapshot, start_date, end_date, created_at
+          select weekly_limit_snapshot, semester_weeks_snapshot, covers_wash_snapshot, covers_iron_snapshot, start_date, end_date, created_at, retroactive_allowance_units
           from subscriptions
           where id = ${order.subscription_id} and customer_id = ${order.customer_id}
           for update
@@ -564,9 +536,10 @@ export async function finalizeVendorOrder(
         startDate = toDateOnly(snapshot.start_date)
         startAt = snapshot.created_at instanceof Date ? snapshot.created_at.toISOString() : String(snapshot.created_at)
         endDate = snapshot.end_date ? toDateOnly(snapshot.end_date) : null
+        retroactiveUnits = Number(snapshot.retroactive_allowance_units)
       } else {
         const [legacyPlan] = await tx`
-          select s.id, s.weekly_limit_snapshot as weekly_limit, s.semester_weeks_snapshot, s.start_date, s.end_date, s.created_at
+          select s.id, s.weekly_limit_snapshot as weekly_limit, s.semester_weeks_snapshot, s.start_date, s.end_date, s.created_at, s.retroactive_allowance_units
           from subscriptions s
           where s.customer_id = ${order.customer_id}
             and s.status in ('active', 'scheduled')
@@ -588,6 +561,7 @@ export async function finalizeVendorOrder(
             : String(legacyPlan.created_at)
           : null
         endDate = legacyPlan?.end_date ? toDateOnly(legacyPlan.end_date) : null
+        retroactiveUnits = Number(legacyPlan?.retroactive_allowance_units ?? 0)
       }
       let usedUnits = 0
       let confirmationTime = new Date()
@@ -599,7 +573,10 @@ export async function finalizeVendorOrder(
         select coalesce(sum(subscription_units_applied), 0) as used_units
         from orders
         where customer_id = ${order.customer_id}
-          and is_subscription_order = true
+          and (
+            is_subscription_order = true
+            or subscription_allowance_subscription_id is not null
+          )
           and subscription_units_applied is not null
           and status <> 'cancelled'
           and id <> ${orderId}
@@ -634,6 +611,7 @@ export async function finalizeVendorOrder(
               startAt,
               endDate,
               usedUnits,
+              retroactiveUnits,
             },
             confirmationTime,
           )
@@ -1080,7 +1058,28 @@ export async function activateSubscriptionFromPayment(customerId: string, paymen
       for update
     `
     if (!payment) throw new Error('Subscription payment was not found')
-    if (payment.subscription_activation_processed_at) return { alreadyActivated: true }
+    if (payment.subscription_id) return { alreadyActivated: true }
+    if (payment.subscription_activation_processed_at && payment.subscription_start_date_snapshot) {
+      const [existingSubscription] = await tx`
+        select id
+        from subscriptions
+        where customer_id = ${customerId}
+          and plan_id = ${payment.plan_id}
+          and start_date = ${payment.subscription_start_date_snapshot}::date
+        order by created_at desc
+        limit 1
+        for update
+      `
+      if (existingSubscription) {
+        await tx`
+          update payments
+          set subscription_id = ${existingSubscription.id}
+          where id = ${payment.id}
+            and subscription_id is null
+        `
+        return { alreadyActivated: true }
+      }
+    }
     if (!['pending', 'success'].includes(payment.status)) throw new Error('Subscription payment is not successful')
 
     const savedTerms = getSavedSubscriptionTerms({

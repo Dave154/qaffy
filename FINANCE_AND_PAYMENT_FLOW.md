@@ -203,6 +203,18 @@ If the wallet balance is insufficient after vendor confirmation:
 - The customer is prompted to top up the general wallet before the order can be paid and released for delivery.
 - The implementation must not partially pay or complete final customer handoff while any charge remains unpaid.
 
+### Admin backdated subscription billing
+
+- Admin first creates the manual subscription normally. After creation, eligible unpaid invoices within its term appear on the customer details page with links to Admin Order Details, where each invoice can be recalculated individually.
+- Paid, cancelled, and orders without confirmed item quantities are excluded, but orders linked to a previous subscription remain eligible. Applying units locks and revalidates the order, spending historical units before current units. For a previously subscription-linked order, existing allowance usage is reassigned to the new subscription while the original order-time subscription reference is preserved.
+- Backdated units are displayed as a separate balance from the subscription's available rollover and borrowed units. Current units used on an order still count against the new subscription's ordinary allowance.
+- Historical units follow the backdated schedule before creation, without adding a duplicate creation-week credit. For a Nov 4 start created Nov 14 at 10 units per week, the historical pool is 20 units and there is no extra Nov 14 credit; for a Nov 11 start created Nov 14, the historical pool is zero and the normal 10-unit current allowance is available once.
+- Current units used on an individual order count against the subscription's ordinary usage. Unused historical units expire and do not roll forward; normal future credits retain their existing rollover behavior.
+- Recalculation uses the new subscription's snapshotted coverage, saved regular prices for uncovered services, and current global subscriber rates for covered excess. The current subscriber rates are saved on the historical order items when applied.
+- If recalculation reduces an invoice to zero, it is marked paid with `payment_method = 'subscription_units'`, and the ordinary delivery OTP/status flow is enabled without a wallet debit. Non-zero balances remain unpaid for the standard customer payment flow. Each recalculated invoice triggers a customer notification.
+- Eligible orders must already have vendor-confirmed item quantities. Orders still awaiting vendor confirmation are not selectable; their eventual invoice follows the normal order-finalization path.
+- Apply `supabase/migrations/20261119100000_admin_retroactive_subscription_orders.sql` before using this flow, after confirming the intended Supabase environment. The migration is not applied remotely by the implementation.
+
 ## Operational rules for admins
 
 Admin is not a billing gatekeeper for quantity mismatches. Their role is to:

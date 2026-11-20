@@ -12,7 +12,7 @@ function toCents(value: number) {
 
 export function getRefundAllocations(
   invoiceAmount: number,
-  paymentMethod: 'wallet' | 'offline' | null,
+  paymentMethod: 'wallet' | 'offline' | 'subscription_units' | null,
   allocations: InvoicePaymentAllocation[],
 ): InvoicePaymentAllocation[] {
   if (!Number.isFinite(invoiceAmount) || invoiceAmount < 0) {

@@ -27,6 +27,7 @@ import { isReadyForDispatch, isReadyForFinalDelivery } from '../../../lib/orderL
 import { sendCustomerNotification } from '../../../lib/notifications.server'
 import { issueReferralRewards, sendReferralRewardNotifications } from '../../../lib/wallet.server'
 import { loadAdminOrders, type OrdersData } from '../../../lib/admin-orders.server'
+import { applyRetroactiveSubscriptionOrders, RetroactiveSubscriptionError } from '../../../lib/retroactive-subscription.server'
 import { calculateSubscriptionBilling } from '../../../lib/subscription-billing'
 import { cancelAdminOrder, OrderCancellationError } from '../../../lib/order-cancellation.server'
 import { RefundAccountingError } from '../../../lib/order-cancellation'
@@ -52,6 +53,7 @@ type AdminOrder = {
   notes: string | null
   is_subscription_order: boolean
   subscription_id: string | null
+  retroactive_subscription_id: string | null
   customer: { id: string; name: string | null; qaffy_id: string | null; email: string | null; phone: string | null } | null
   location: { name: string } | null
   items: Array<{
@@ -65,7 +67,7 @@ type AdminOrder = {
   invoice: {
     amount: number
     status: 'unpaid' | 'paid' | 'void' | 'refunded'
-    payment_method: 'wallet' | 'offline' | null
+    payment_method: 'wallet' | 'offline' | 'subscription_units' | null
     paid_at: string | null
     billing_breakdown: BillingBreakdown | null
   } | null
@@ -153,6 +155,7 @@ type OfflinePaymentSubscriptionRow = {
   id: string
   weekly_limit_snapshot: number
   semester_weeks_snapshot: number | null
+  retroactive_allowance_units: number
   covers_wash_snapshot: boolean
   covers_iron_snapshot: boolean
   start_date: string | Date
@@ -226,7 +229,7 @@ async function getOfflinePaymentCalculation(
   }
 
   const [subscription] = await tx<OfflinePaymentSubscriptionRow[]>`
-    select id, weekly_limit_snapshot, semester_weeks_snapshot, covers_wash_snapshot, covers_iron_snapshot, start_date, end_date, created_at
+    select id, weekly_limit_snapshot, semester_weeks_snapshot, covers_wash_snapshot, covers_iron_snapshot, start_date, end_date, created_at, retroactive_allowance_units
     from subscriptions
     where customer_id = ${order.customer_id}
       and status = 'active'
@@ -282,7 +285,10 @@ async function getOfflinePaymentCalculation(
     select coalesce(sum(subscription_units_applied), 0) as used_units
     from orders
     where customer_id = ${order.customer_id}
-      and is_subscription_order = true
+      and (
+        is_subscription_order = true
+        or subscription_allowance_subscription_id is not null
+      )
       and subscription_units_applied is not null
       and clothes_count_vendor is not null
       and status <> 'cancelled'
@@ -315,6 +321,7 @@ async function getOfflinePaymentCalculation(
     startAt,
     endDate,
     usedUnits,
+    retroactiveUnits: Number(subscription.retroactive_allowance_units),
   }
   const allowanceThroughMonth = calculateSubscriptionAllowanceThroughCurrentMonth(allowanceInput, now)
   const allowanceAccruedNow = calculateSubscriptionAllowance(allowanceInput, now)
@@ -407,6 +414,7 @@ export async function action({ request }: Route.ActionArgs) {
     'mark-delivered',
     'preview-offline-payment',
     'record-offline-payment-and-complete',
+    'apply-backdated-units',
   ] as const
   if (
     !orderActions.includes(intent as (typeof orderActions)[number]) ||
@@ -450,6 +458,66 @@ export async function action({ request }: Route.ActionArgs) {
         }
         throw error
       }
+    }
+
+    if (intent === 'apply-backdated-units') {
+      const subscriptionId = String(formData.get('subscriptionId') ?? '')
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(subscriptionId)) {
+        return data({ ok: false, intent, orderId, message: 'Invalid backdated subscription.' }, { status: 400, headers: auth.headers })
+      }
+      const applied = await sql.begin(async (tx) => {
+        const [order] = await tx`
+          select customer_id
+          from orders
+          where id = ${orderId}::uuid
+        `
+        if (!order) return null
+        const [invoice] = await applyRetroactiveSubscriptionOrders(tx, {
+          customerId: order.customer_id,
+          subscriptionId,
+          orderIds: [orderId],
+        })
+        return invoice ? { invoice, customerId: order.customer_id } : null
+      })
+      if (!applied) {
+        return data({ ok: false, intent, orderId, message: 'This order is no longer eligible for backdated units.' }, { status: 409, headers: auth.headers })
+      }
+      const { invoice, customerId } = applied
+      scheduleAdminOrderNotification(
+        sendCustomerNotification({
+          eventKey: `invoice:${invoice.invoiceId}:retroactive:${subscriptionId}`,
+          customerId,
+          notificationType: invoice.paid ? 'payment_confirmed' : 'subscription_units_applied',
+          orderId,
+          subscriptionId,
+          payload: {
+            title: invoice.paid ? 'Order paid with subscription units' : 'Subscription units applied',
+            body: invoice.paid
+              ? `Your backdated subscription covered the amount due for order ${invoice.publicOrderNumber}.`
+              : `${invoice.coveredUnits} subscription units were applied to order ${invoice.publicOrderNumber}. ${money(invoice.amount)} remains due.`,
+            details: [
+              `Order: ${invoice.publicOrderNumber}`,
+              `Subscription units applied: ${invoice.coveredUnits}`,
+              invoice.paid ? 'The invoice is paid.' : `Amount still due: ${money(invoice.amount)}`,
+            ],
+            url: `/orders?order=${encodeURIComponent(invoice.publicOrderNumber)}`,
+            tag: `order:${orderId}:retroactive-subscription`,
+          },
+        }),
+      )
+      return data(
+        {
+          ok: true,
+          intent,
+          orderId,
+          paid: invoice.paid,
+          amount: invoice.amount,
+          coveredUnits: invoice.coveredUnits,
+          historicalUnits: invoice.historicalUnits,
+          currentUnits: invoice.currentUnits,
+        },
+        { headers: auth.headers },
+      )
     }
 
     if (intent === 'cancel-order') {
@@ -880,6 +948,9 @@ export async function action({ request }: Route.ActionArgs) {
 
     return data({ ok: false, intent, orderId, message: 'Invalid order action.' }, { status: 400, headers: auth.headers })
   } catch (error) {
+    if (error instanceof RetroactiveSubscriptionError) {
+      return data({ ok: false, intent, orderId, message: error.message }, { status: 409, headers: auth.headers })
+    }
     if (error instanceof OfflinePaymentCalculationError) {
       return data({ ok: false, intent, orderId, message: error.message }, { status: 409, headers: auth.headers })
     }
@@ -999,11 +1070,21 @@ function Detail({ label, value }: { label: string; value: string | number }) {
   )
 }
 
-function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => void }) {
+function OrderDetails({
+  order,
+  backdatedSubscriptionId,
+  onClose,
+}: {
+  order: AdminOrder
+  backdatedSubscriptionId: string | null
+  onClose: () => void
+}) {
   const cancelFetcher = useFetcher<typeof action>()
   const handledCancelResponse = useRef<typeof cancelFetcher.data>(null)
   const workflowFetcher = useFetcher<typeof action>()
   const handledWorkflowResponse = useRef<typeof workflowFetcher.data>(null)
+  const backdatedFetcher = useFetcher<typeof action>()
+  const handledBackdatedResponse = useRef<typeof backdatedFetcher.data>(null)
   const allowancePreviewFetcher = useFetcher<typeof action>()
   const allowancePreviewSequence = useRef(0)
   const location = useLocation()
@@ -1069,6 +1150,18 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
     toast.success(successMessages[completedIntent] ?? 'Order updated.')
     revalidate()
   }, [workflowFetcher.data, workflowFetcher.state, onClose, revalidate])
+
+  useEffect(() => {
+    const result = backdatedFetcher.data
+    if (backdatedFetcher.state !== 'idle' || !result || handledBackdatedResponse.current === result) return
+    handledBackdatedResponse.current = result
+    if (!result.ok) {
+      toast.error('message' in result && typeof result.message === 'string' ? result.message : 'Backdated units could not be applied.')
+      return
+    }
+    toast.success('Backdated units applied to the order.')
+    revalidate()
+  }, [backdatedFetcher.data, backdatedFetcher.state, revalidate])
 
   const submitWorkflowAction = (intent: 'mark-picked-up' | 'dispatch-order' | 'mark-delivered') => {
     if (intent === 'dispatch-order' && confirmOfflinePayment) {
@@ -1181,11 +1274,18 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
     )
   }
   const workflowActionPending = workflowFetcher.state !== 'idle'
+  const backdatedActionPending = backdatedFetcher.state !== 'idle'
   const pendingWorkflowIntent = workflowActionPending ? String(workflowFetcher.formData?.get('intent') ?? '') : ''
   const canDispatch = isReadyForDispatch(order.status, order.invoice?.status)
   const canDeliver = isReadyForFinalDelivery(order.status, order.invoice?.status)
   const canRecordOfflinePayment =
     order.invoice?.status === 'unpaid' && order.clothes_count_vendor !== null && ['invoiced', 'out_for_delivery'].includes(order.status)
+  const canApplyBackdatedUnits =
+    Boolean(backdatedSubscriptionId) &&
+    canRecordOfflinePayment &&
+    order.items.length > 0 &&
+    order.items.every((item) => item.confirmed_quantity !== null) &&
+    !order.retroactive_subscription_id
   const paymentLabel =
     order.invoice?.status === 'paid'
       ? order.invoice.payment_method === 'offline'
@@ -1241,6 +1341,34 @@ function OrderDetails({ order, onClose }: { order: AdminOrder; onClose: () => vo
             <X size={18} aria-hidden="true" />
           </button>
         </header>
+        {backdatedSubscriptionId && canRecordOfflinePayment && (
+          <section className="mt-5 rounded-2xl border border-brand-border bg-brand-soft/60 p-4">
+            <h4 className="font-bold text-slate-900">Backdated subscription units</h4>
+            {order.retroactive_subscription_id ? (
+              <p className="mt-2 text-sm text-slate-600">Backdated units have already been applied to this order.</p>
+            ) : (
+              <>
+                <p className="mt-2 text-sm text-slate-600">
+                  Recalculate this invoice using the selected subscription. Backdated units are used first, followed by any available current units; any remaining balance stays unpaid.
+                </p>
+                <button
+                  type="button"
+                  onClick={() =>
+                    backdatedFetcher.submit(
+                      { intent: 'apply-backdated-units', orderId: order.id, subscriptionId: backdatedSubscriptionId },
+                      { method: 'post' },
+                    )
+                  }
+                  disabled={!canApplyBackdatedUnits || backdatedActionPending}
+                  className="mt-3 inline-flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {backdatedActionPending && <LoaderCircle size={15} className="animate-spin" />}
+                  {backdatedActionPending ? 'Applying units...' : 'Apply backdated units'}
+                </button>
+              </>
+            )}
+          </section>
+        )}
         {workflowGuidance && (
           <section className="mt-5 rounded-2xl border border-brand-primary/20 bg-brand-primary/5 p-4" aria-label="Next order action">
             {canRecordOfflinePayment ? (
@@ -2013,6 +2141,7 @@ function OrdersPage({ pageData }: { pageData: OrdersData }) {
   const [draftStartDate, setDraftStartDate] = useState(startDate)
   const [draftEndDate, setDraftEndDate] = useState(endDate)
   const requestedOrderId = searchParams.get('orderId')
+  const backdatedSubscriptionId = searchParams.get('backdatedSubscriptionId')
   const orderDetailsReturnPath = getOrderDetailsReturnPath(location.state)
   const selectedOrder =
     requestedOrderId && loadedSelectedOrder?.id === requestedOrderId
@@ -2385,6 +2514,7 @@ function OrdersPage({ pageData }: { pageData: OrdersData }) {
       {selectedOrder && (
         <OrderDetails
           order={selectedOrder}
+          backdatedSubscriptionId={backdatedSubscriptionId}
           onClose={() => {
             if (orderDetailsReturnPath) {
               navigate(orderDetailsReturnPath)
@@ -2393,6 +2523,7 @@ function OrdersPage({ pageData }: { pageData: OrdersData }) {
             setSearchParams((current) => {
               const next = new URLSearchParams(current)
               next.delete('orderId')
+              next.delete('backdatedSubscriptionId')
               return next
             })
           }}

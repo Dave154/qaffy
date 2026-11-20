@@ -636,6 +636,9 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
                 const isNewSubscriptionOrder = Boolean(subscription && !isReadOnly && !order)
                 const isSubscriptionOrderEdit = Boolean(isEditing && order?.isSubscriptionOrder)
                 const isCoveredSubscriptionLine = isNewSubscriptionOrder && subscriptionLineAmount === 0
+                const customerQuantity = item.customerQuantity ?? item.quantity
+                const displayedQuantity = isReadOnly ? customerQuantity : item.quantity
+                const vendorQuantity = item.vendorQuantity
                 const lineKey = getOrderLineKey(item)
                 return (
                   <div
@@ -645,16 +648,21 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
                     <div className="min-w-0 flex-1">
                       <p className="font-semibold text-slate-900">{item.category}</p>
                       <p className="text-xs text-slate-500">
-                        {item.service} · {item.quantity} item{item.quantity === 1 ? '' : 's'}
-                        {isReadOnly && item.vendorAdded ? (
-                          <span className="font-semibold text-emerald-600"> (+{item.quantity}, vendor-added)</span>
-                        ) : isReadOnly && item.vendorCountDifference !== undefined && item.vendorCountDifference !== 0 ? (
-                          <span className={`font-semibold ${item.vendorCountDifference > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                        {item.service} · {displayedQuantity} item{displayedQuantity === 1 ? '' : 's'}
+                        {isReadOnly && vendorQuantity !== undefined && (
+                          <span
+                            className={`font-semibold ${
+                              vendorQuantity > customerQuantity
+                                ? 'text-emerald-600'
+                                : vendorQuantity < customerQuantity
+                                  ? 'text-rose-600'
+                                  : 'text-slate-500'
+                            }`}
+                          >
                             {' '}
-                            ({item.vendorCountDifference > 0 ? '+' : ''}
-                            {item.vendorCountDifference})
+                            | received {vendorQuantity}
                           </span>
-                        ) : null}
+                        )}
                       </p>
                     </div>
                     <div className={`flex items-center gap-2 ${isCoveredSubscriptionLine ? 'shrink-0' : 'self-stretch sm:self-auto'}`}>
