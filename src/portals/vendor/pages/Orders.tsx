@@ -36,7 +36,7 @@ export async function action({ request }: { request: Request }) {
     if (intent === 'claim') {
       const [claimedOrder] = await sql`
         update orders
-        set status = 'at_vendor', vendor_id = ${vendor.id}
+        set status = 'at_vendor', vendor_id = ${vendor.id}, vendor_claimed_at = now()
         where id = ${orderIds[0]}
           and status = 'picked_up'
           and vendor_id is null

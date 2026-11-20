@@ -466,6 +466,7 @@ Before updating UI components, verify:
 - Vendor layout uses the same refresh scheduler: `pending_pickup` order events are ignored, `order_logistics_events` is not subscribed (every logistics event is written with an order status change), and fallback polling runs only while Realtime is disconnected plus a 5-minute visible-tab safety net.
 - Supabase usage guardrail (2026-11-10): never call `revalidate()` directly from a Realtime handler, interval, or focus listener; use `createRefreshScheduler`. Read-only loaders resolve the user with `getClaimsUser` (JWT claims, no Auth API round trip); `requireRole` also uses claims but still checks role approval in the database. Money-moving customer actions keep `auth.getUser()`.
 - Vendor lifecycle is logistics `pending_pickup` -> `picked_up`, vendor claim `picked_up` -> `at_vendor`; pending pickup orders are excluded from the vendor loader entirely.
+- Vendor claims set `vendor_claimed_at` atomically with the vendor assignment. Admin order details show that time in `Africa/Lagos`; older claims remain without a timestamp rather than inferring one.
 
 #### Admin portal implementation
 

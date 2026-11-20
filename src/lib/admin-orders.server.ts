@@ -29,6 +29,7 @@ type VendorClaimDetails = {
   business_name: string
   claimant_name: string | null
   claimant_email: string | null
+  claimed_at: string | null
 }
 type OrderOperations = {
   handoff_events: OrderHandoffEvent[]
@@ -242,7 +243,8 @@ async function loadOrderOperations(orderIds: string[]) {
       case when claimed_vendor.id is null then null else json_build_object(
         'business_name', claimed_vendor.business_name,
         'claimant_name', claimant.name,
-        'claimant_email', claimant.email
+        'claimant_email', claimant.email,
+        'claimed_at', o.vendor_claimed_at
       ) end as vendor_claim,
       coalesce((
         select json_agg(json_build_object(
