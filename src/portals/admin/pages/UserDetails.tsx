@@ -3,14 +3,17 @@ import { data, Form, Link, redirect, useActionData, useFetcher, useLoaderData, u
 import { useEffect, useRef, useState } from 'react'
 import type { Route } from './+types/UserDetails'
 import { requireRole } from '../../../lib/auth.server'
-import { activateSubscriptionFromPayment, adjustWallet, creditAdminWallet } from '../../../lib/wallet.server'
+import { adjustWallet, creditAdminWallet } from '../../../lib/wallet.server'
 import { createManualSubscriptionWithSnapshot, lockCustomerSubscription } from '../../../lib/subscriptions.server'
+import {
+  reconcileCustomerSubscriptionPayments,
+  reconcilePaystackSubscriptionPayment,
+} from '../../../lib/subscription-payment-reconciliation.server'
 import { sql } from '../../../lib/db.server'
 import { addCalendarMonthsToDate } from '../../../lib/subscription-terms'
 import { toast } from '../../../lib/toast'
 import { calculateSubscriptionAllowance } from '../../../lib/subscription-week'
 import { getSubscriptionUsageTotals } from '../../../lib/subscription-usage.server'
-import { sendCustomerNotification } from '../../../lib/notifications.server'
 import { getRetroactiveSubscriptionOrderCandidates } from '../../../lib/retroactive-subscription.server'
 
 const userHistoryPageSize = 20
@@ -57,6 +60,8 @@ type DetailPayment = {
   createdAt: string
   succeededAt: string | null
   planName: string | null
+  reconciliationCheckedAt: string | null
+  reconciliationResult: string | null
 }
 type DetailTransaction = {
   id: string
@@ -342,7 +347,10 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     supabase.from('plans').select('id, name, type, semester_end_date, active').order('created_at', { ascending: false }),
     supabase
       .from('payments')
-      .select('id, provider, reference, amount, status, plan_id, subscription_id, created_at, succeeded_at', { count: 'exact' })
+      .select(
+        'id, provider, reference, amount, status, plan_id, subscription_id, created_at, succeeded_at, subscription_reconciliation_checked_at, subscription_reconciliation_result',
+        { count: 'exact' },
+      )
       .eq('customer_id', customerId)
       .order('created_at', { ascending: false })
       .order('id', { ascending: false })
@@ -536,6 +544,8 @@ export async function loader({ request, params }: Route.LoaderArgs) {
         createdAt: payment.created_at,
         succeededAt: payment.succeeded_at,
         planName: payment.plan_id ? (planById.get(payment.plan_id)?.name ?? 'Subscription plan') : null,
+        reconciliationCheckedAt: payment.subscription_reconciliation_checked_at,
+        reconciliationResult: payment.subscription_reconciliation_result,
       })),
       transactions: (transactions ?? []).map((transaction) => ({
         id: transaction.id,
@@ -613,112 +623,28 @@ export async function action({ request, params }: Route.ActionArgs) {
     }
   }
   if (intent === 'reconcile-subscription-payment') {
-    if (process.env.NODE_ENV !== 'development') {
-      return data({ ok: false, message: 'Payment reconciliation is only available in local development.' }, { status: 404 })
-    }
     const reference = String(formData.get('reference') ?? '').trim()
     if (!reference || reference.length > 200) {
       return data({ ok: false, message: 'A valid payment reference is required.' }, { status: 400, headers: auth.headers })
     }
-    const secretKey = process.env.PAYSTACK_SECRET_KEY
-    if (!secretKey) {
-      return data({ ok: false, message: 'Paystack is not configured.' }, { status: 503, headers: auth.headers })
-    }
-
     try {
-      const [payment] = await sql`
-        select amount
-        from payments
-        where customer_id = ${customerId}
-          and reference = ${reference}
-          and provider = 'paystack'
-          and plan_id is not null
-          and status in ('pending', 'success')
-        limit 1
-      `
-      if (!payment) {
-        return data(
-          { ok: false, message: 'No unreconciled subscription payment with that reference was found.' },
-          { status: 404, headers: auth.headers },
-        )
-      }
-
-      const verificationResponse = await fetch(
-        `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
-        { headers: { Authorization: `Bearer ${secretKey}` } },
-      )
-      if (verificationResponse.status === 404) {
-        return data(
-          { ok: false, message: 'Paystack could not find this transaction. No subscription changes were made.' },
-          { status: 409, headers: auth.headers },
-        )
-      }
-      const verification = (await verificationResponse.json()) as {
-        status?: boolean
-        message?: string
-        data?: { status?: string; reference?: string; amount?: number; currency?: string }
-      }
-      if (!verificationResponse.ok || verification.status === false) {
-        console.error('[admin-user-details] Paystack payment verification failed', {
-          reference,
-          message: verification.message,
-        })
-        return data(
-          { ok: false, message: 'Paystack could not confirm this payment. No subscription changes were made.' },
-          { status: 502, headers: auth.headers },
-        )
-      }
-
-      const verifiedPayment = verification.data
-      if (
-        verifiedPayment?.status !== 'success' ||
-        verifiedPayment.reference !== reference ||
-        Number(verifiedPayment.amount) !== Number(payment.amount) * 100 ||
-        verifiedPayment.currency !== 'NGN'
-      ) {
-        return data(
-          {
-            ok: false,
-            message:
-              verifiedPayment?.status === 'pending'
-                ? 'Paystack still reports this payment as pending. No subscription changes were made.'
-                : 'The Paystack transaction did not match this payment or was not successful. No subscription changes were made.',
-          },
-          { status: 409, headers: auth.headers },
-        )
-      }
-
-      const activation = await activateSubscriptionFromPayment(customerId, reference)
-      if (!activation.alreadyActivated) {
-        await sendCustomerNotification({
-          eventKey: activation.scheduled
-            ? `subscription:${activation.subscriptionId}:scheduled`
-            : `subscription:${activation.subscriptionId}:activated`,
-          customerId,
-          notificationType: activation.scheduled ? 'subscription_renewal_scheduled' : 'subscription_activated',
-          subscriptionId: activation.subscriptionId,
-          payload: {
-            title: activation.scheduled ? 'Plan renewal scheduled' : 'Plan activated',
-            body: activation.scheduled
-              ? `Your ${activation.planName} renewal is scheduled to start on ${activation.startDate}.`
-              : `Your ${activation.planName} plan is now active.`,
-            details: activation.scheduled
-              ? [`Plan: ${activation.planName}`, `Starts: ${activation.startDate}`, `Ends: ${activation.endDate}`]
-              : [`Plan: ${activation.planName}`, 'Your subscription benefits are now available.'],
-            url: '/plans',
-            tag: `subscription:${activation.subscriptionId}`,
-          },
-        })
-      }
-      return data(
-        {
-          ok: true,
-          message: activation.alreadyActivated
-            ? 'This paid subscription was already activated.'
-            : 'Payment confirmed and subscription activated.',
-        },
-        { headers: auth.headers },
-      )
+      const reconciliation = await reconcilePaystackSubscriptionPayment(customerId, reference, true)
+      const succeeded = reconciliation.outcome === 'activated' || reconciliation.outcome === 'failed'
+      const status =
+        reconciliation.outcome === 'missing'
+          ? 404
+          : reconciliation.outcome === 'unavailable'
+            ? 502
+            : succeeded
+              ? 200
+              : 409
+      const message =
+        reconciliation.outcome === 'activated'
+          ? 'Paystack confirmed this payment and the subscription is activated.'
+          : reconciliation.outcome === 'failed'
+            ? 'Paystack confirmed this checkout did not complete. It has been closed; a new subscription can now be created.'
+            : reconciliation.message
+      return data({ ok: succeeded, message }, { status, headers: auth.headers })
     } catch (error) {
       console.error('[admin-user-details] Subscription payment reconciliation failed', error)
       return data(
@@ -740,6 +666,22 @@ export async function action({ request, params }: Route.ActionArgs) {
       return data({ ok: false, message: 'Enter a valid subscription start date.' }, { status: 400 })
     }
     try {
+      const reconciliation = await reconcileCustomerSubscriptionPayments(customerId)
+      if (reconciliation.outcome === 'activated') {
+        return data(
+          {
+            ok: true,
+            message: 'An existing Paystack checkout was confirmed and its subscription activated. No manual subscription was created.',
+          },
+          { headers: auth.headers },
+        )
+      }
+      if (reconciliation.outcome !== 'clear') {
+        return data(
+          { ok: false, message: reconciliation.message },
+          { status: reconciliation.outcome === 'unavailable' ? 502 : 409, headers: auth.headers },
+        )
+      }
       const created = await createManualSubscriptionWithSnapshot({
         customerId,
         planId,
@@ -1557,10 +1499,16 @@ export default function UserDetails() {
                     <span className="block text-xs text-slate-500">
                       {payment.succeededAt ? `Paid ${date(payment.succeededAt)}` : `Created ${date(payment.createdAt)}`}
                     </span>
+                    {payment.reconciliationCheckedAt && (
+                      <span className="block text-xs text-slate-500">
+                        Last Paystack check: {payment.reconciliationResult ?? 'in progress'} at{' '}
+                        {date(payment.reconciliationCheckedAt)}
+                      </span>
+                    )}
                     {payment.planName &&
                       payment.provider === 'paystack' &&
-                      import.meta.env.DEV &&
-                      (payment.status === 'pending' || (payment.status === 'success' && !payment.subscriptionId)) && (
+                      (payment.status === 'pending' ||
+                        (payment.status === 'success' && !payment.subscriptionId)) && (
                       <paymentReconcileFetcher.Form method="post" className="mt-2">
                         <input type="hidden" name="intent" value="reconcile-subscription-payment" />
                         <input type="hidden" name="reference" value={payment.reference} />
@@ -1571,8 +1519,8 @@ export default function UserDetails() {
                         >
                           {paymentReconcileFetcher.state !== 'idle' &&
                           paymentReconcileFetcher.formData?.get('reference') === payment.reference
-                            ? 'Checking with Paystack…'
-                            : 'Verify and activate'}
+                            ? 'Checking Paystack…'
+                            : 'Reconcile with Paystack'}
                         </button>
                       </paymentReconcileFetcher.Form>
                     )}

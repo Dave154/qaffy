@@ -258,6 +258,24 @@ test('permits borrowing from the next weekly credit and reports the resulting ba
   assert.equal(allowance.nextBalanceAfterCredit, 15)
 })
 
+test('semester confirmation can use the current balance and at most one upcoming weekly credit', () => {
+  const allowance = calculateSubscriptionAllowance(
+    {
+      weeklyLimit: 20,
+      semesterWeeks: 17,
+      startDate: '2026-10-04',
+      startAt: '2026-10-04T00:00:00.000Z',
+      endDate: '2027-01-31',
+      usedUnits: 56,
+    },
+    new Date('2026-10-23T12:00:00.000Z'),
+  )
+
+  assert.equal(allowance.balance, 4)
+  assert.equal(allowance.borrowableUnits, 20)
+  assert.equal(allowance.unitsAvailableForConfirmation, 24)
+})
+
 test('only borrows units the customer explicitly consented to and caps it to one upcoming allowance', () => {
   const allowance = calculateSubscriptionAllowance(
     { weeklyLimit: 20, startDate: '2026-10-02', endDate: '2026-11-02', usedUnits: 20 },

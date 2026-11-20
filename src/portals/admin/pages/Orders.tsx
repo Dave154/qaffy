@@ -33,7 +33,6 @@ import { cancelAdminOrder, OrderCancellationError } from '../../../lib/order-can
 import { RefundAccountingError } from '../../../lib/order-cancellation'
 import {
   calculateSubscriptionAllowance,
-  calculateSubscriptionAllowanceThroughCurrentMonth,
   getSubscriptionWeekStart,
 } from '../../../lib/subscription-week'
 
@@ -323,8 +322,8 @@ async function getOfflinePaymentCalculation(
     usedUnits,
     retroactiveUnits: Number(subscription.retroactive_allowance_units),
   }
-  const allowanceThroughMonth = calculateSubscriptionAllowanceThroughCurrentMonth(allowanceInput, now)
   const allowanceAccruedNow = calculateSubscriptionAllowance(allowanceInput, now)
+  const allowanceForConfirmation = allowanceAccruedNow.unitsAvailableForConfirmation
   const billingItems = items.map((item) => ({
     id: item.id,
     service: item.service,
@@ -342,7 +341,7 @@ async function getOfflinePaymentCalculation(
     wash: subscription.covers_wash_snapshot,
     iron: subscription.covers_iron_snapshot,
   }
-  const billing = calculateSubscriptionBilling(billingItems, coverage, allowanceThroughMonth.unitsAvailableForConfirmation)
+  const billing = calculateSubscriptionBilling(billingItems, coverage, allowanceForConfirmation)
   const eligibleOrderUnits = billingItems.reduce((total, item) => {
     const isCovered =
       (item.service === 'wash' && coverage.wash) ||
@@ -353,7 +352,7 @@ async function getOfflinePaymentCalculation(
   const originalBilling = calculateSubscriptionBilling(
     billingItems.map((item, index) => ({ ...item, quantity: items[index].quantity })),
     coverage,
-    allowanceThroughMonth.unitsAvailableForConfirmation,
+    allowanceForConfirmation,
   )
   const originalLineAmounts = new Map(originalBilling.lines.map((line) => [line.id, line.totalAmount]))
   const mismatchItems = items
@@ -375,7 +374,7 @@ async function getOfflinePaymentCalculation(
     .filter((item) => item.difference !== 0)
   const amount = roundCurrency(billing.totalAmount)
   const currentlyAvailable = Math.max(0, allowanceAccruedNow.balance)
-  const totalAvailable = allowanceThroughMonth.unitsAvailableForConfirmation
+  const totalAvailable = allowanceForConfirmation
   const futureAvailable = Math.max(0, totalAvailable - currentlyAvailable)
 
   return {
@@ -1436,7 +1435,7 @@ function OrderDetails({
                               : ''}
                           </span>
                           <span className="mt-1 block text-xs leading-5 text-slate-600">
-                            Use the customer’s current plan credits, including future credits this month. Uncovered services are charged normally.
+                            Use current plan credits and, when eligible, borrow from one upcoming weekly credit. Uncovered services are charged normally.
                           </span>
                         </span>
                       </label>
@@ -1453,7 +1452,7 @@ function OrderDetails({
                       {applySubscriptionAllowance && allowancePreview && (
                         <div className="mt-2 space-y-1 text-xs text-slate-600">
                           <p>
-                            {allowancePreview.currentUnitsAvailable} current + {allowancePreview.futureUnitsAvailable} future ={' '}
+                            {allowancePreview.currentUnitsAvailable} current + {allowancePreview.futureUnitsAvailable} from next weekly credit ={' '}
                             {allowancePreview.currentUnitsAvailable + allowancePreview.futureUnitsAvailable} units available.
                           </p>
                           <p>

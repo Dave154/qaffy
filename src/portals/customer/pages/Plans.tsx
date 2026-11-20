@@ -148,7 +148,7 @@ export async function action({ request }: Route.ActionArgs) {
           })
           return data({ ok: false, message: 'The previous payment could not be safely matched. Contact support.' }, { status: 409, headers })
         }
-        const activation = await activateSubscriptionFromPayment(userData.user.id, pendingCheckout.reference)
+        const activation = await activateSubscriptionFromPayment(userData.user.id, pendingCheckout.reference, true)
         if (!activation.alreadyActivated) {
           await sendCustomerNotification({
             eventKey: activation.scheduled
