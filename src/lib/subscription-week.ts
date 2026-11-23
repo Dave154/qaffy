@@ -235,6 +235,62 @@ export function calculateRetroactiveSubscriptionUnits(
   return Math.max(0, backdated.accruedUnits - current.accruedUnits)
 }
 
+export function calculateWeeklyBackdatedAllowance(
+  input: {
+    weeklyLimit: number
+    startDate: string
+    startAt: string
+    retroactiveUnits: number
+    historicalUsed: number
+    historicalUsedThisWeek: number
+  },
+  reference = new Date(),
+) {
+  const weeklyLimit = Math.max(0, Math.floor(input.weeklyLimit))
+  const retroactiveUnits = Math.max(0, Math.floor(input.retroactiveUnits))
+  const historicalUsed = Math.max(0, Math.floor(input.historicalUsed))
+  const historicalUsedThisWeek = Math.max(0, Math.floor(input.historicalUsedThisWeek))
+  const poolRemaining = Math.max(0, retroactiveUnits - historicalUsed)
+  const weekRemaining = Math.max(0, weeklyLimit - historicalUsedThisWeek)
+  const referenceWeekStart = getSubscriptionWeekStart(reference).getTime()
+  const creationWeekStart = getSubscriptionWeekStart(new Date(input.startAt)).getTime()
+  const subscriptionStart = parseCalendarDate(input.startDate)
+  const startWeekStart = getSubscriptionWeekStart(
+    new Date(Date.UTC(subscriptionStart.year, subscriptionStart.month - 1, subscriptionStart.day)),
+  ).getTime()
+
+  if (
+    retroactiveUnits <= 0 ||
+    referenceWeekStart < startWeekStart ||
+    referenceWeekStart > creationWeekStart
+  ) {
+    return {
+      availableUnits: 0,
+      poolRemaining,
+      weekRemaining,
+    }
+  }
+
+  return {
+    availableUnits: Math.min(poolRemaining, weekRemaining),
+    poolRemaining,
+    weekRemaining,
+  }
+}
+
+/**
+ * Adds spendable backdated units to a normal allowance. A negative normal balance (borrowed
+ * units awaiting the next credit) is preserved rather than repaid from the historical pool.
+ */
+export function withBackdatedAllowance(allowance: SubscriptionAllowance, backdatedUnits: number): SubscriptionAllowance {
+  const units = Math.max(0, Math.floor(backdatedUnits))
+  return {
+    ...allowance,
+    balance: allowance.balance < 0 ? allowance.balance : allowance.balance + units,
+    unitsAvailableForConfirmation: allowance.unitsAvailableForConfirmation + units,
+  }
+}
+
 export function calculateSubscriptionAllowanceThroughCurrentMonth(
   input: {
     weeklyLimit: number

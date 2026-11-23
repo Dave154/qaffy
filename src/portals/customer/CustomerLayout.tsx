@@ -41,6 +41,8 @@ import type { Invoice, Order, Payment, Plan, Subscription, Wallet, WalletTransac
 import { ensurePushSubscription, savePushSubscription } from '../../lib/push.client'
 import {
   calculateSubscriptionAllowance,
+  calculateWeeklyBackdatedAllowance,
+  withBackdatedAllowance,
   calculateSubscriptionUnitsApplied,
   type SubscriptionUsageOrder,
 } from '../../lib/subscription-week'
@@ -805,23 +807,36 @@ async function loadCustomerLayoutData(request: Request) {
         : null
     const subscriptionAllowance =
       subscription && subscriptionPlanSnapshot
-        ? calculateSubscriptionAllowance(
-            {
-              weeklyLimit: Number(subscription.weekly_limit_snapshot),
-              semesterWeeks: subscription.semester_weeks_snapshot,
-              startDate: subscription.start_date,
-              startAt: subscription.created_at,
-              endDate: subscription.end_date,
-              retroactiveUnits: Number(subscription.retroactive_allowance_units),
-              usedUnits:
-                subscriptionUsageTotalsRows?.usedUnits ??
-                calculateSubscriptionUnitsApplied(subscriptionUsageOrders ?? [], {
-                  id: subscription.id,
-                  startDate: subscription.start_date,
-                  endDate: subscription.end_date,
-                }),
-            },
-            subscriptionUsageReference,
+        ? withBackdatedAllowance(
+            calculateSubscriptionAllowance(
+              {
+                weeklyLimit: Number(subscription.weekly_limit_snapshot),
+                semesterWeeks: subscription.semester_weeks_snapshot,
+                startDate: subscription.start_date,
+                startAt: subscription.created_at,
+                endDate: subscription.end_date,
+                retroactiveUnits: Number(subscription.retroactive_allowance_units),
+                usedUnits:
+                  subscriptionUsageTotalsRows?.usedUnits ??
+                  calculateSubscriptionUnitsApplied(subscriptionUsageOrders ?? [], {
+                    id: subscription.id,
+                    startDate: subscription.start_date,
+                    endDate: subscription.end_date,
+                  }),
+              },
+              subscriptionUsageReference,
+            ),
+            calculateWeeklyBackdatedAllowance(
+              {
+                weeklyLimit: Number(subscription.weekly_limit_snapshot),
+                startDate: subscription.start_date,
+                startAt: String(subscription.created_at),
+                retroactiveUnits: Number(subscription.retroactive_allowance_units),
+                historicalUsed: subscriptionUsageTotalsRows?.historicalUsed ?? 0,
+                historicalUsedThisWeek: subscriptionUsageTotalsRows?.historicalUsedThisWeek ?? 0,
+              },
+              subscriptionUsageReference,
+            ).availableUnits,
           )
         : null
 

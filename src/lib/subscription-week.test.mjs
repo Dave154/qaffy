@@ -6,6 +6,8 @@ import {
   calculateSubscriptionUnitsApplied,
   calculateSubscriptionUnitsUsed,
   calculateRetroactiveSubscriptionUnits,
+  calculateWeeklyBackdatedAllowance,
+  withBackdatedAllowance,
   getAuthorizedSubscriptionBorrowUnits,
   getSubscriptionWeekStart,
 } from './subscription-week.ts'
@@ -245,6 +247,50 @@ test('separates historical credits from the current allowance without duplicatin
     ).accruedUnits,
     10,
   )
+})
+
+test('backdated allowance is limited to the weekly pool for the order week', () => {
+  const createdAt = '2026-11-12T12:00:00.000Z'
+  const friday = new Date('2026-11-13T12:00:00.000Z')
+  const balance = calculateWeeklyBackdatedAllowance(
+    {
+      weeklyLimit: 20,
+      startDate: '2026-10-15',
+      startAt: createdAt,
+      retroactiveUnits: 100,
+      historicalUsed: 0,
+      historicalUsedThisWeek: 0,
+    },
+    friday,
+  )
+  assert.equal(balance.availableUnits, 20)
+  assert.equal(balance.poolRemaining, 100)
+
+  const partiallyUsed = calculateWeeklyBackdatedAllowance(
+    {
+      weeklyLimit: 20,
+      startDate: '2026-10-15',
+      startAt: createdAt,
+      retroactiveUnits: 100,
+      historicalUsed: 15,
+      historicalUsedThisWeek: 15,
+    },
+    friday,
+  )
+  assert.equal(partiallyUsed.availableUnits, 5)
+
+  const afterCreationWeek = calculateWeeklyBackdatedAllowance(
+    {
+      weeklyLimit: 20,
+      startDate: '2026-10-15',
+      startAt: createdAt,
+      retroactiveUnits: 100,
+      historicalUsed: 20,
+      historicalUsedThisWeek: 20,
+    },
+    new Date('2026-11-23T12:00:00.000Z'),
+  )
+  assert.equal(afterCreationWeek.availableUnits, 0)
 })
 
 test('permits borrowing from the next weekly credit and reports the resulting balance', () => {
@@ -496,4 +542,27 @@ test('counts current allowance spent on a retroactively billed one-time order', 
     4,
   )
   assert.equal(calculateSubscriptionUnitsUsed([order], reference), 4)
+})
+
+test('creation week is not credited twice when a subscription is backdated', () => {
+  // Wed Nov 4 backdate, created Sat Nov 14 (week of Sun Nov 8): historical pool is the Nov 1 + Nov 8 credits.
+  const input = { weeklyLimit: 10, startDate: '2026-11-04', startAt: '2026-11-14T10:00:00.000Z', endDate: null }
+  const retroactiveUnits = calculateRetroactiveSubscriptionUnits(input, new Date('2026-11-14T10:00:00.000Z'))
+  assert.equal(retroactiveUnits, 20)
+  const now = new Date('2026-11-14T12:00:00.000Z')
+  const normal = calculateSubscriptionAllowance({ ...input, usedUnits: 0, retroactiveUnits }, now)
+  assert.equal(normal.balance, 0)
+  const historical = calculateWeeklyBackdatedAllowance(
+    { weeklyLimit: 10, startDate: input.startDate, startAt: input.startAt, retroactiveUnits, historicalUsed: 0, historicalUsedThisWeek: 0 },
+    now,
+  )
+  assert.equal(historical.availableUnits, 10)
+  assert.equal(withBackdatedAllowance(normal, historical.availableUnits).balance, 10)
+})
+
+test('backdated units do not repay a negative borrowed balance', () => {
+  const allowance = { accruedUnits: 0, balance: -5, borrowableUnits: 10, unitsAvailableForConfirmation: 5, nextCreditAt: null, nextBalanceAfterCredit: 5 }
+  const combined = withBackdatedAllowance(allowance, 8)
+  assert.equal(combined.balance, -5)
+  assert.equal(combined.unitsAvailableForConfirmation, 13)
 })

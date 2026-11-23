@@ -4,8 +4,10 @@ import { sql } from './db.server'
 import { generateFourDigitOtp } from './order-otp.server'
 import {
   calculateSubscriptionAllowance,
+  calculateWeeklyBackdatedAllowance,
   getSubscriptionWeekStart,
 } from './subscription-week'
+import { getHistoricalAllowanceUsage } from './subscription-usage.server'
 
 type RetroactiveOrderCandidate = {
   id: string
@@ -170,13 +172,13 @@ export async function applyRetroactiveSubscriptionOrders(
   const [alreadyApplied] = await tx<{ historical_units: number | string; current_units: number | string }[]>`
     select
       coalesce(sum(retroactive_units_applied), 0)::int as historical_units,
-      coalesce(sum(subscription_units_applied), 0)::int as current_units
+      coalesce(sum(greatest(0, subscription_units_applied - coalesce(retroactive_units_applied, 0))), 0)::int as current_units
     from orders
     where customer_id = ${input.customerId}::uuid
       and retroactive_subscription_id = ${input.subscriptionId}::uuid
   `
   const [existingUsage] = await tx<{ used_units: number | string }[]>`
-    select coalesce(sum(order_row.subscription_units_applied), 0)::int as used_units
+    select coalesce(sum(greatest(0, order_row.subscription_units_applied - coalesce(order_row.retroactive_units_applied, 0))), 0)::int as used_units
     from orders order_row
     where order_row.customer_id = ${input.customerId}::uuid
       and (
@@ -293,6 +295,23 @@ export async function applyRetroactiveSubscriptionOrders(
       throw new RetroactiveSubscriptionError(`Order ${order.public_order_number} has no complete vendor-confirmed item quantities.`)
     }
 
+    const historicalWeekUsage = await getHistoricalAllowanceUsage(
+      tx,
+      { customerId: input.customerId, subscriptionId: subscription.id, excludeOrderId: orderId },
+      new Date(order.created_at),
+    )
+    const weeklyHistoricalAllowance = calculateWeeklyBackdatedAllowance(
+      {
+        weeklyLimit: Number(subscription.weekly_limit_snapshot),
+        startDate: subscription.start_date,
+        startAt: createdAt,
+        retroactiveUnits: Number(subscription.retroactive_allowance_units),
+        historicalUsed: Number(subscription.retroactive_allowance_units) - historicalUnitsRemaining,
+        historicalUsedThisWeek: historicalWeekUsage.historicalUsedThisWeek,
+      },
+      new Date(order.created_at),
+    )
+
     const billingItems = items.map((item) => {
       const unitsPerItem = Number(item.subscription_units_snapshot ?? item.subscription_units)
       const regularWashPrice = Number(item.regular_wash_price_snapshot ?? item.wash_price)
@@ -323,7 +342,7 @@ export async function applyRetroactiveSubscriptionOrders(
         subscriberWashIronPrice,
       }
     })
-    const availableUnits = historicalUnitsRemaining + currentUnitsRemaining
+    const availableUnits = weeklyHistoricalAllowance.availableUnits + currentUnitsRemaining
     const billing = calculateSubscriptionBilling(
       billingItems,
       {
@@ -339,7 +358,7 @@ export async function applyRetroactiveSubscriptionOrders(
           : 'No backdated or current subscription units are available to apply.',
       )
     }
-    const historicalUsed = Math.min(historicalUnitsRemaining, billing.coveredUnits)
+    const historicalUsed = Math.min(weeklyHistoricalAllowance.availableUnits, billing.coveredUnits)
     const currentUsed = Math.max(0, billing.coveredUnits - historicalUsed)
     historicalUnitsRemaining -= historicalUsed
     currentUnitsRemaining -= currentUsed
