@@ -9,9 +9,11 @@ import {
 } from './notifications.server'
 import {
   calculateSubscriptionAllowance,
+  calculateWeeklyBackdatedAllowance,
   getAuthorizedSubscriptionBorrowUnits,
   getSubscriptionWeekStart,
 } from './subscription-week'
+import { getHistoricalAllowanceUsage } from './subscription-usage.server'
 import {
   ensureNoPendingSubscriptionPayment,
   insertSubscriptionWithSnapshot,
@@ -510,6 +512,7 @@ export async function finalizeVendorOrder(
 
     let invoiceAmount = Math.round(finalAmount * 100) / 100
     let subscriptionUnitsApplied = 0
+    let retroactiveUnitsApplied = 0
     let subscriptionUnitsBorrowed = 0
     let subscriptionBalanceAfterNextCredit: number | null = null
     let appliedSubscriptionId: string | null = order.subscription_id ?? null
@@ -576,7 +579,7 @@ export async function finalizeVendorOrder(
         confirmationTime = new Date(clock.now)
         const currentWeekStart = getSubscriptionWeekStart(confirmationTime)
         const [usage] = await tx<{ used_units: number | string }[]>`
-        select coalesce(sum(subscription_units_applied), 0) as used_units
+        select coalesce(sum(greatest(0, subscription_units_applied - coalesce(retroactive_units_applied, 0))), 0) as used_units
         from orders
         where customer_id = ${order.customer_id}
           and (
@@ -622,7 +625,28 @@ export async function finalizeVendorOrder(
             confirmationTime,
           )
         : null
-      const currentBalanceUnits = Math.max(0, allowance?.balance ?? 0)
+      const historicalUsage = appliedSubscriptionId
+        ? await getHistoricalAllowanceUsage(
+            tx,
+            { customerId: order.customer_id, subscriptionId: appliedSubscriptionId, excludeOrderId: orderId },
+            confirmationTime,
+          )
+        : { historicalUsed: 0, historicalUsedThisWeek: 0 }
+      const weeklyBackdatedAllowance = startDate && startAt
+        ? calculateWeeklyBackdatedAllowance(
+            {
+              weeklyLimit,
+              startDate,
+              startAt,
+              retroactiveUnits,
+              historicalUsed: historicalUsage.historicalUsed,
+              historicalUsedThisWeek: historicalUsage.historicalUsedThisWeek,
+            },
+            confirmationTime,
+          )
+        : null
+      const backdatedBalanceUnits = weeklyBackdatedAllowance?.availableUnits ?? 0
+      const currentBalanceUnits = Math.max(0, allowance?.balance ?? 0) + backdatedBalanceUnits
       const authorizedBorrowUnits = allowance
         ? getAuthorizedSubscriptionBorrowUnits(allowance, Number(order.subscription_borrow_consent_units ?? 0))
         : 0
@@ -663,6 +687,7 @@ export async function finalizeVendorOrder(
         )
         invoiceAmount = Math.round(billing.totalAmount * 100) / 100
         subscriptionUnitsApplied = billing.coveredUnits
+        retroactiveUnitsApplied = Math.min(backdatedBalanceUnits, billing.coveredUnits)
         extraAmount = Math.max(0, Math.round((billing.totalAmount - originalBilling.totalAmount) * 100) / 100)
         billingBreakdown = {
           coveredUnits: billing.coveredUnits,
@@ -720,7 +745,10 @@ export async function finalizeVendorOrder(
       }
       await tx`
         update orders
-        set subscription_units_applied = ${subscriptionUnitsApplied}, subscription_units_applied_at = now()
+        set subscription_units_applied = ${subscriptionUnitsApplied},
+            subscription_units_applied_at = now(),
+            retroactive_subscription_id = ${retroactiveUnitsApplied > 0 ? appliedSubscriptionId : null},
+            retroactive_units_applied = ${retroactiveUnitsApplied > 0 ? retroactiveUnitsApplied : null}
         where id = ${orderId}
       `
     }

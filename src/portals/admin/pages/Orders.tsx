@@ -33,8 +33,10 @@ import { cancelAdminOrder, OrderCancellationError } from '../../../lib/order-can
 import { RefundAccountingError } from '../../../lib/order-cancellation'
 import {
   calculateSubscriptionAllowance,
+  calculateWeeklyBackdatedAllowance,
   getSubscriptionWeekStart,
 } from '../../../lib/subscription-week'
+import { getHistoricalAllowanceUsage } from '../../../lib/subscription-usage.server'
 
 type AdminOrder = {
   id: string
@@ -131,6 +133,7 @@ type OfflinePaymentCalculation = {
   coveredUnits: number
   borrowedUnits: number
   allowanceSubscriptionId: string | null
+  retroactiveUnitsApplied: number
   currentUnitsAvailable: number
   futureUnitsAvailable: number
   eligibleOrderUnits: number
@@ -226,6 +229,7 @@ async function getOfflinePaymentCalculation(
     coveredUnits: 0,
     borrowedUnits: 0,
     allowanceSubscriptionId: null,
+    retroactiveUnitsApplied: 0,
     currentUnitsAvailable: 0,
     futureUnitsAvailable: 0,
     eligibleOrderUnits: 0,
@@ -292,7 +296,7 @@ async function getOfflinePaymentCalculation(
   const endDate = subscription.end_date ? asDateOnly(subscription.end_date) : null
   const startAt = asTimestamp(subscription.created_at)
   const [usage] = await tx<{ used_units: number | string }[]>`
-    select coalesce(sum(subscription_units_applied), 0) as used_units
+    select coalesce(sum(greatest(0, subscription_units_applied - coalesce(retroactive_units_applied, 0))), 0) as used_units
     from orders
     where customer_id = ${order.customer_id}
       and (
@@ -334,7 +338,23 @@ async function getOfflinePaymentCalculation(
     retroactiveUnits: Number(subscription.retroactive_allowance_units),
   }
   const allowanceAccruedNow = calculateSubscriptionAllowance(allowanceInput, now)
-  const allowanceForConfirmation = allowanceAccruedNow.unitsAvailableForConfirmation
+  const historicalUsage = await getHistoricalAllowanceUsage(
+    tx,
+    { customerId: order.customer_id, subscriptionId: subscription.id, excludeOrderId: orderId },
+    now,
+  )
+  const backdatedUnits = calculateWeeklyBackdatedAllowance(
+    {
+      weeklyLimit: allowanceInput.weeklyLimit,
+      startDate,
+      startAt,
+      retroactiveUnits: allowanceInput.retroactiveUnits,
+      historicalUsed: historicalUsage.historicalUsed,
+      historicalUsedThisWeek: historicalUsage.historicalUsedThisWeek,
+    },
+    now,
+  ).availableUnits
+  const allowanceForConfirmation = allowanceAccruedNow.unitsAvailableForConfirmation + backdatedUnits
   const billingItems = items.map((item) => ({
     id: item.id,
     service: item.service,
@@ -384,7 +404,7 @@ async function getOfflinePaymentCalculation(
     })
     .filter((item) => item.difference !== 0)
   const amount = roundCurrency(billing.totalAmount)
-  const currentlyAvailable = Math.max(0, allowanceAccruedNow.balance)
+  const currentlyAvailable = Math.max(0, allowanceAccruedNow.balance) + backdatedUnits
   const totalAvailable = allowanceForConfirmation
   const futureAvailable = Math.max(0, totalAvailable - currentlyAvailable)
 
@@ -395,6 +415,7 @@ async function getOfflinePaymentCalculation(
       coveredUnits: billing.coveredUnits,
       borrowedUnits: Math.max(0, billing.coveredUnits - currentlyAvailable),
       allowanceSubscriptionId: subscription.id,
+      retroactiveUnitsApplied: Math.min(backdatedUnits, billing.coveredUnits),
       currentUnitsAvailable: currentlyAvailable,
       futureUnitsAvailable: futureAvailable,
       eligibleOrderUnits,
@@ -828,6 +849,8 @@ export async function action({ request }: Route.ActionArgs) {
                 set subscription_units_applied = ${calculation.coveredUnits},
                     subscription_units_applied_at = now(),
                     subscription_allowance_subscription_id = ${calculation.allowanceSubscriptionId},
+                    retroactive_subscription_id = ${calculation.retroactiveUnitsApplied > 0 ? calculation.allowanceSubscriptionId : null},
+                    retroactive_units_applied = ${calculation.retroactiveUnitsApplied > 0 ? calculation.retroactiveUnitsApplied : null},
                     billed_extra_amount = ${calculation.billedExtraAmount}
                 where id = ${order.order_id}
               `

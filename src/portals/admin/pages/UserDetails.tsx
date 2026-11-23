@@ -12,7 +12,7 @@ import {
 import { sql } from '../../../lib/db.server'
 import { addCalendarMonthsToDate } from '../../../lib/subscription-terms'
 import { toast } from '../../../lib/toast'
-import { calculateSubscriptionAllowance } from '../../../lib/subscription-week'
+import { calculateSubscriptionAllowance, calculateWeeklyBackdatedAllowance, withBackdatedAllowance } from '../../../lib/subscription-week'
 import { getSubscriptionUsageTotals } from '../../../lib/subscription-usage.server'
 import { getRetroactiveSubscriptionOrderCandidates } from '../../../lib/retroactive-subscription.server'
 
@@ -418,19 +418,32 @@ export async function loader({ request, params }: Route.LoaderArgs) {
         },
         allowanceReference,
       )
-    : { usedUnits: 0, usedThisWeek: 0 }
+    : { usedUnits: 0, usedThisWeek: 0, historicalUsed: 0, historicalUsedThisWeek: 0 }
   const activeSubscriptionAllowance = activeSubscription
-    ? calculateSubscriptionAllowance(
-        {
-          weeklyLimit: Number(activeSubscription.weekly_limit_snapshot),
-          semesterWeeks: activeSubscription.semester_weeks_snapshot,
-          startDate: activeSubscription.start_date,
-          startAt: activeSubscription.created_at,
-          endDate: activeSubscription.end_date,
-          usedUnits: subscriptionUsage.usedUnits,
-          retroactiveUnits: Number(activeSubscription.retroactive_allowance_units),
-        },
-        allowanceReference,
+    ? withBackdatedAllowance(
+        calculateSubscriptionAllowance(
+          {
+            weeklyLimit: Number(activeSubscription.weekly_limit_snapshot),
+            semesterWeeks: activeSubscription.semester_weeks_snapshot,
+            startDate: activeSubscription.start_date,
+            startAt: activeSubscription.created_at,
+            endDate: activeSubscription.end_date,
+            usedUnits: subscriptionUsage.usedUnits,
+            retroactiveUnits: Number(activeSubscription.retroactive_allowance_units),
+          },
+          allowanceReference,
+        ),
+        calculateWeeklyBackdatedAllowance(
+          {
+            weeklyLimit: Number(activeSubscription.weekly_limit_snapshot),
+            startDate: activeSubscription.start_date,
+            startAt: String(activeSubscription.created_at),
+            retroactiveUnits: Number(activeSubscription.retroactive_allowance_units),
+            historicalUsed: subscriptionUsage.historicalUsed,
+            historicalUsedThisWeek: subscriptionUsage.historicalUsedThisWeek,
+          },
+          allowanceReference,
+        ).availableUnits,
       )
     : null
   const backdatedSubscription = backdatedSubscriptionId
