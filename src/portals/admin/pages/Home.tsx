@@ -27,8 +27,13 @@ type DailyPoint = {
   washClothes: number
   ironClothes: number
   washIronClothes: number
+  washClothesPickedUp: number
+  ironClothesPickedUp: number
+  washIronClothesPickedUp: number
   oneTimeOrders: number
   subscriptionOrders: number
+  oneTimeOrdersPickedUp: number
+  subscriptionOrdersPickedUp: number
   subscriptionPurchases: number
   oneTimeRevenue: number
   subscriptionRevenue: number
@@ -126,8 +131,13 @@ function emptyDailyPoint(date: string, label: string): DailyPoint {
     washClothes: 0,
     ironClothes: 0,
     washIronClothes: 0,
+    washClothesPickedUp: 0,
+    ironClothesPickedUp: 0,
+    washIronClothesPickedUp: 0,
     oneTimeOrders: 0,
     subscriptionOrders: 0,
+    oneTimeOrdersPickedUp: 0,
+    subscriptionOrdersPickedUp: 0,
     subscriptionPurchases: 0,
     oneTimeRevenue: 0,
     subscriptionRevenue: 0,
@@ -190,10 +200,15 @@ export async function loader({ request }: Route.LoaderArgs) {
           orders: string
           one_time_orders: string
           subscription_orders: string
+          one_time_orders_picked_up: string
+          subscription_orders_picked_up: string
           clothes: string
           wash_clothes: string
           iron_clothes: string
           wash_iron_clothes: string
+          wash_clothes_picked_up: string
+          iron_clothes_picked_up: string
+          wash_iron_clothes_picked_up: string
           revenue: string
           one_time_revenue: string
           subscription_revenue: string
@@ -207,14 +222,19 @@ export async function loader({ request }: Route.LoaderArgs) {
         daily_orders as (
           select created_at::date as day, count(*) as orders,
             count(*) filter (where status <> 'cancelled' and not is_subscription_order) as one_time_orders,
-            count(*) filter (where status <> 'cancelled' and is_subscription_order) as subscription_orders
+            count(*) filter (where status <> 'cancelled' and is_subscription_order) as subscription_orders,
+            count(*) filter (where status <> 'cancelled' and not is_subscription_order and picked = true) as one_time_orders_picked_up,
+            count(*) filter (where status <> 'cancelled' and is_subscription_order and picked = true) as subscription_orders_picked_up
           from orders group by created_at::date
         ),
         daily_items as (
           select o.created_at::date as day, sum(i.quantity) as clothes,
-            sum(coalesce(i.confirmed_quantity, i.quantity)) filter (where i.service = 'wash') as wash_clothes,
-            sum(coalesce(i.confirmed_quantity, i.quantity)) filter (where i.service = 'iron') as iron_clothes,
-            sum(coalesce(i.confirmed_quantity, i.quantity)) filter (where i.service = 'wash_iron') as wash_iron_clothes
+            sum(i.quantity) filter (where i.service = 'wash') as wash_clothes,
+            sum(i.quantity) filter (where i.service = 'iron') as iron_clothes,
+            sum(i.quantity) filter (where i.service = 'wash_iron') as wash_iron_clothes,
+            sum(i.quantity) filter (where i.service = 'wash' and o.picked = true) as wash_clothes_picked_up,
+            sum(i.quantity) filter (where i.service = 'iron' and o.picked = true) as iron_clothes_picked_up,
+            sum(i.quantity) filter (where i.service = 'wash_iron' and o.picked = true) as wash_iron_clothes_picked_up
           from orders o join order_items i on i.order_id = o.id
           group by o.created_at::date
         ),
@@ -301,10 +321,15 @@ export async function loader({ request }: Route.LoaderArgs) {
           coalesce(daily_orders.orders, 0) as orders,
           coalesce(daily_orders.one_time_orders, 0) as one_time_orders,
           coalesce(daily_orders.subscription_orders, 0) as subscription_orders,
+          coalesce(daily_orders.one_time_orders_picked_up, 0) as one_time_orders_picked_up,
+          coalesce(daily_orders.subscription_orders_picked_up, 0) as subscription_orders_picked_up,
           coalesce(daily_items.clothes, 0) as clothes,
           coalesce(daily_items.wash_clothes, 0) as wash_clothes,
           coalesce(daily_items.iron_clothes, 0) as iron_clothes,
           coalesce(daily_items.wash_iron_clothes, 0) as wash_iron_clothes,
+          coalesce(daily_items.wash_clothes_picked_up, 0) as wash_clothes_picked_up,
+          coalesce(daily_items.iron_clothes_picked_up, 0) as iron_clothes_picked_up,
+          coalesce(daily_items.wash_iron_clothes_picked_up, 0) as wash_iron_clothes_picked_up,
           coalesce(daily_invoices.revenue, 0) + coalesce(daily_plan_payments.revenue, 0) as revenue,
           coalesce(daily_invoices.one_time_revenue, 0) as one_time_revenue,
           coalesce(daily_invoices.subscription_revenue, 0) + coalesce(daily_plan_payments.revenue, 0) as subscription_revenue,
@@ -352,10 +377,15 @@ export async function loader({ request }: Route.LoaderArgs) {
       orders: toNumber(row.orders),
       oneTimeOrders: toNumber(row.one_time_orders),
       subscriptionOrders: toNumber(row.subscription_orders),
+      oneTimeOrdersPickedUp: toNumber(row.one_time_orders_picked_up),
+      subscriptionOrdersPickedUp: toNumber(row.subscription_orders_picked_up),
       clothes: toNumber(row.clothes),
       washClothes: toNumber(row.wash_clothes),
       ironClothes: toNumber(row.iron_clothes),
       washIronClothes: toNumber(row.wash_iron_clothes),
+      washClothesPickedUp: toNumber(row.wash_clothes_picked_up),
+      ironClothesPickedUp: toNumber(row.iron_clothes_picked_up),
+      washIronClothesPickedUp: toNumber(row.wash_iron_clothes_picked_up),
       revenue: toNumber(row.revenue),
       oneTimeRevenue: toNumber(row.one_time_revenue),
       subscriptionRevenue: toNumber(row.subscription_revenue),
@@ -742,6 +772,8 @@ function OverviewCoreDashboard({ core }: { core: OverviewCore }) {
       customers: totals.customers + point.customers,
       oneTimeOrders: totals.oneTimeOrders + point.oneTimeOrders,
       subscriptionOrders: totals.subscriptionOrders + point.subscriptionOrders,
+      oneTimeOrdersPickedUp: totals.oneTimeOrdersPickedUp + point.oneTimeOrdersPickedUp,
+      subscriptionOrdersPickedUp: totals.subscriptionOrdersPickedUp + point.subscriptionOrdersPickedUp,
       subscriptionPurchases: totals.subscriptionPurchases + point.subscriptionPurchases,
       vendorPayouts: totals.vendorPayouts + point.vendorPayouts,
       owedToVendors: totals.owedToVendors + point.owedToVendors,
@@ -750,6 +782,9 @@ function OverviewCoreDashboard({ core }: { core: OverviewCore }) {
       washClothes: totals.washClothes + point.washClothes,
       ironClothes: totals.ironClothes + point.ironClothes,
       washIronClothes: totals.washIronClothes + point.washIronClothes,
+      washClothesPickedUp: totals.washClothesPickedUp + point.washClothesPickedUp,
+      ironClothesPickedUp: totals.ironClothesPickedUp + point.ironClothesPickedUp,
+      washIronClothesPickedUp: totals.washIronClothesPickedUp + point.washIronClothesPickedUp,
     }),
     {
       orders: 0,
@@ -757,6 +792,8 @@ function OverviewCoreDashboard({ core }: { core: OverviewCore }) {
       customers: 0,
       oneTimeOrders: 0,
       subscriptionOrders: 0,
+      oneTimeOrdersPickedUp: 0,
+      subscriptionOrdersPickedUp: 0,
       subscriptionPurchases: 0,
       vendorPayouts: 0,
       owedToVendors: 0,
@@ -765,6 +802,9 @@ function OverviewCoreDashboard({ core }: { core: OverviewCore }) {
       washClothes: 0,
       ironClothes: 0,
       washIronClothes: 0,
+      washClothesPickedUp: 0,
+      ironClothesPickedUp: 0,
+      washIronClothesPickedUp: 0,
     },
   )
   const revenueMax = Math.max(...chartPoints.map((point) => point.revenue), 1)
@@ -814,7 +854,7 @@ function OverviewCoreDashboard({ core }: { core: OverviewCore }) {
       value: metrics.activeSubscriptions,
       helper: 'Current subscriptions',
       icon: UsersRound,
-      href: '/admin/plans',
+      href: '/admin/users?subscription=active',
       tone: 'pink',
     },
     {
@@ -825,22 +865,24 @@ function OverviewCoreDashboard({ core }: { core: OverviewCore }) {
       href: '/admin/orders',
       tone: 'green',
     },
-    { label: 'One-time orders', value: periodMetrics.oneTimeOrders, helper: 'Orders', icon: Package, href: '/admin/orders', tone: 'pink' },
+    { label: 'One-time orders', value: periodMetrics.oneTimeOrders, helper: 'Orders placed', pickedUp: periodMetrics.oneTimeOrdersPickedUp, icon: Package, href: '/admin/orders', tone: 'pink' },
     {
       label: 'Subscription orders',
       value: periodMetrics.subscriptionOrders,
-      helper: 'Orders',
+      helper: 'Orders placed',
+      pickedUp: periodMetrics.subscriptionOrdersPickedUp,
       icon: Package,
       href: '/admin/orders',
       tone: 'green',
     },
     { label: 'Total vendors', value: metrics.vendors, helper: 'Active', icon: UsersRound, href: '/admin/partners/vendors', tone: 'pink' },
-    { label: 'Wash clothes', value: periodMetrics.washClothes, helper: 'Wash', icon: Package, href: '/admin/orders', tone: 'green' },
-    { label: 'Iron clothes', value: periodMetrics.ironClothes, helper: 'Iron', icon: Package, href: '/admin/orders', tone: 'pink' },
+    { label: 'Wash clothes', value: periodMetrics.washClothes, helper: 'Items ordered', pickedUp: periodMetrics.washClothesPickedUp, icon: Package, href: '/admin/orders', tone: 'green' },
+    { label: 'Iron clothes', value: periodMetrics.ironClothes, helper: 'Items ordered', pickedUp: periodMetrics.ironClothesPickedUp, icon: Package, href: '/admin/orders', tone: 'pink' },
     {
       label: 'Wash + Iron clothes',
       value: periodMetrics.washIronClothes,
-      helper: 'Combo',
+      helper: 'Items ordered',
+      pickedUp: periodMetrics.washIronClothesPickedUp,
       icon: Package,
       href: '/admin/orders',
       tone: 'green',
@@ -933,11 +975,11 @@ function OverviewCoreDashboard({ core }: { core: OverviewCore }) {
           </div>
         </div>
         <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-          {cards.map(({ label, value, helper, icon: Icon, href, tone }) => (
+          {cards.map(({ label, value, helper, pickedUp, icon: Icon, href, tone }) => (
             <Link
               key={label}
               to={href}
-              className="min-h-[147px] rounded-[10px] border border-[#f2f3f3] bg-white p-5 shadow-[0_2px_8px_rgba(0,0,0,0.02)] transition hover:border-brand-border"
+              className="min-h-[160px] rounded-[10px] border border-[#f2f3f3] bg-white p-5 shadow-[0_2px_8px_rgba(0,0,0,0.02)] transition hover:border-brand-border"
             >
               <div className="flex items-start justify-between">
                 <p className="text-xs font-semibold capitalize tracking-[0.12em] text-[#729ea1]">{label}</p>
@@ -947,6 +989,9 @@ function OverviewCoreDashboard({ core }: { core: OverviewCore }) {
                 <div>
                   <p className="text-3xl font-semibold leading-none text-[#121212]">{value}</p>
                   <p className="mt-1 text-[10px] capitalize tracking-[0.08em] text-[#9aa7a7]">{helper}</p>
+                  {pickedUp !== undefined && (
+                    <p className="mt-2 text-xs font-medium text-slate-500">Picked up: {pickedUp.toLocaleString()}</p>
+                  )}
                 </div>
                 <ArrowUpRight size={15} className="text-[#505959]" />
               </div>

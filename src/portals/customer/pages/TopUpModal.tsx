@@ -5,6 +5,8 @@ type TopUpModalProps = {
   currentBalance: number
   subscriptionBalance: number
   pendingPaymentTotal: number
+  isPendingPaymentTotalLoading: boolean
+  pendingPaymentTotalError: string | null
   suggestedAmount?: number | null
   onTopUp: (amount: number) => Promise<void>
   isProcessing: boolean
@@ -16,6 +18,8 @@ export default function TopUpModal({
   currentBalance,
   subscriptionBalance,
   pendingPaymentTotal,
+  isPendingPaymentTotalLoading,
+  pendingPaymentTotalError,
   suggestedAmount: suggestedAmountOverride,
   onTopUp,
   isProcessing,
@@ -92,6 +96,16 @@ export default function TopUpModal({
               aria-invalid={Boolean(amountError)}
               className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-base text-slate-900 focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
             />
+            {isPendingPaymentTotalLoading && (
+              <span role="status" className="mt-1.5 block text-xs text-slate-500">
+                Checking unpaid order balances for a suggested top-up...
+              </span>
+            )}
+            {pendingPaymentTotalError && (
+              <span role="alert" className="mt-1.5 block text-xs text-amber-700">
+                {pendingPaymentTotalError} You can still enter an amount manually.
+              </span>
+            )}
             {amountError && (
               <span role="alert" className="mt-1.5 block text-sm font-medium text-red-600">
                 {amountError}
@@ -137,7 +151,7 @@ export default function TopUpModal({
 
           <button
             type="button"
-            disabled={numericAmount < 100 || isProcessing}
+            disabled={numericAmount < 100 || isProcessing || (isPendingPaymentTotalLoading && amountOverride === null)}
             onClick={() => void handleTopUp()}
             className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-brand-primary px-4 py-3 text-sm font-semibold text-white shadow-md shadow-brand-primary/20 transition hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
           >
@@ -145,6 +159,11 @@ export default function TopUpModal({
               <>
                 <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true" /> Opening
                 secure checkout...
+              </>
+            ) : isPendingPaymentTotalLoading && amountOverride === null ? (
+              <>
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true" /> Checking
+                order balances...
               </>
             ) : (
               <>

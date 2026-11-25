@@ -1,3 +1,5 @@
+import { normalizeMismatchDetails } from './mismatch-details'
+
 export type OrderCountItem = {
   id: string
   name: string
@@ -6,44 +8,16 @@ export type OrderCountItem = {
   confirmedQuantity: number | null
 }
 
-type MismatchCountLine = {
-  itemId?: string
-  category: string
-  service: OrderCountItem['service']
-  confirmedQuantity: number
-}
-
 export function getInitialReceivedCounts(
   items: OrderCountItem[],
   mismatches: Array<{ id: string; lines: unknown }>,
   confirmedCount: number | null,
 ): Record<string, number | undefined> {
-  const normalizeLines = (value: unknown): MismatchCountLine[] => {
-    let parsedValue = value
-    if (typeof parsedValue === 'string') {
-      try {
-        parsedValue = JSON.parse(parsedValue)
-      } catch {
-        return []
-      }
-    }
-    if (!Array.isArray(parsedValue)) return []
-    return parsedValue.filter(
-      (line): line is MismatchCountLine =>
-        typeof line === 'object' &&
-        line !== null &&
-        typeof line.category === 'string' &&
-        (line.service === 'wash' || line.service === 'iron' || line.service === 'wash_iron') &&
-        Number.isSafeInteger(line.confirmedQuantity) &&
-        line.confirmedQuantity >= 0,
-    )
-  }
-
   const confirmedByItemId = new Map<string, number>()
   const usedLines = new Set<string>()
 
   for (const mismatch of mismatches) {
-    normalizeLines(mismatch.lines).forEach((line, index) => {
+    normalizeMismatchDetails(mismatch.lines).forEach((line, index) => {
       if (!line.itemId) return
       confirmedByItemId.set(line.itemId, line.confirmedQuantity)
       usedLines.add(`${mismatch.id}:${index}`)
@@ -53,7 +27,7 @@ export function getInitialReceivedCounts(
   for (const item of items) {
     if (item.confirmedQuantity !== null || confirmedByItemId.has(item.id)) continue
     for (const mismatch of mismatches) {
-      const lines = normalizeLines(mismatch.lines)
+      const lines = normalizeMismatchDetails(mismatch.lines)
       const matchingLine = lines.findIndex(
         (line, index) =>
           !usedLines.has(`${mismatch.id}:${index}`) &&
