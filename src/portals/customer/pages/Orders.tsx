@@ -271,7 +271,7 @@ export default function Orders() {
           type="button"
           onClick={() => {
             if (unpickedOrderCount >= CUSTOMER_MAX_UNPICKED_ORDERS) {
-              toast.error(CUSTOMER_UNPICKED_ORDER_CAP_MESSAGE)
+              toast.info(CUSTOMER_UNPICKED_ORDER_CAP_MESSAGE)
               return
             }
             setIsOrderModalOpen(true)
@@ -283,7 +283,7 @@ export default function Orders() {
         </button>
       </header>
       {unpickedOrderCount >= CUSTOMER_MAX_UNPICKED_ORDERS && (
-        <p role="alert" className="-mt-4 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+        <p role="status" className="-mt-4 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-700">
           {CUSTOMER_UNPICKED_ORDER_CAP_MESSAGE}
         </p>
       )}

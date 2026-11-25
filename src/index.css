@@ -293,6 +293,12 @@ body {
   animation: qaffy-toast-bounce-in 620ms cubic-bezier(0.2, 0.85, 0.3, 1.15) both;
 }
 
+[data-rich-colors='true'][data-sonner-toast].qaffy-toast[data-type='info'] {
+  border-color: var(--color-brand-border);
+  background: var(--color-brand-soft);
+  color: var(--color-brand-primary-hover);
+}
+
 @keyframes qaffy-toast-bounce-in {
   0% {
     opacity: 0;

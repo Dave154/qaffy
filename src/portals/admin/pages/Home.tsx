@@ -854,7 +854,7 @@ function OverviewCoreDashboard({ core }: { core: OverviewCore }) {
       value: metrics.activeSubscriptions,
       helper: 'Current subscriptions',
       icon: UsersRound,
-      href: '/admin/plans',
+      href: '/admin/users?subscription=active',
       tone: 'pink',
     },
     {

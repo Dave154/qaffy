@@ -9,7 +9,7 @@ import { CustomerStoreContext } from './customer-store-context'
 import type { Invoice, Order, Payment, Plan, Subscription, Wallet, WalletTransaction } from '../../types/database.types'
 
 export const CUSTOMER_MAX_UNPICKED_ORDERS = 1
-export const CUSTOMER_UNPICKED_ORDER_CAP_MESSAGE = `You've reached the limit of ${CUSTOMER_MAX_UNPICKED_ORDERS} order${CUSTOMER_MAX_UNPICKED_ORDERS === 1 ? '' : 's'} awaiting pickup. Edit or cancel an existing order before placing another.`
+export const CUSTOMER_UNPICKED_ORDER_CAP_MESSAGE = 'Edit or cancel an existing order before placing another.'
 
 export type OrderStatus =
   'Awaiting pickup' | 'Picked up' | 'In progress' | 'Pending payment' | 'Ready for delivery' | 'Out for delivery' | 'Delivered' | 'Cancelled'
