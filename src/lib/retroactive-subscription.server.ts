@@ -398,7 +398,7 @@ export async function applyRetroactiveSubscriptionOrders(
           end,
           payment_method = case when ${paid} then 'subscription_units' else null end,
           paid_at = case when ${paid} then now() else null end,
-          billing_breakdown = ${JSON.stringify({
+          billing_breakdown = ${tx.json({
             coveredUnits: billing.coveredUnits,
             subscriberAmount: Math.round(billing.subscriberAmount * 100) / 100,
             regularAmount: Math.round(billing.regularAmount * 100) / 100,

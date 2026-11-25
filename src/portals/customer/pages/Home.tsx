@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { data, useFetcher, useRevalidator, useSearchParams } from 'react-router'
 import type { Route } from './+types/Home'
 import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
@@ -11,6 +11,7 @@ import {
   FileText,
   Gift,
   LoaderCircle,
+  MessageCircle,
   Settings2,
   Share2,
   Sparkles,
@@ -114,8 +115,18 @@ export default function Home() {
     subscription,
     subscriptionEndDate,
     pendingTopUp,
+    pendingPaymentTotal,
+    isPendingPaymentTotalLoading,
+    pendingPaymentTotalError,
+    loadPendingPaymentTotal,
     isDataLoading,
     dataLoadError,
+    isOverviewInsightsLoading,
+    overviewInsightsError,
+    retryOverviewInsights,
+    isRecentOrdersLoading,
+    recentOrdersError,
+    retryRecentOrders,
   } = useCustomerStore()
   const [searchParams, setSearchParams] = useSearchParams()
   const revalidator = useRevalidator()
@@ -123,18 +134,15 @@ export default function Home() {
   const [isTopUpModalOpenManually, setIsTopUpModalOpenManually] = useState(false)
   const [topUpSuggestedAmount, setTopUpSuggestedAmount] = useState<number | null>(null)
   const [pushSetupVisible, setPushSetupVisible] = useState(false)
-  const [planBannerDismissed, setPlanBannerDismissed] = useState(false)
+  const [whatsappSupportDismissed, setWhatsappSupportDismissed] = useState(false)
+  const [dismissedPlanEndDate, setDismissedPlanEndDate] = useState<string | null>(null)
   const [pushSetupBusy, setPushSetupBusy] = useState(false)
   const [pushSetupMessage, setPushSetupMessage] = useState('')
+  const dismissPlanBanner = useCallback(() => setDismissedPlanEndDate(subscriptionEndDate), [subscriptionEndDate])
   const topUpFetcher = useFetcher<typeof action>()
   const cancelFetcher = useFetcher<{ ok: boolean; orderId?: string; message?: string }>()
   const handledCancelResponse = useRef<typeof cancelFetcher.data>(null)
   const activeOrderCount = overviewSummary?.activeOrderCount ?? orders.filter((order) => order.status !== 'Delivered').length
-  const pendingPaymentTotal =
-    overviewSummary?.pendingPaymentTotal ??
-    orders
-      .filter((order) => order.paymentStatus === 'Pending' && order.status !== 'Delivered')
-      .reduce((total, order) => total + order.total, 0)
   const getVisibleOtp = (order: (typeof orders)[number]) => {
     if (order.status === 'Awaiting pickup') return order.pickupOtp
     if (order.paymentStatus === 'Paid' && order.status !== 'Delivered' && order.deliveryOtp) return order.deliveryOtp
@@ -149,19 +157,27 @@ export default function Home() {
     if (order.paymentStatus === 'Pending' && order.total > 0) return `Payment due · ₦${order.total.toLocaleString()}`
     if (order.total > 0) return `₦${order.total.toLocaleString()}`
     if (order.status === 'In progress') return 'Final billing pending'
-    if (order.isSubscriptionOrder && ['Ready for delivery', 'Delivered'].includes(order.status)) return 'Covered by plan'
+    if (order.isSubscriptionOrder && ['Ready for delivery', 'Out for delivery', 'Delivered'].includes(order.status)) return 'Covered by plan'
     return 'No charge yet'
   }
   const today = new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' }).format(new Date())
   const referralPath = referralCode ? `/create-account?ref=${encodeURIComponent(referralCode)}` : ''
+  const whatsappSupportUrl = `https://wa.me/2349013562353?text=${encodeURIComponent('Hi Qaffy, I need help with my account.')}`
   const mismatchCount =
-    overviewSummary?.mismatchCount ?? orders.filter((order) => order.mismatch && order.paymentStatus === 'Pending').length
-  const hasPlanEndingBanner = !planBannerDismissed && shouldShowPlanEndingBanner(subscriptionEndDate)
+    overviewSummary?.mismatchCount ??
+    (isOverviewInsightsLoading ? 0 : orders.filter((order) => order.mismatch && order.paymentStatus === 'Pending').length)
+  const hasPlanEndingBanner =
+    dismissedPlanEndDate !== subscriptionEndDate && shouldShowPlanEndingBanner(subscriptionEndDate)
   const hasTopUpIntent = searchParams.get('topup') === '1'
   const requestedTopUpAmount = Number(searchParams.get('amount'))
   const urlTopUpSuggestedAmount =
     Number.isFinite(requestedTopUpAmount) && requestedTopUpAmount > 0 ? Math.max(100, requestedTopUpAmount) : null
   const isTopUpModalOpen = isTopUpModalOpenManually || (hasTopUpIntent && !isDataLoading)
+
+  useEffect(() => {
+    if (!isTopUpModalOpen || topUpSuggestedAmount !== null || urlTopUpSuggestedAmount !== null) return
+    loadPendingPaymentTotal()
+  }, [isTopUpModalOpen, loadPendingPaymentTotal, topUpSuggestedAmount, urlTopUpSuggestedAmount])
 
   const handleTopUp = async (amount: number) => {
     topUpFetcher.submit({ amount: String(amount) }, { method: 'post', encType: 'application/x-www-form-urlencoded' })
@@ -225,6 +241,17 @@ export default function Home() {
   }, [customerId])
 
   useEffect(() => {
+    let cancelled = false
+    void Promise.resolve().then(() => {
+      if (cancelled) return
+      setWhatsappSupportDismissed(window.localStorage.getItem(`qaffy-whatsapp-banner-dismissed:${customerId}`) === '1')
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [customerId])
+
+  useEffect(() => {
     const result = topUpFetcher.data
     if (result?.ok && 'authorizationUrl' in result && result.authorizationUrl) {
       window.location.assign(result.authorizationUrl)
@@ -260,61 +287,95 @@ export default function Home() {
         </div>
       </div>
 
-      {dataLoadError && (
+      {dataLoadError ? (
         <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
           <span>{dataLoadError}</span>{' '}
           <button type="button" onClick={() => revalidator.revalidate()} className="font-semibold underline">
             Retry
           </button>
         </p>
-      )}
-
-      {mismatchCount > 0 ? (
+      ) : overviewInsightsError ? (
+        <p role="alert" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          Some account details could not be loaded.{' '}
+          <button type="button" onClick={retryOverviewInsights} className="font-semibold underline">
+            Retry
+          </button>
+        </p>
+      ) : mismatchCount > 0 ? (
         <MismatchBanner count={mismatchCount} detail={overviewSummary?.latestMismatchDetail ?? null} />
       ) : hasPlanEndingBanner && subscription ? (
         <PlanEndingBanner
           planName={`${subscription.name} ${subscription.billingPeriod}`}
           endDate={subscriptionEndDate}
-          onDismiss={() => setPlanBannerDismissed(true)}
+          onDismiss={dismissPlanBanner}
         />
-      ) : (
-        pushSetupVisible && (
-          <section className="flex min-w-0 items-center gap-2 overflow-hidden rounded-2xl border border-brand-border bg-brand-soft p-2.5 sm:gap-3 sm:p-3">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-brand-primary">
-              <Bell className="h-3.5 w-3.5" />
+      ) : pushSetupVisible ? (
+        <section className="flex min-w-0 items-center gap-2 overflow-hidden rounded-2xl border border-brand-border bg-brand-soft p-2.5 sm:gap-3 sm:p-3">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-brand-primary">
+            <Bell className="h-3.5 w-3.5" />
+          </span>
+          <p className="min-w-0 flex-1 truncate text-xs font-semibold text-slate-900">
+            Stay updated <span className="font-normal text-slate-600">· Get alerts</span>
+          </p>
+          <button
+            type="button"
+            onClick={() => void handleEnableNotifications()}
+            disabled={pushSetupBusy}
+            aria-label={pushSetupBusy ? 'Setting up notifications' : 'Enable notifications'}
+            className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-brand-primary px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {pushSetupBusy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : 'Enable'}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              window.localStorage.setItem(`qaffy-push-prompt-dismissed:${customerId}`, '1')
+              setPushSetupVisible(false)
+            }}
+            aria-label="Dismiss notification prompt"
+            title="Dismiss"
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-white hover:text-slate-800"
+          >
+            <X className="h-4 w-4" />
+          </button>
+          {pushSetupMessage && (
+            <span role="alert" className="sr-only" title={pushSetupMessage}>
+              {pushSetupMessage}
             </span>
-            <p className="min-w-0 flex-1 truncate text-xs font-semibold text-slate-900">
-              Stay updated <span className="font-normal text-slate-600">· Get alerts</span>
-            </p>
-            <button
-              type="button"
-              onClick={() => void handleEnableNotifications()}
-              disabled={pushSetupBusy}
-              aria-label={pushSetupBusy ? 'Setting up notifications' : 'Enable notifications'}
-              className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-brand-primary px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {pushSetupBusy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : 'Enable'}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                window.localStorage.setItem(`qaffy-push-prompt-dismissed:${customerId}`, '1')
-                setPushSetupVisible(false)
-              }}
-              aria-label="Dismiss notification prompt"
-              title="Dismiss"
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-white hover:text-slate-800"
-            >
-              <X className="h-4 w-4" />
-            </button>
-            {pushSetupMessage && (
-              <span role="alert" className="sr-only" title={pushSetupMessage}>
-                {pushSetupMessage}
-              </span>
-            )}
-          </section>
-        )
-      )}
+          )}
+        </section>
+      ) : !whatsappSupportDismissed ? (
+        <section className="flex min-w-0 items-center gap-3 overflow-hidden rounded-2xl border border-emerald-200 bg-emerald-50 p-3 sm:p-4">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white text-emerald-600 shadow-sm">
+            <MessageCircle className="h-4 w-4" aria-hidden="true" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-slate-900">Need help?</p>
+            <p className="truncate text-xs text-slate-600">Chat with our team on WhatsApp.</p>
+          </div>
+          <a
+            href={whatsappSupportUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-emerald-700"
+          >
+            <MessageCircle className="h-3.5 w-3.5" aria-hidden="true" />
+            WhatsApp us
+          </a>
+          <button
+            type="button"
+            onClick={() => {
+              window.localStorage.setItem(`qaffy-whatsapp-banner-dismissed:${customerId}`, '1')
+              setWhatsappSupportDismissed(true)
+            }}
+            aria-label="Dismiss WhatsApp support banner"
+            title="Dismiss"
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-white hover:text-slate-800"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </section>
+      ) : null}
 
       <section aria-busy={isDataLoading} className="relative rounded-2xl overflow-hidden border border-[#e7e7e7] bg-[#f8f8f8] p-5 sm:p-6">
         <div className="relative">
@@ -378,9 +439,9 @@ export default function Home() {
           <div className="mt-6 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-slate-500">
             <span>
               Active orders{' '}
-              {isDataLoading ? (
+              {isDataLoading || isOverviewInsightsLoading ? (
                 <CustomerInlineSkeleton className="ml-1 w-6" />
-              ) : dataLoadError ? (
+              ) : dataLoadError || overviewInsightsError ? (
                 <span className="ml-1 font-medium text-slate-400">Unavailable</span>
               ) : (
                 <strong className="ml-1 text-slate-800">{activeOrderCount}</strong>
@@ -392,8 +453,8 @@ export default function Home() {
             <button
               type="button"
               onClick={() => openTopUpModal()}
-              disabled={isDataLoading || Boolean(dataLoadError)}
-              title={isDataLoading ? 'Loading account details' : undefined}
+              disabled={isDataLoading || isOverviewInsightsLoading || Boolean(dataLoadError) || Boolean(overviewInsightsError)}
+              title={isDataLoading || isOverviewInsightsLoading ? 'Loading account details' : undefined}
               className="flex-1 rounded-lg bg-brand-primary px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-primary-hover"
             >
               Top up
@@ -407,8 +468,10 @@ export default function Home() {
                 }
                 setIsOrderModalOpen(true)
               }}
-              disabled={isDataLoading || Boolean(dataLoadError)}
-              title={isDataLoading ? 'Loading account details' : undefined}
+              disabled={
+                isDataLoading || isOverviewInsightsLoading || Boolean(dataLoadError) || Boolean(overviewInsightsError)
+              }
+              title={isDataLoading || isOverviewInsightsLoading ? 'Loading account details' : undefined}
               className="flex-1 rounded-lg border border-brand-primary bg-white px-4 py-2.5 text-sm font-semibold text-brand-primary transition hover:bg-brand-soft"
             >
               New order
@@ -417,7 +480,7 @@ export default function Home() {
         </div>
       </section>
 
-      <section aria-busy={isDataLoading} className="rounded-2xl border border-[#e7e7e7] bg-white p-3 sm:p-5">
+      <section aria-busy={isRecentOrdersLoading} className="rounded-2xl border border-[#e7e7e7] bg-white p-3 sm:p-5">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div className="min-w-0">
             <h3 className="text-lg font-bold text-slate-900">Recent orders</h3>
@@ -428,11 +491,18 @@ export default function Home() {
           </Link>
         </div>
 
-        {isDataLoading ? (
+        {isRecentOrdersLoading ? (
           <CustomerOrderListSkeleton />
-        ) : dataLoadError ? (
-          <p role="status" className="rounded-2xl bg-slate-50 p-6 text-center text-sm text-slate-500">
-            Recent orders are unavailable.
+        ) : recentOrdersError ? (
+          <div className="rounded-2xl bg-slate-50 p-6 text-center text-sm text-slate-500">
+            <p role="status">Recent orders are unavailable.</p>
+            <button type="button" onClick={retryRecentOrders} className="mt-2 font-semibold text-brand-primary underline">
+              Retry
+            </button>
+          </div>
+        ) : recentOrders.length === 0 ? (
+          <p className="rounded-2xl bg-slate-50 p-6 text-center text-sm text-slate-500">
+            No recent orders yet.
           </p>
         ) : (
           <div className="space-y-3">
@@ -622,7 +692,9 @@ export default function Home() {
         <TopUpModal
           currentBalance={balance}
           subscriptionBalance={subscriptionBalance}
-          pendingPaymentTotal={pendingPaymentTotal}
+          pendingPaymentTotal={pendingPaymentTotal ?? 0}
+          isPendingPaymentTotalLoading={isPendingPaymentTotalLoading}
+          pendingPaymentTotalError={pendingPaymentTotalError}
           suggestedAmount={topUpSuggestedAmount ?? urlTopUpSuggestedAmount}
           onTopUp={handleTopUp}
           isProcessing={topUpFetcher.state !== 'idle'}

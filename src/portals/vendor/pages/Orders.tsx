@@ -6,6 +6,7 @@ import { sql } from '../../../lib/db.server'
 import { isReadyForDispatch } from '../../../lib/orderLifecycle'
 import { sendCustomerNotification } from '../../../lib/notifications.server'
 import { toast } from '../../../lib/toast'
+import { MultiSortManager, SortColumnHeader, type MultiSortOption, type MultiSortRule } from '../../../components/admin/MultiSortControls'
 import VendorOrderReviewDialog, { getInitialReceivedCounts, type VendorReviewOrder } from '../VendorOrderReviewDialog'
 import type { action as vendorHomeAction } from './Home'
 
@@ -142,6 +143,7 @@ type VendorOrder = {
 type VendorLayoutData = {
   orders: VendorOrder[]
   rateCard: Array<{ name: string; wash: number | null; iron: number | null; wash_iron: number | null }>
+  ordersSortRules: VendorOrderSortRule[]
   ordersPagination: {
     page: number
     pageSize: number
@@ -149,6 +151,18 @@ type VendorLayoutData = {
     tabCounts: { unclaimed: number; processing: number; ready: number; dispatched: number; delivered: number }
   } | null
 }
+
+type VendorOrderSortColumn = 'order' | 'customer' | 'service' | 'location' | 'pickup' | 'status'
+type VendorOrderSortRule = MultiSortRule<VendorOrderSortColumn>
+
+const vendorOrderSortableColumns: MultiSortOption<VendorOrderSortColumn>[] = [
+  { value: 'order', label: 'Order' },
+  { value: 'customer', label: 'Customer' },
+  { value: 'service', label: 'Service' },
+  { value: 'location', label: 'Pickup location' },
+  { value: 'pickup', label: 'Picked up' },
+  { value: 'status', label: 'Status' },
+]
 
 const statusLabels: Record<VendorOrder['status'], string> = {
   pending_pickup: 'Pending pickup',
@@ -181,7 +195,7 @@ function formatDate(value: string | null) {
 }
 
 export default function Orders() {
-  const { orders, rateCard, ordersPagination } = useOutletContext<VendorLayoutData>()
+  const { orders, rateCard, ordersPagination, ordersSortRules } = useOutletContext<VendorLayoutData>()
   const fetcher = useFetcher<typeof action>()
   const reviewFetcher = useFetcher<typeof vendorHomeAction>()
   const navigation = useNavigation()
@@ -195,6 +209,7 @@ export default function Orders() {
       : 'processing'
   ) as 'unclaimed' | 'processing' | 'ready' | 'dispatched' | 'delivered'
   const query = searchParams.get('search') ?? ''
+  const sortQuery = ordersSortRules.map((rule) => `${rule.column}:${rule.direction}`).join(',')
   const isLoadingOrders = navigation.state === 'loading' && navigation.location?.pathname === '/vendor/orders'
   const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([])
   const [reviewOrderId, setReviewOrderId] = useState<string | null>(null)
@@ -389,6 +404,32 @@ export default function Orders() {
     })
   }
 
+  const updateSortRules = (rules: VendorOrderSortRule[]) => {
+    setSelectedOrderIds([])
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      next.delete('page')
+      if (rules.length > 0) next.set('sort', rules.map((rule) => `${rule.column}:${rule.direction}`).join(','))
+      else next.delete('sort')
+      return next
+    })
+  }
+
+  const changeColumnSort = (column: VendorOrderSortColumn, direction: VendorOrderSortRule['direction']) => {
+    updateSortRules([{ column, direction }, ...ordersSortRules.filter((rule) => rule.column !== column)])
+  }
+
+  const renderSortHeader = (column: VendorOrderSortColumn, label: string) => {
+    const activeRule = ordersSortRules.find((rule) => rule.column === column)
+    return (
+      <SortColumnHeader
+        label={label}
+        direction={activeRule?.direction ?? null}
+        onSort={(direction) => changeColumnSort(column, direction)}
+      />
+    )
+  }
+
   return (
     <div className="space-y-6">
       <header>
@@ -411,41 +452,61 @@ export default function Orders() {
       </section>
 
       <section className="rounded-[10px] border border-[#e9e9e9] bg-white">
-        <div className="flex flex-col gap-3 border-b border-[#ededed] p-4 md:flex-row md:items-center md:justify-between md:p-5">
-          <Form
-            method="get"
-            action="/vendor/orders"
-            onSubmit={() => setSelectedOrderIds([])}
-            className="relative w-full md:max-w-sm"
-          >
-            <input type="hidden" name="tab" value={activeTab} />
-            <Search size={16} className="absolute left-3 top-3 text-slate-400" />
-            <input
-              key={query}
-              name="search"
-              defaultValue={query}
-              placeholder="Search orders or customers"
-              className="h-10 w-full rounded-[8px] border border-[#dedede] pl-9 pr-3 text-sm outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
-            />
-          </Form>
-          <div className="scrollbar-hidden flex flex-nowrap gap-2 overflow-x-auto pb-1">
-            {[
-              ['unclaimed', 'Unclaimed', orderCounts.available],
-              ['processing', 'Processing', orderCounts.processing],
-              ['ready', 'Ready to dispatch', orderCounts.ready],
-              ['dispatched', 'Dispatched', orderCounts.dispatched],
-              ['delivered', 'Delivered', orderCounts.delivered],
-            ].map(([value, label, count]) => (
+        <div className="flex flex-col gap-4 border-b border-slate-100 p-4 md:p-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <Form method="get" action="/vendor/orders" onSubmit={() => setSelectedOrderIds([])} className="relative w-full sm:max-w-md">
+              <input type="hidden" name="tab" value={activeTab} />
+              {sortQuery && <input type="hidden" name="sort" value={sortQuery} />}
+              <Search size={16} className="absolute left-3.5 top-3.5 text-slate-400" />
+              <input
+                key={query}
+                name="search"
+                defaultValue={query}
+                placeholder="Search orders or customers"
+                className="h-11 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-20 text-sm text-slate-800 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-brand-primary focus:ring-2 focus:ring-brand-focus"
+              />
               <button
-                key={value}
-                type="button"
-                onClick={() => changeTab(value as typeof activeTab)}
-                className={`inline-flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold ${activeTab === value ? 'bg-brand-primary text-white' : 'border border-slate-200 bg-white text-slate-600 hover:border-brand-primary hover:text-brand-primary'}`}
+                type="submit"
+                className="absolute right-1 top-1 flex h-9 items-center rounded-lg bg-brand-primary px-3 text-xs font-semibold text-white transition hover:bg-brand-primary-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-primary"
               >
-                {label}
-                <span className={activeTab === value ? 'text-white/80' : 'text-slate-400'}>{count}</span>
+                Search
               </button>
-            ))}
+            </Form>
+            <div className="self-end sm:self-auto">
+              <MultiSortManager columns={vendorOrderSortableColumns} rules={ordersSortRules} onApply={updateSortRules} />
+            </div>
+          </div>
+          <div className="scrollbar-hidden -mx-4 overflow-x-auto px-4 md:-mx-5 md:px-5">
+            <div role="group" aria-label="Filter orders by status" className="flex w-max min-w-full gap-1 rounded-xl bg-slate-50 p-1">
+              {[
+                ['unclaimed', 'Unclaimed', orderCounts.available],
+                ['processing', 'Processing', orderCounts.processing],
+                ['ready', 'Ready to dispatch', orderCounts.ready],
+                ['dispatched', 'Dispatched', orderCounts.dispatched],
+                ['delivered', 'Delivered', orderCounts.delivered],
+              ].map(([value, label, count]) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={activeTab === value}
+                  onClick={() => changeTab(value as typeof activeTab)}
+                  className={`group inline-flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition-colors ${
+                    activeTab === value
+                      ? 'bg-white text-brand-strong shadow-sm ring-1 ring-slate-200/80'
+                      : 'text-slate-600 hover:bg-white/70 hover:text-slate-900'
+                  }`}
+                >
+                  {label}
+                  <span
+                    className={`inline-flex min-w-6 items-center justify-center rounded-full px-1.5 py-0.5 text-xs tabular-nums ${
+                      activeTab === value ? 'bg-brand-soft text-brand-strong' : 'bg-white text-slate-400 group-hover:text-slate-600'
+                    }`}
+                  >
+                    {count}
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -495,87 +556,89 @@ export default function Orders() {
                 <LoaderCircle size={18} className="animate-spin text-brand-primary" />
                 Loading orders...
               </div>
-            ) : filteredOrders.map((order) => (
-              <article key={order.id} className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-bold text-slate-900">{order.publicOrderNumber}</p>
-                    <p className="mt-1 truncate text-sm text-slate-600">{order.customer}</p>
-                  </div>
-                  <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold ${statusStyle[order.label]}`}>
-                    {order.label}
-                  </span>
-                </div>
-                <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
-                  <div>
-                    <dt className="text-slate-400">Service</dt>
-                    <dd className="mt-0.5 truncate font-medium text-slate-700">{orderTypeLabels[order.order_type]}</dd>
-                  </div>
-                  <div className="col-span-2">
-                    <dt className="text-slate-400">Pickup location</dt>
-                    <dd className="mt-0.5 truncate font-medium text-slate-700">{order.location}</dd>
-                  </div>
-                  <div className="col-span-2">
-                    <dt className="text-slate-400">Picked up</dt>
-                    <dd className="mt-0.5 truncate font-medium text-slate-700">{formatDate(order.picked_up_date)}</dd>
-                  </div>
-                </dl>
-                <div className="mt-4 space-y-3 border-t border-slate-100 pt-3">
-                  {isReadyForDispatch(order.status, order.invoice?.status) && (
-                    <label className="flex items-center gap-2 text-xs font-semibold text-slate-600">
-                      <input
-                        type="checkbox"
-                        checked={selectedOrderIds.includes(order.id)}
-                        onChange={() => toggleOrderSelection(order.id)}
-                        aria-label={`Select ${order.publicOrderNumber}`}
-                        className="h-4 w-4 accent-brand-primary"
-                      />
-                      Select for dispatch
-                    </label>
-                  )}
-                  {order.status === 'at_vendor' ? (
-                    <button
-                      type="button"
-                      onClick={() => openCountReview(order.id)}
-                      className="w-full rounded-[7px] bg-brand-primary px-3 py-2.5 text-xs font-semibold text-white hover:bg-brand-primary-hover"
-                    >
-                      Review final count
-                    </button>
-                  ) : (
-                    <div className="flex gap-2">
-                      {order.status === 'picked_up' ? (
-                        <button
-                          type="button"
-                          onClick={() => fetcher.submit({ intent: 'claim', orderId: order.id }, { method: 'post' })}
-                          disabled={fetcher.state !== 'idle'}
-                          className="flex-1 rounded-[7px] border border-[#dedede] px-3 py-2.5 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary disabled:cursor-wait disabled:opacity-60"
-                        >
-                          {isClaimingOrder(order.id) ? 'Claiming...' : 'Claim'}
-                        </button>
-                      ) : isReadyForDispatch(order.status, order.invoice?.status) ? (
-                        <button
-                          type="button"
-                          onClick={() => dispatchOrders([order.id])}
-                          disabled={fetcher.state !== 'idle'}
-                          className="flex-1 rounded-[7px] bg-brand-primary px-3 py-2.5 text-xs font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-wait disabled:opacity-60"
-                        >
-                          {isDispatching ? 'Dispatching...' : 'Dispatch'}
-                        </button>
-                      ) : null}
-                      {order.status !== 'picked_up' && (
-                        <button
-                          type="button"
-                          onClick={() => openOrderDetails(order.id)}
-                          className="flex-1 rounded-[7px] border border-[#dedede] px-3 py-2.5 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary"
-                        >
-                          View details
-                        </button>
-                      )}
+            ) : (
+              filteredOrders.map((order) => (
+                <article key={order.id} className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-bold text-slate-900">{order.publicOrderNumber}</p>
+                      <p className="mt-1 truncate text-sm text-slate-600">{order.customer}</p>
                     </div>
-                  )}
-                </div>
-              </article>
-            ))}
+                    <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold ${statusStyle[order.label]}`}>
+                      {order.label}
+                    </span>
+                  </div>
+                  <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
+                    <div>
+                      <dt className="text-slate-400">Service</dt>
+                      <dd className="mt-0.5 truncate font-medium text-slate-700">{orderTypeLabels[order.order_type]}</dd>
+                    </div>
+                    <div className="col-span-2">
+                      <dt className="text-slate-400">Pickup location</dt>
+                      <dd className="mt-0.5 truncate font-medium text-slate-700">{order.location}</dd>
+                    </div>
+                    <div className="col-span-2">
+                      <dt className="text-slate-400">Picked up</dt>
+                      <dd className="mt-0.5 truncate font-medium text-slate-700">{formatDate(order.picked_up_date)}</dd>
+                    </div>
+                  </dl>
+                  <div className="mt-4 space-y-3 border-t border-slate-100 pt-3">
+                    {isReadyForDispatch(order.status, order.invoice?.status) && (
+                      <label className="flex items-center gap-2 text-xs font-semibold text-slate-600">
+                        <input
+                          type="checkbox"
+                          checked={selectedOrderIds.includes(order.id)}
+                          onChange={() => toggleOrderSelection(order.id)}
+                          aria-label={`Select ${order.publicOrderNumber}`}
+                          className="h-4 w-4 accent-brand-primary"
+                        />
+                        Select for dispatch
+                      </label>
+                    )}
+                    {order.status === 'at_vendor' ? (
+                      <button
+                        type="button"
+                        onClick={() => openCountReview(order.id)}
+                        className="w-full rounded-[7px] bg-brand-primary px-3 py-2.5 text-xs font-semibold text-white hover:bg-brand-primary-hover"
+                      >
+                        Review final count
+                      </button>
+                    ) : (
+                      <div className="flex gap-2">
+                        {order.status === 'picked_up' ? (
+                          <button
+                            type="button"
+                            onClick={() => fetcher.submit({ intent: 'claim', orderId: order.id }, { method: 'post' })}
+                            disabled={fetcher.state !== 'idle'}
+                            className="flex-1 rounded-[7px] border border-[#dedede] px-3 py-2.5 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary disabled:cursor-wait disabled:opacity-60"
+                          >
+                            {isClaimingOrder(order.id) ? 'Claiming...' : 'Claim'}
+                          </button>
+                        ) : isReadyForDispatch(order.status, order.invoice?.status) ? (
+                          <button
+                            type="button"
+                            onClick={() => dispatchOrders([order.id])}
+                            disabled={fetcher.state !== 'idle'}
+                            className="flex-1 rounded-[7px] bg-brand-primary px-3 py-2.5 text-xs font-semibold text-white hover:bg-brand-primary-hover disabled:cursor-wait disabled:opacity-60"
+                          >
+                            {isDispatching ? 'Dispatching...' : 'Dispatch'}
+                          </button>
+                        ) : null}
+                        {order.status !== 'picked_up' && (
+                          <button
+                            type="button"
+                            onClick={() => openOrderDetails(order.id)}
+                            className="flex-1 rounded-[7px] border border-[#dedede] px-3 py-2.5 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary"
+                          >
+                            View details
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </article>
+              ))
+            )}
             {!isLoadingOrders && filteredOrders.length === 0 && (
               <p className="py-8 text-center text-sm text-slate-500">No matching orders.</p>
             )}
@@ -626,12 +689,12 @@ export default function Orders() {
                 <th className="w-12 px-4 py-3 font-semibold">
                   <span className="sr-only">Select</span>
                 </th>
-                <th className="w-36 px-4 py-3 font-semibold">Order</th>
-                <th className="w-56 px-4 py-3 font-semibold">Customer</th>
-                <th className="w-36 px-4 py-3 font-semibold">Service</th>
-                <th className="w-40 px-4 py-3 font-semibold">Pickup location</th>
-                <th className="w-40 px-4 py-3 font-semibold">Picked up</th>
-                <th className="w-40 px-4 py-3 font-semibold">Status</th>
+                <th className="w-36 px-4 py-3 font-semibold">{renderSortHeader('order', 'Order')}</th>
+                <th className="w-56 px-4 py-3 font-semibold">{renderSortHeader('customer', 'Customer')}</th>
+                <th className="w-36 px-4 py-3 font-semibold">{renderSortHeader('service', 'Service')}</th>
+                <th className="w-40 px-4 py-3 font-semibold">{renderSortHeader('location', 'Pickup location')}</th>
+                <th className="w-40 px-4 py-3 font-semibold">{renderSortHeader('pickup', 'Picked up')}</th>
+                <th className="w-40 px-4 py-3 font-semibold">{renderSortHeader('status', 'Status')}</th>
                 <th className="w-32 px-4 py-3 text-right font-semibold">Action</th>
               </tr>
             </thead>
@@ -645,77 +708,82 @@ export default function Orders() {
                     </div>
                   </td>
                 </tr>
-              ) : filteredOrders.map((order) => (
-                <tr key={order.id} className="border-b border-[#f0f0f0] last:border-0">
-                  <td className="px-4 py-4">
-                    {isReadyForDispatch(order.status, order.invoice?.status) && (
-                      <input
-                        type="checkbox"
-                        checked={selectedOrderIds.includes(order.id)}
-                        onChange={() => toggleOrderSelection(order.id)}
-                        aria-label={`Select ${order.publicOrderNumber}`}
-                        className="h-4 w-4 accent-brand-primary"
-                      />
-                    )}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-4 text-sm font-semibold text-slate-900" title={order.publicOrderNumber}>
-                    {order.publicOrderNumber}
-                  </td>
-                  <td className="max-w-56 truncate whitespace-nowrap px-4 py-4 text-sm font-semibold text-slate-900" title={order.customer}>
-                    {order.customer}
-                  </td>
-                  <td
-                    className="max-w-36 truncate whitespace-nowrap px-4 py-4 text-sm text-slate-600"
-                    title={orderTypeLabels[order.order_type]}
-                  >
-                    {orderTypeLabels[order.order_type]}
-                  </td>
-                  <td className="max-w-40 truncate whitespace-nowrap px-4 py-4 text-sm text-slate-600" title={order.location}>
-                    {order.location}
-                  </td>
-                  <td
-                    className="max-w-40 truncate whitespace-nowrap px-4 py-4 text-sm text-slate-500"
-                    title={formatDate(order.picked_up_date)}
-                  >
-                    {formatDate(order.picked_up_date)}
-                  </td>
-                  <td className="px-4 py-4">
-                    <span
-                      className={`inline-flex whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${statusStyle[order.label]}`}
+              ) : (
+                filteredOrders.map((order) => (
+                  <tr key={order.id} className="border-b border-[#f0f0f0] last:border-0">
+                    <td className="px-4 py-4">
+                      {isReadyForDispatch(order.status, order.invoice?.status) && (
+                        <input
+                          type="checkbox"
+                          checked={selectedOrderIds.includes(order.id)}
+                          onChange={() => toggleOrderSelection(order.id)}
+                          aria-label={`Select ${order.publicOrderNumber}`}
+                          className="h-4 w-4 accent-brand-primary"
+                        />
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-4 text-sm font-semibold text-slate-900" title={order.publicOrderNumber}>
+                      {order.publicOrderNumber}
+                    </td>
+                    <td
+                      className="max-w-56 truncate whitespace-nowrap px-4 py-4 text-sm font-semibold text-slate-900"
+                      title={order.customer}
                     >
-                      {order.label}
-                    </span>
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-4 text-right">
-                    {order.status === 'at_vendor' ? (
-                      <button
-                        type="button"
-                        onClick={() => openCountReview(order.id)}
-                        className="rounded-[7px] bg-brand-primary px-3 py-2 text-xs font-semibold text-white hover:bg-brand-primary-hover"
+                      {order.customer}
+                    </td>
+                    <td
+                      className="max-w-36 truncate whitespace-nowrap px-4 py-4 text-sm text-slate-600"
+                      title={orderTypeLabels[order.order_type]}
+                    >
+                      {orderTypeLabels[order.order_type]}
+                    </td>
+                    <td className="max-w-40 truncate whitespace-nowrap px-4 py-4 text-sm text-slate-600" title={order.location}>
+                      {order.location}
+                    </td>
+                    <td
+                      className="max-w-40 truncate whitespace-nowrap px-4 py-4 text-sm text-slate-500"
+                      title={formatDate(order.picked_up_date)}
+                    >
+                      {formatDate(order.picked_up_date)}
+                    </td>
+                    <td className="px-4 py-4">
+                      <span
+                        className={`inline-flex whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${statusStyle[order.label]}`}
                       >
-                        Review count
-                      </button>
-                    ) : order.status === 'picked_up' ? (
-                      <button
-                        type="button"
-                        onClick={() => fetcher.submit({ intent: 'claim', orderId: order.id }, { method: 'post' })}
-                        disabled={fetcher.state !== 'idle'}
-                        className="rounded-[7px] border border-[#dedede] px-3 py-2 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary disabled:cursor-wait disabled:opacity-60"
-                      >
-                        {isClaimingOrder(order.id) ? 'Claiming...' : 'Claim'}
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => openOrderDetails(order.id)}
-                        className="rounded-[7px] border border-[#dedede] px-3 py-2 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary"
-                      >
-                        View details
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
+                        {order.label}
+                      </span>
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-4 text-right">
+                      {order.status === 'at_vendor' ? (
+                        <button
+                          type="button"
+                          onClick={() => openCountReview(order.id)}
+                          className="rounded-[7px] bg-brand-primary px-3 py-2 text-xs font-semibold text-white hover:bg-brand-primary-hover"
+                        >
+                          Review count
+                        </button>
+                      ) : order.status === 'picked_up' ? (
+                        <button
+                          type="button"
+                          onClick={() => fetcher.submit({ intent: 'claim', orderId: order.id }, { method: 'post' })}
+                          disabled={fetcher.state !== 'idle'}
+                          className="rounded-[7px] border border-[#dedede] px-3 py-2 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary disabled:cursor-wait disabled:opacity-60"
+                        >
+                          {isClaimingOrder(order.id) ? 'Claiming...' : 'Claim'}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => openOrderDetails(order.id)}
+                          className="rounded-[7px] border border-[#dedede] px-3 py-2 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary"
+                        >
+                          View details
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
           {!isLoadingOrders && filteredOrders.length === 0 && (

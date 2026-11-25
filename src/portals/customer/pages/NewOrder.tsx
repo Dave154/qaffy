@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useFetcher } from 'react-router'
 import { ChevronDown, Minus, Plus, Trash2 } from 'lucide-react'
-import type { CustomerOrder, OrderLine } from '../customer-store'
+import type { CustomerOrder, OrderLine, PickupLocationOption } from '../customer-store'
 import { useCustomerStore } from '../customer-store-hook'
 import { supabase } from '../../../lib/supabase.client'
 import BubblyBackground from '../../../components/BubblyBackground'
@@ -51,10 +51,10 @@ const getOrderLineKey = (item: Pick<OrderLine, 'category' | 'service'>) => `${it
 export default function NewOrder({ onClose, order }: NewOrderProps) {
   const {
     activePlan,
-    addOrder,
     invoices,
     removeOptimisticOrder,
     pickupLocations,
+    pickupLocationsCatalogLoaded,
     preferredPickupLocationId,
     preferredPickupLocationName,
     subscription,
@@ -62,6 +62,9 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
     subscriptionBorrowableUnits,
     subscriptionBorrowedUnits,
     subscriptionNextBalanceAfterCredit,
+    isSubscriptionAllowanceLoading,
+    subscriptionAllowanceError,
+    retrySubscriptionAllowance,
   } = useCustomerStore()
   const [categories, setCategories] = useState<Category[]>([])
   const [catalogState, setCatalogState] = useState<'loading' | 'ready' | 'empty' | 'error'>(order ? 'ready' : 'loading')
@@ -77,12 +80,17 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
   const itemsSectionRef = useRef<HTMLElement | null>(null)
   const [itemQuantityInputs, setItemQuantityInputs] = useState<Record<string, string>>({})
   const [pickupLocation, setPickupLocation] = useState(preferredPickupLocationName ?? '')
+  const [availablePickupLocations, setAvailablePickupLocations] = useState<PickupLocationOption[]>(pickupLocations)
+  const [pickupLocationsLoading, setPickupLocationsLoading] = useState(!pickupLocationsCatalogLoaded)
+  const [pickupLocationsLoadError, setPickupLocationsLoadError] = useState('')
   const [editPickupLocationId, setEditPickupLocationId] = useState(order?.pickupLocationId ?? '')
   const [isEditing, setIsEditing] = useState(false)
   const [notes, setNotes] = useState('')
   const [notesError, setNotesError] = useState('')
   const [pickupLocationError, setPickupLocationError] = useState('')
   const [isSaving, setIsSaving] = useState(false)
+  const createFetcher = useFetcher<{ ok: boolean; intent?: string; orderId?: string; message?: string }>()
+  const handledCreateResponse = useRef<typeof createFetcher.data>(null)
   const editFetcher = useFetcher<{ ok: boolean; intent?: string; orderId?: string; message?: string }>()
   const handledEditResponse = useRef<typeof editFetcher.data>(null)
   const invoicePaymentFetcher = useFetcher<{ ok: boolean; message?: string }>()
@@ -90,6 +98,8 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
   const handledCancelResponse = useRef<typeof cancelFetcher.data>(null)
   const isReadOnly = Boolean(order && !isEditing)
   const canEditOrder = Boolean(order && order.status === 'Awaiting pickup' && !order.pickedUp)
+  const preferredLocation = availablePickupLocations.find((location) => location.id === preferredPickupLocationId)
+  const hasAvailablePreferredLocation = Boolean(preferredPickupLocationId && preferredLocation)
   const payableInvoice = order
     ? invoices.find((invoice) => invoice.orderId === order.id && invoice.status === 'Awaiting payment')
     : undefined
@@ -166,6 +176,53 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
   }, [isReadOnly])
 
   useEffect(() => {
+    if (pickupLocationsCatalogLoaded) return
+    let cancelled = false
+    const loadPickupLocations = async () => {
+      if (!supabase) {
+        setPickupLocationsLoadError('Pickup locations are unavailable right now.')
+        setPickupLocationsLoading(false)
+        return
+      }
+      const { data: locations, error } = await supabase
+        .from('pickup_locations')
+        .select('id, name, address')
+        .eq('active', true)
+        .order('name')
+      if (cancelled) return
+      if (error) {
+        setPickupLocationsLoadError('Pickup locations could not be loaded. Please try again.')
+        setPickupLocationsLoading(false)
+        return
+      }
+      const loadedLocations = (locations ?? []) as PickupLocationOption[]
+      setAvailablePickupLocations(loadedLocations)
+      setPickupLocationsLoading(false)
+      setPickupLocationsLoadError('')
+      const preferredLocation = loadedLocations.find((location) => location.id === preferredPickupLocationId)
+      setPickupLocation(preferredLocation?.name ?? '')
+    }
+    void loadPickupLocations()
+    return () => {
+      cancelled = true
+    }
+  }, [pickupLocationsCatalogLoaded, preferredPickupLocationId])
+
+  useEffect(() => {
+    const result = createFetcher.data
+    if (createFetcher.state !== 'idle' || !result || handledCreateResponse.current === result) return
+    handledCreateResponse.current = result
+    setIsSaving(false)
+
+    if (result.ok) {
+      onClose()
+      return
+    }
+
+    toast.error(result.message ?? 'Order could not be saved. Please try again.')
+  }, [createFetcher.data, createFetcher.state, onClose])
+
+  useEffect(() => {
     const result = cancelFetcher.data
     if (cancelFetcher.state !== 'idle' || !result || handledCancelResponse.current === result) return
     handledCancelResponse.current = result
@@ -219,9 +276,10 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
   const itemCount = isReadOnly
     ? displayItems.reduce((sum, item) => sum + item.quantity, 0)
     : items.reduce((sum, item) => sum + item.quantity, 0)
+  const totalSubscriptionUnits = items.reduce((sum, item) => sum + item.quantity * (item.subscriptionUnits ?? 1), 0)
   const availableCategories = categories
   const subscriptionBillingPreviews = useMemo(() => {
-    if (!activePlan || order) return null
+    if (!activePlan || order || isSubscriptionAllowanceLoading || subscriptionAllowanceError) return null
     const billingItems = items.map<SubscriptionBillingItem>((item, index) => {
         const categoryRow = categories.find((candidate) => candidate.name.trim().toLowerCase() === item.category.trim().toLowerCase())
         const regularWashPrice = categoryRow?.rates.Wash ?? item.unitPrice
@@ -252,7 +310,16 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
       borrowAllowancePreview,
       borrowUnitsNeeded: Math.max(0, borrowAllowancePreview.coveredUnits - regularAllowancePreview.coveredUnits),
     }
-  }, [activePlan, categories, items, order, subscriptionAvailableUnits, subscriptionBorrowableUnits])
+  }, [
+    activePlan,
+    categories,
+    items,
+    isSubscriptionAllowanceLoading,
+    order,
+    subscriptionAllowanceError,
+    subscriptionAvailableUnits,
+    subscriptionBorrowableUnits,
+  ])
   const borrowEstimateKey = JSON.stringify({
     items: items.map((item) => [item.category, item.service, item.quantity, item.subscriptionUnits]),
     availableUnits: subscriptionAvailableUnits,
@@ -309,7 +376,7 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
           </span>
         )}
       </label>
-      {(!preferredPickupLocationId || isReadOnly || isEditing) && (
+      {(!hasAvailablePreferredLocation || isReadOnly || isEditing) && (
         <label className="mt-4 block">
           <span className="mb-1.5 block text-sm font-medium text-slate-600">
             Pickup location <span className="text-rose-600">*</span>
@@ -321,13 +388,13 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
               else setPickupLocation(event.target.value)
               setPickupLocationError('')
             }}
-            disabled={isReadOnly}
+            disabled={isReadOnly || pickupLocationsLoading}
             required={!isReadOnly}
             aria-invalid={Boolean(pickupLocationError)}
             className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-base text-slate-900 focus:border-brand-primary focus:ring-2 focus:ring-brand-focus disabled:cursor-default disabled:bg-slate-50 disabled:opacity-100"
           >
             {!order && <option value="">Select a pickup location</option>}
-            {pickupLocations.map((location) => (
+            {availablePickupLocations.map((location) => (
               <option key={location.id} value={order ? location.id : location.name}>
                 {location.name}
                 {location.address ? ` (${location.address})` : ''}
@@ -335,10 +402,20 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
             ))}
             {order &&
               order.pickupLocationId &&
-              !pickupLocations.some((location) => location.id === order.pickupLocationId) && (
+              !availablePickupLocations.some((location) => location.id === order.pickupLocationId) && (
                 <option value={order.pickupLocationId}>{order.pickupLocation} (current)</option>
             )}
           </select>
+          {pickupLocationsLoading && (
+            <span className="mt-1.5 block text-xs text-slate-500" role="status">
+              Loading pickup locations...
+            </span>
+          )}
+          {pickupLocationsLoadError && (
+            <span className="mt-1.5 block text-sm text-rose-600" role="alert">
+              {pickupLocationsLoadError}
+            </span>
+          )}
           {pickupLocationError && (
             <span className="mt-1.5 block text-sm text-rose-600" role="alert">
               {pickupLocationError}
@@ -346,9 +423,9 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
           )}
         </label>
       )}
-      {preferredPickupLocationId && !isReadOnly && !isEditing && !order && (
+      {hasAvailablePreferredLocation && !isReadOnly && !isEditing && !order && (
         <p className="mt-4 rounded-2xl bg-brand-soft p-3 text-sm text-brand-strong">
-          Pickup location <span className="text-rose-600">*</span>: {preferredPickupLocationName}
+          Pickup location <span className="text-rose-600">*</span>: {preferredLocation?.name}
         </p>
       )}
     </>
@@ -419,7 +496,15 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
     )
   }
 
-  const handleCreateOrder = async () => {
+  const handleCreateOrder = () => {
+    if (isSubscriptionAllowanceLoading) {
+      setItemsError('Please wait for your subscription allowance to load.')
+      return
+    }
+    if (subscriptionAllowanceError) {
+      setItemsError('Reload your subscription allowance before placing this order.')
+      return
+    }
     if (items.length === 0) {
       setItemsError('Please add at least one item before continuing to pickup details.')
       itemsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -442,23 +527,35 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
       setPickupLocationError('Please select a pickup location before continuing.')
       return
     }
-    setPickupLocationError('')
-    setIsSaving(true)
-    try {
-      await addOrder({
-        items,
-        notes,
-        pickupLocation,
-        subscriptionBorrowConsentUnits:
-          subscriptionBillingPreviews && hasBorrowConsent ? subscriptionBillingPreviews.borrowUnitsNeeded : 0,
-      })
-      onClose()
-      // window.location.reload()
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Order could not be saved. Please try again.')
-    } finally {
-      setIsSaving(false)
+    const selectedLocation = availablePickupLocations.find((location) => location.name === pickupLocation)
+    if (!selectedLocation) {
+      setPickupLocationError('Select an available pickup location before continuing.')
+      return
     }
+    setPickupLocationError('')
+    if (items.some((item) => !item.categoryId)) {
+      setItemsError('One or more selected categories are no longer available. Please refresh the order form.')
+      return
+    }
+    setIsSaving(true)
+    createFetcher.submit(
+      {
+        intent: 'create-order',
+        pickupLocationId: selectedLocation.id,
+        notes,
+        subscriptionBorrowConsentUnits: String(
+          subscriptionBillingPreviews && hasBorrowConsent ? subscriptionBillingPreviews.borrowUnitsNeeded : 0,
+        ),
+        items: JSON.stringify(
+          items.map((item) => ({
+            categoryId: item.categoryId,
+            service: item.service === 'Wash + Iron' ? 'wash_iron' : item.service === 'Iron' ? 'iron' : 'wash',
+            quantity: item.quantity,
+          })),
+        ),
+      },
+      { method: 'post', action: '/orders' },
+    )
   }
 
   return (
@@ -499,6 +596,20 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
             ×
           </button>
         </header>
+
+        {subscription && isSubscriptionAllowanceLoading && (
+          <p role="status" className="mt-4 rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
+            Loading your subscription allowance before calculating this order...
+          </p>
+        )}
+        {subscription && subscriptionAllowanceError && (
+          <p role="alert" className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            Your subscription allowance could not be loaded.{' '}
+            <button type="button" onClick={retrySubscriptionAllowance} className="font-semibold underline">
+              Retry
+            </button>
+          </p>
+        )}
 
         <section
           ref={itemsSectionRef}
@@ -833,7 +944,7 @@ export default function NewOrder({ onClose, order }: NewOrderProps) {
                   {isEditing && order?.isSubscriptionOrder
                     ? 'Saved plan coverage and borrowing consent are preserved. Final billing is calculated after vendor review.'
                     : subscription && !order
-                      ? `${subscriptionBillingPreview?.coveredUnits ?? 0} units covered by your plan`
+                      ? `${totalSubscriptionUnits} total units · ${subscriptionBillingPreview?.coveredUnits ?? 0} covered by your plan`
                       : `${itemCount} item${itemCount === 1 ? '' : 's'} across ${displayItems.length} item type${displayItems.length === 1 ? '' : 's'}`}
                 </p>
               )}

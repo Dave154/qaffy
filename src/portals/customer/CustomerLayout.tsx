@@ -33,6 +33,7 @@ import QaffyLogo from '../../components/QaffyLogo'
 import PwaInstallLink from '../../components/PwaInstallLink'
 import { isSupabaseServerConfigured, getSupabaseServerClient, getClaimsUser } from '../../lib/supabase.server'
 import { createRefreshScheduler } from '../../lib/live-refresh.client'
+import { normalizeMismatchDetails } from '../../lib/mismatch-details'
 import { supabase } from '../../lib/supabase.client'
 import { CustomerStoreProvider } from './customer-store'
 import type { MismatchLine, PersistedOrderItem, PickupLocationOption } from './customer-store'
@@ -123,6 +124,9 @@ async function loadCustomerLayoutData(request: Request) {
   const customerDataScope = isCustomerDataRequest
     ? requestedScope === 'summary' ||
       requestedScope === 'overview' ||
+      requestedScope === 'overview-orders' ||
+      requestedScope === 'overview-insights' ||
+      requestedScope === 'overview-topup' ||
       requestedScope === 'orders' ||
       requestedScope === 'invoice' ||
       requestedScope === 'transactions'
@@ -131,9 +135,23 @@ async function loadCustomerLayoutData(request: Request) {
     : getCustomerDataScope(requestUrl.pathname)
   const todayInLagos = getLagosCalendarDate()
 
-  const loadCustomerData = async (scope: 'summary' | 'overview' | 'orders' | 'invoice' | 'transactions' | 'full') => {
+  const loadCustomerData = async (
+    scope:
+      | 'summary'
+      | 'overview'
+      | 'overview-orders'
+      | 'overview-insights'
+      | 'overview-topup'
+      | 'orders'
+      | 'invoice'
+      | 'transactions'
+      | 'full',
+  ) => {
     const isSummaryScope = scope === 'summary'
     const isOverviewScope = scope === 'overview'
+    const isOverviewOrdersScope = scope === 'overview-orders'
+    const isOverviewInsightsScope = scope === 'overview-insights'
+    const isOverviewTopUpScope = scope === 'overview-topup'
     const isOrdersScope = scope === 'orders'
     const isInvoiceScope = scope === 'invoice'
     const isTransactionsScope = scope === 'transactions'
@@ -422,11 +440,15 @@ async function loadCustomerLayoutData(request: Request) {
                       when 'at_vendor' then 'In progress'
                       when 'invoiced' then 'Pending payment'
                       when 'paid' then 'Ready for delivery'
-                      when 'out_for_delivery' then 'Ready for delivery'
+                      when 'out_for_delivery' then 'Out for delivery'
                       when 'delivered' then 'Delivered'
                       else ''
                     end,
-                    case when order_row.status = 'pending_pickup' then 'Pickup pending' else 'Pickup confirmed' end
+                    case
+                      when order_row.status = 'pending_pickup' then 'Pickup pending'
+                      when order_row.status = 'out_for_delivery' then 'Out for delivery'
+                      else 'Pickup confirmed'
+                    end
                   ))
                 ) > 0
                 or exists (
@@ -491,12 +513,11 @@ async function loadCustomerLayoutData(request: Request) {
     const orderIdsToLoad = isOrdersScope
       ? [...new Set([...(orderPageSummary?.page_order_ids ?? []), ...requestedOrderId.map((order) => order.id)])]
       : []
-    const overviewSummaryPromise = isOverviewScope
+    const overviewSummaryPromise = isOverviewInsightsScope
       ? sql<
           {
             active_order_count: number
             unpicked_order_count: number
-            pending_payment_total: number
             has_pending_invoice_order: boolean
             mismatch_count: number
             latest_mismatch_detail: string | null
@@ -507,13 +528,9 @@ async function loadCustomerLayoutData(request: Request) {
             count(*) filter (
               where order_row.status = 'pending_pickup' and not order_row.picked
             )::int as unpicked_order_count,
-            coalesce(sum(coalesce(invoice.amount, order_row.billed_extra_amount, 0)) filter (
-              where (invoice.status is null or invoice.status = 'unpaid')
-                and order_row.status <> 'delivered'
-            ), 0) as pending_payment_total,
             bool_or(order_row.status = 'invoiced') as has_pending_invoice_order,
             count(*) filter (
-              where (invoice.status is null or invoice.status = 'unpaid')
+              where (latest_invoice.status is null or latest_invoice.status = 'unpaid')
                 and exists (select 1 from mismatches mismatch where mismatch.order_id = order_row.id)
             )::int as mismatch_count,
             (
@@ -541,6 +558,21 @@ async function loadCustomerLayoutData(request: Request) {
             ) as latest_mismatch_detail
           from orders order_row
           left join lateral (
+            select status
+            from invoices
+            where order_id = order_row.id
+            order by created_at desc
+            limit 1
+          ) latest_invoice on true
+          where order_row.customer_id = ${userData.user.id}
+            and order_row.status <> 'cancelled'
+        `
+      : Promise.resolve([])
+    const [pendingPaymentTotalRow] = isOverviewTopUpScope
+      ? await sql<{ pending_payment_total: number }[]>`
+          select coalesce(sum(coalesce(invoice.amount, order_row.billed_extra_amount, 0)), 0)::numeric as pending_payment_total
+          from orders order_row
+          left join lateral (
             select amount, status
             from invoices
             where order_id = order_row.id
@@ -549,8 +581,10 @@ async function loadCustomerLayoutData(request: Request) {
           ) invoice on true
           where order_row.customer_id = ${userData.user.id}
             and order_row.status <> 'cancelled'
+            and order_row.status <> 'delivered'
+            and (invoice.status is null or invoice.status = 'unpaid')
         `
-      : Promise.resolve([])
+      : []
     const [
       { count: unreadNotificationCount },
       { data: orders, error: ordersError },
@@ -558,15 +592,18 @@ async function loadCustomerLayoutData(request: Request) {
       { data: wallet },
       { data: walletTransactions },
       { data: payments, error: paymentsError },
+      { count: pendingTopUpCount, error: pendingTopUpError },
       { data: subscription, error: subscriptionError },
       { data: scheduledSubscription, error: scheduledSubscriptionError },
     ] = await Promise.all([
-      serverSupabase
-        .from('notification_events')
-        .select('id', { count: 'exact', head: true })
-        .eq('customer_id', userData.user.id)
-        .is('read_at', null),
-      isSummaryScope
+      isOverviewOrdersScope || isOverviewTopUpScope || isOverviewInsightsScope
+        ? Promise.resolve({ count: 0 })
+        : serverSupabase
+            .from('notification_events')
+            .select('id', { count: 'exact', head: true })
+            .eq('customer_id', userData.user.id)
+            .is('read_at', null),
+      isSummaryScope || isOverviewScope || isOverviewInsightsScope || isOverviewTopUpScope
         ? Promise.resolve({ data: [], error: null })
         : isInvoiceScope
           ? invoicePageSummary?.page_order_ids.length
@@ -591,7 +628,9 @@ async function loadCustomerLayoutData(request: Request) {
                         .in('id', orderIds)
                     : Promise.resolve({ data: [], error: null })
                 })()
-              : (() => {
+              : isOverviewScope || isOverviewInsightsScope || isOverviewTopUpScope
+                ? Promise.resolve({ data: [], error: null })
+                : (() => {
                   let query = serverSupabase
                     .from('orders')
                     .select(
@@ -600,16 +639,20 @@ async function loadCustomerLayoutData(request: Request) {
                     .eq('customer_id', userData.user.id)
                     .neq('status', 'cancelled')
                     .order('created_at', { ascending: false })
-                  if (isOverviewScope) query = query.limit(2)
+                  if (isOverviewOrdersScope) query = query.limit(2)
                   return query
                 })(),
-      serverSupabase.from('pickup_locations').select('id, name, address').eq('active', true).order('name'),
-      serverSupabase
-        .from('wallets')
-        .select('customer_id, one_off_balance, subscription_balance, promotional_balance, updated_at')
-        .eq('customer_id', userData.user.id)
-        .maybeSingle(),
-      isTransactionsScope
+      isOverviewScope || isOverviewOrdersScope || isOverviewInsightsScope || isOverviewTopUpScope
+        ? Promise.resolve({ data: [] })
+        : serverSupabase.from('pickup_locations').select('id, name, address').eq('active', true).order('name'),
+      isOverviewOrdersScope || isOverviewInsightsScope || isOverviewTopUpScope
+        ? Promise.resolve({ data: null })
+        : serverSupabase
+            .from('wallets')
+            .select('customer_id, one_off_balance, subscription_balance, promotional_balance, updated_at')
+            .eq('customer_id', userData.user.id)
+            .maybeSingle(),
+      isTransactionsScope || isOverviewScope || isOverviewOrdersScope || isOverviewInsightsScope || isOverviewTopUpScope
         ? Promise.resolve({ data: [] as WalletTransaction[] })
         : serverSupabase
             .from('wallet_transactions')
@@ -619,7 +662,7 @@ async function loadCustomerLayoutData(request: Request) {
             .eq('customer_id', userData.user.id)
             .order('created_at', { ascending: false })
             .limit(20),
-      isTransactionsScope
+      isTransactionsScope || isOverviewScope || isOverviewOrdersScope || isOverviewInsightsScope || isOverviewTopUpScope
         ? Promise.resolve({ data: [] as Payment[], error: null })
         : serverSupabase
             .from('payments')
@@ -627,33 +670,47 @@ async function loadCustomerLayoutData(request: Request) {
             .eq('customer_id', userData.user.id)
             .order('created_at', { ascending: false })
             .limit(20),
-      serverSupabase
-        .from('subscriptions')
-        .select(
-          'id, customer_id, plan_id, status, start_date, end_date, weekly_limit_snapshot, semester_weeks_snapshot, retroactive_allowance_units, covers_wash_snapshot, covers_iron_snapshot, price_snapshot, is_queued_renewal, created_at',
-        )
-        .eq('customer_id', userData.user.id)
-        .in('status', ['active', 'scheduled'])
-        .lte('start_date', todayInLagos)
-        .or(`end_date.is.null,end_date.gte.${todayInLagos}`)
-        .order('start_date', { ascending: false })
-        .limit(1)
-        .maybeSingle(),
-      serverSupabase
-        .from('subscriptions')
-        .select(
-          'id, customer_id, plan_id, status, start_date, end_date, weekly_limit_snapshot, semester_weeks_snapshot, retroactive_allowance_units, covers_wash_snapshot, covers_iron_snapshot, price_snapshot, created_at',
-        )
-        .eq('customer_id', userData.user.id)
-        .eq('status', 'scheduled')
-        .eq('is_queued_renewal', true)
-        .gt('start_date', todayInLagos)
-        .order('start_date', { ascending: true })
-        .limit(1)
-        .maybeSingle(),
+      isOverviewInsightsScope
+        ? serverSupabase
+            .from('payments')
+            .select('id', { count: 'exact', head: true })
+            .eq('customer_id', userData.user.id)
+            .eq('status', 'pending')
+            .is('plan_id', null)
+        : Promise.resolve({ count: 0, error: null }),
+      isOverviewOrdersScope
+      || isOverviewTopUpScope
+        ? Promise.resolve({ data: null, error: null })
+        : serverSupabase
+            .from('subscriptions')
+            .select(
+              'id, customer_id, plan_id, status, start_date, end_date, weekly_limit_snapshot, semester_weeks_snapshot, retroactive_allowance_units, covers_wash_snapshot, covers_iron_snapshot, price_snapshot, is_queued_renewal, created_at',
+            )
+            .eq('customer_id', userData.user.id)
+            .in('status', ['active', 'scheduled'])
+            .lte('start_date', todayInLagos)
+            .or(`end_date.is.null,end_date.gte.${todayInLagos}`)
+            .order('start_date', { ascending: false })
+            .limit(1)
+            .maybeSingle(),
+      isOverviewOrdersScope || isOverviewScope || isOverviewInsightsScope || isOverviewTopUpScope
+        ? Promise.resolve({ data: null, error: null })
+        : serverSupabase
+            .from('subscriptions')
+            .select(
+              'id, customer_id, plan_id, status, start_date, end_date, weekly_limit_snapshot, semester_weeks_snapshot, retroactive_allowance_units, covers_wash_snapshot, covers_iron_snapshot, price_snapshot, created_at',
+            )
+            .eq('customer_id', userData.user.id)
+            .eq('status', 'scheduled')
+            .eq('is_queued_renewal', true)
+            .gt('start_date', todayInLagos)
+            .order('start_date', { ascending: true })
+            .limit(1)
+            .maybeSingle(),
     ])
     if (subscriptionError) throw new Error(`Customer subscription query failed: ${subscriptionError.message}`)
     if (scheduledSubscriptionError) throw new Error(`Scheduled subscription query failed: ${scheduledSubscriptionError.message}`)
+    if (pendingTopUpError) throw new Error(`Pending top-up query failed: ${pendingTopUpError.message}`)
     if (isOrdersScope) {
       if (ordersError) throw new Error(`Customer orders query failed: ${ordersError.message}`)
       if (!orders) throw new Error('Customer orders query returned no result.')
@@ -664,12 +721,13 @@ async function loadCustomerLayoutData(request: Request) {
         throw new Error(`Customer orders query omitted ${missingOrderCount} expected row(s).`)
       }
     }
-    const [overviewSummaryRow] = await overviewSummaryPromise
-
+    if (isOverviewOrdersScope && ordersError) {
+      throw new Error(`Customer overview orders query failed: ${ordersError.message}`)
+    }
     const orderIds = (orders ?? []).map((order) => order.id)
     const subscriptionUsageReference = new Date()
     const subscriptionUsageTotalsQuery =
-      (isSummaryScope || isOverviewScope || isInvoiceScope) && subscription
+      (isSummaryScope || isOverviewInsightsScope || isInvoiceScope) && subscription
         ? getSubscriptionUsageTotals(
             {
               customerId: userData.user.id,
@@ -683,7 +741,7 @@ async function loadCustomerLayoutData(request: Request) {
           )
         : Promise.resolve(null)
     const subscriptionUsageOrdersQuery =
-      !(isSummaryScope || isOverviewScope || isInvoiceScope) || !subscription
+      !(isSummaryScope || isOverviewInsightsScope || isInvoiceScope) || !subscription
         ? Promise.resolve((orders ?? []) as SubscriptionUsageOrder[])
         : Promise.resolve(null)
     const [
@@ -693,6 +751,7 @@ async function loadCustomerLayoutData(request: Request) {
       { data: scheduledSubscriptionPlan, error: scheduledSubscriptionPlanError },
       subscriptionUsageTotalsRows,
       subscriptionUsageOrders,
+      overviewSummaryRows,
     ] = await Promise.all([
       orderIds.length > 0
         ? serverSupabase
@@ -731,7 +790,9 @@ async function loadCustomerLayoutData(request: Request) {
         : Promise.resolve({ data: null, error: null }),
       subscriptionUsageTotalsQuery,
       subscriptionUsageOrdersQuery,
+      overviewSummaryPromise,
     ])
+    const [overviewSummaryRow] = overviewSummaryRows
     if (subscriptionPlanError) throw new Error(`Customer subscription plan query failed: ${subscriptionPlanError.message}`)
     if (scheduledSubscriptionPlanError) {
       throw new Error(`Scheduled subscription plan query failed: ${scheduledSubscriptionPlanError.message}`)
@@ -739,7 +800,14 @@ async function loadCustomerLayoutData(request: Request) {
 
     const categoryIds = [...new Set((orderItems ?? []).map((item) => item.category_id))]
     const customerInvoiceOrderIds = (invoiceRows ?? []).map((invoice) => invoice.order_id)
-    const [{ data: orderCategories }, { data: invoiceMismatches }] = await Promise.all([
+    const recentPickupLocationIds = [
+      ...new Set(
+        [...(orders ?? []).map((order) => order.pickup_location_id), profile.pickup_location_id].filter(
+          (id): id is string => Boolean(id),
+        ),
+      ),
+    ]
+    const [{ data: orderCategories }, { data: invoiceMismatches }, { data: recentPickupLocations }] = await Promise.all([
       categoryIds.length > 0
         ? serverSupabase.from('cloth_categories').select('id, name').in('id', categoryIds)
         : Promise.resolve({ data: [] }),
@@ -749,6 +817,13 @@ async function loadCustomerLayoutData(request: Request) {
             .select('id, order_id, direction, detail, details, created_at')
             .in('order_id', customerInvoiceOrderIds)
             .order('created_at', { ascending: false })
+        : Promise.resolve({ data: [] }),
+      isOverviewOrdersScope && recentPickupLocationIds.length > 0
+        ? serverSupabase
+            .from('pickup_locations')
+            .select('id, name, address')
+            .in('id', recentPickupLocationIds)
+            .eq('active', true)
         : Promise.resolve({ data: [] }),
     ])
     const categoryNameById = new Map((orderCategories ?? []).map((category) => [category.id, category.name]))
@@ -764,7 +839,7 @@ async function loadCustomerLayoutData(request: Request) {
       order_id: mismatch.order_id,
       direction: mismatch.direction,
       detail: mismatch.detail,
-      details: (mismatch.details ?? []) as MismatchLine[],
+      details: normalizeMismatchDetails(mismatch.details),
     }))
     const mismatchByOrderId = new Map<string, { direction: 'over' | 'under'; detail: string | null; details: MismatchLine[] }>()
     for (const mismatch of invoiceMismatches ?? []) {
@@ -846,7 +921,7 @@ async function loadCustomerLayoutData(request: Request) {
       orders: orders ?? [],
       unpaidInvoiceOrderIds: (invoiceRows ?? []).filter((invoice) => invoice.status === 'unpaid').map((invoice) => invoice.order_id),
       invoiceAmountsByOrderId: Object.fromEntries((invoiceRows ?? []).map((invoice) => [invoice.order_id, Number(invoice.amount)])),
-      pickupLocations: pickupLocations ?? [],
+      pickupLocations: isOverviewOrdersScope ? recentPickupLocations ?? [] : pickupLocations ?? [],
       orderItems: persistedOrderItems,
       subscriptionAllowance,
       wallet,
@@ -871,6 +946,8 @@ async function loadCustomerLayoutData(request: Request) {
       invoices: invoicesWithDetails,
       orderMismatches,
       unreadNotificationCount: unreadNotificationCount ?? 0,
+      hasPendingTopUp: isOverviewInsightsScope ? (pendingTopUpCount ?? 0) > 0 : null,
+      pendingPaymentTotal: isOverviewTopUpScope ? Number(pendingPaymentTotalRow?.pending_payment_total ?? 0) : null,
       subscription,
       subscriptionPlan: subscriptionPlanSnapshot,
       scheduledSubscription,
@@ -878,13 +955,15 @@ async function loadCustomerLayoutData(request: Request) {
       overviewSummary: overviewSummaryRow
         ? {
             activeOrderCount: Number(overviewSummaryRow.active_order_count),
-        unpickedOrderCount: Number(overviewSummaryRow.unpicked_order_count),
-            pendingPaymentTotal: Number(overviewSummaryRow.pending_payment_total),
+            unpickedOrderCount: Number(overviewSummaryRow.unpicked_order_count),
             hasPendingInvoiceOrder: Boolean(overviewSummaryRow.has_pending_invoice_order),
             mismatchCount: Number(overviewSummaryRow.mismatch_count),
             latestMismatchDetail: overviewSummaryRow.latest_mismatch_detail,
           }
         : null,
+      pickupLocationsCatalogLoaded: !(
+        isOverviewScope || isOverviewOrdersScope || isOverviewInsightsScope || isOverviewTopUpScope
+      ),
       ordersPagination: isOrdersScope
         ? {
             page: Number(orderPageSummary?.page ?? 1),
@@ -916,6 +995,7 @@ async function loadCustomerLayoutData(request: Request) {
         unpaidInvoiceOrderIds: [],
         invoiceAmountsByOrderId: {},
         pickupLocations: [],
+        pickupLocationsCatalogLoaded: false,
         orderItems: [],
         subscriptionAllowance: null,
         wallet: null,
@@ -927,6 +1007,8 @@ async function loadCustomerLayoutData(request: Request) {
         invoices: [],
         orderMismatches: [],
         unreadNotificationCount: 0,
+        hasPendingTopUp: null,
+        pendingPaymentTotal: null,
         subscription: null,
         subscriptionPlan: null,
         scheduledSubscription: null,
@@ -966,6 +1048,7 @@ async function loadCustomerLayoutData(request: Request) {
         unpaidInvoiceOrderIds: [],
         invoiceAmountsByOrderId: {},
         pickupLocations: [],
+        pickupLocationsCatalogLoaded: false,
         orderItems: [],
         subscriptionAllowance: null,
         wallet: null,
@@ -977,6 +1060,8 @@ async function loadCustomerLayoutData(request: Request) {
         invoices: [],
         orderMismatches: [],
         unreadNotificationCount: 0,
+        hasPendingTopUp: null,
+        pendingPaymentTotal: null,
         subscription: null,
         subscriptionPlan: null,
         scheduledSubscription: null,
@@ -1009,6 +1094,8 @@ function PlanSummary({ onNavigate }: { onNavigate?: () => void }) {
     subscriptionNextBalanceAfterCredit,
     isDataLoading,
     dataLoadError,
+    isSubscriptionAllowanceLoading,
+    subscriptionAllowanceError,
   } = useCustomerStore()
   const displayedAvailableUnits = Math.max(0, subscriptionAvailableUnits ?? 0)
   const balancePercent = activePlan ? Math.min(100, Math.round((displayedAvailableUnits / activePlan.weekly_limit) * 100)) : 0
@@ -1043,12 +1130,18 @@ function PlanSummary({ onNavigate }: { onNavigate?: () => void }) {
       {subscriptionBalance < 0 && (
         <p className="mt-1 text-xs text-brand-primary">Subscription debt: ₦{Math.abs(subscriptionBalance).toLocaleString()}</p>
       )}
-      {!isDataLoading && !dataLoadError && activePlan && (
+      {!isDataLoading && !dataLoadError && activePlan && isSubscriptionAllowanceLoading && (
+        <CustomerInlineSkeleton className="mt-2 w-36 bg-[#d3ebe8]" />
+      )}
+      {!isDataLoading && !dataLoadError && activePlan && subscriptionAllowanceError && (
+        <p className="mt-2 text-xs text-amber-700">Allowance unavailable</p>
+      )}
+      {!isDataLoading && !dataLoadError && activePlan && !isSubscriptionAllowanceLoading && !subscriptionAllowanceError && (
         <p className="mt-2 text-xs text-slate-600">
           {displayedAvailableUnits} units available · {activePlan.weekly_limit} added weekly
         </p>
       )}
-      {!isDataLoading && !dataLoadError && subscriptionBorrowedUnits > 0 && (
+      {!isDataLoading && !dataLoadError && !isSubscriptionAllowanceLoading && !subscriptionAllowanceError && subscriptionBorrowedUnits > 0 && (
         <p className="mt-1 text-xs text-amber-700">
           {subscriptionBorrowedUnits} units borrowed
           {subscriptionNextBalanceAfterCredit !== null ? ` · ${subscriptionNextBalanceAfterCredit} expected after the next allowance` : ''}
@@ -1057,9 +1150,15 @@ function PlanSummary({ onNavigate }: { onNavigate?: () => void }) {
       {!dataLoadError && (
         <div
           className="mt-3 h-1.5 overflow-hidden bg-[#d3ebe8]"
-          aria-label={isDataLoading ? 'Loading weekly allowance' : `${balancePercent}% of the weekly allowance is available`}
+          aria-label={
+            isDataLoading || isSubscriptionAllowanceLoading
+              ? 'Loading weekly allowance'
+              : subscriptionAllowanceError
+                ? 'Weekly allowance unavailable'
+                : `${balancePercent}% of the weekly allowance is available`
+          }
         >
-          {isDataLoading ? (
+          {isDataLoading || isSubscriptionAllowanceLoading ? (
             <div className="h-full w-1/2 animate-pulse bg-[#b8dcd8]" />
           ) : (
             <div className="h-full bg-[#55aaa3] transition-[width] duration-500" style={{ width: `${balancePercent}%` }} />
@@ -1089,6 +1188,8 @@ function createSnapshotStore<T>() {
   }
 }
 
+const overviewRequestRetryDelaysMs = [500, 1000, 2000] as const
+
 export default function CustomerLayout() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const isOffline = !useSyncExternalStore(subscribeToNetworkStatus, getNetworkStatus, getServerNetworkStatus)
@@ -1099,6 +1200,9 @@ export default function CustomerLayout() {
   const loaderData = useLoaderData<typeof loader>()
   const { revalidate } = useRevalidator()
   const customerDataFetcher = useFetcher<typeof loader>()
+  const overviewOrdersFetcher = useFetcher<typeof loader>()
+  const overviewInsightsFetcher = useFetcher<typeof loader>()
+  const overviewTopUpFetcher = useFetcher<typeof loader>()
   const activeCustomerDataScope = getCustomerDataScope(location.pathname)
   const customerDataRequestId = loaderData?.customerDataRequestId
     ? `${loaderData.customerDataRequestId}:${activeCustomerDataScope}${
@@ -1110,7 +1214,27 @@ export default function CustomerLayout() {
   const shouldLoadCustomerData =
     Boolean(loaderData?.customerDataLoading) || Boolean(loaderData?.profile && loaderData.customerDataScope !== activeCustomerDataScope)
   const loadCustomerData = customerDataFetcher.load
+  const loadOverviewOrdersData = overviewOrdersFetcher.load
+  const loadOverviewInsightsData = overviewInsightsFetcher.load
+  const loadOverviewTopUpData = overviewTopUpFetcher.load
   const [startedCustomerDataRequestId, setStartedCustomerDataRequestId] = useState<string | null>(null)
+  const overviewOrdersRequestId =
+    activeCustomerDataScope === 'overview' && customerDataRequestId ? `${customerDataRequestId}:recent-orders` : null
+  const [overviewOrdersRetryState, setOverviewOrdersRetryState] = useState<{ requestId: string | null; attempts: number }>({
+    requestId: null,
+    attempts: 0,
+  })
+  const overviewInsightsRequestId =
+    activeCustomerDataScope === 'overview' && customerDataRequestId ? `${customerDataRequestId}:insights` : null
+  const [overviewInsightsRetryState, setOverviewInsightsRetryState] = useState<{ requestId: string | null; attempts: number }>({
+    requestId: null,
+    attempts: 0,
+  })
+  const overviewTopUpRequestId =
+    activeCustomerDataScope === 'overview' && customerDataRequestId ? `${customerDataRequestId}:topup` : null
+  const [startedOverviewOrdersRequestId, setStartedOverviewOrdersRequestId] = useState<string | null>(null)
+  const [startedOverviewInsightsRequestId, setStartedOverviewInsightsRequestId] = useState<string | null>(null)
+  const [startedOverviewTopUpRequestId, setStartedOverviewTopUpRequestId] = useState<string | null>(null)
   const retryCustomerData = useCallback(() => {
     if (!customerDataRequestId) return
     const requestParams = new URLSearchParams(location.search)
@@ -1120,6 +1244,68 @@ export default function CustomerLayout() {
     setStartedCustomerDataRequestId(customerDataRequestId)
     loadCustomerData(`/?index&${requestParams.toString()}`)
   }, [activeCustomerDataScope, customerDataRequestId, loadCustomerData, location.search])
+  const loadOverviewOrdersRequest = useCallback(
+    (requestId: string) => {
+      const requestParams = new URLSearchParams(location.search)
+      requestParams.set('customerData', '1')
+      requestParams.set('requestId', requestId)
+      requestParams.set('scope', 'overview-orders')
+      setStartedOverviewOrdersRequestId(requestId)
+      loadOverviewOrdersData(`/?index&${requestParams.toString()}`)
+    },
+    [loadOverviewOrdersData, location.search],
+  )
+  const retryOverviewOrders = useCallback(
+    (requestId = overviewOrdersRequestId) => {
+      if (!requestId) return
+      setOverviewOrdersRetryState({ requestId, attempts: 0 })
+      loadOverviewOrdersRequest(requestId)
+    },
+    [loadOverviewOrdersRequest, overviewOrdersRequestId],
+  )
+  const loadOverviewInsightsRequest = useCallback(
+    (requestId: string) => {
+      const requestParams = new URLSearchParams(location.search)
+      requestParams.set('customerData', '1')
+      requestParams.set('requestId', requestId)
+      requestParams.set('scope', 'overview-insights')
+      setStartedOverviewInsightsRequestId(requestId)
+      loadOverviewInsightsData(`/?index&${requestParams.toString()}`)
+    },
+    [loadOverviewInsightsData, location.search],
+  )
+  const retryOverviewInsights = useCallback(
+    (requestId = overviewInsightsRequestId) => {
+      if (!requestId) return
+      setOverviewInsightsRetryState({ requestId, attempts: 0 })
+      loadOverviewInsightsRequest(requestId)
+    },
+    [loadOverviewInsightsRequest, overviewInsightsRequestId],
+  )
+  const loadPendingPaymentTotal = useCallback(() => {
+    if (!overviewTopUpRequestId || overviewTopUpFetcher.state !== 'idle') return
+    const response = overviewTopUpFetcher.data
+    if (
+      response?.customerDataRequestId === overviewTopUpRequestId &&
+      response.customerDataScope === 'overview-topup' &&
+      response.customerDataLoading === false &&
+      !response.customerDataError
+    ) {
+      return
+    }
+    const requestParams = new URLSearchParams(location.search)
+    requestParams.set('customerData', '1')
+    requestParams.set('requestId', overviewTopUpRequestId)
+    requestParams.set('scope', 'overview-topup')
+    setStartedOverviewTopUpRequestId(overviewTopUpRequestId)
+    loadOverviewTopUpData(`/?index&${requestParams.toString()}`)
+  }, [
+    loadOverviewTopUpData,
+    location.search,
+    overviewTopUpFetcher.data,
+    overviewTopUpFetcher.state,
+    overviewTopUpRequestId,
+  ])
   const fetcherData = customerDataFetcher.data
   const [ordersDataStore] = useState(() =>
     createSnapshotStore<{ key: string; data: NonNullable<typeof loaderData> }>(),
@@ -1144,6 +1330,69 @@ export default function CustomerLayout() {
     loadCustomerData(`/?index&${requestParams.toString()}`)
   }, [shouldLoadCustomerData, customerDataRequestId, activeCustomerDataScope, fetcherData, loadCustomerData, location.search])
   useEffect(() => {
+    if (!overviewOrdersRequestId || overviewOrdersFetcher.state !== 'idle') return
+    const response = overviewOrdersFetcher.data
+    if (
+      response?.customerDataRequestId === overviewOrdersRequestId &&
+      response.customerDataScope === 'overview-orders' &&
+      response.customerDataLoading === false
+    ) {
+      return
+    }
+    if (startedOverviewOrdersRequestId === overviewOrdersRequestId) return
+    const requestParams = new URLSearchParams(location.search)
+    requestParams.set('customerData', '1')
+    requestParams.set('requestId', overviewOrdersRequestId)
+    requestParams.set('scope', 'overview-orders')
+    loadOverviewOrdersData(`/?index&${requestParams.toString()}`)
+  }, [
+    overviewOrdersFetcher.data,
+    overviewOrdersFetcher.state,
+    overviewOrdersRequestId,
+    startedOverviewOrdersRequestId,
+    loadOverviewOrdersData,
+    location.search,
+  ])
+  useEffect(() => {
+    if (!overviewInsightsRequestId || overviewInsightsFetcher.state !== 'idle') return
+    const response = overviewInsightsFetcher.data
+    if (
+      response?.customerDataRequestId === overviewInsightsRequestId &&
+      response.customerDataScope === 'overview-insights' &&
+      response.customerDataLoading === false
+    ) {
+      return
+    }
+    if (startedOverviewInsightsRequestId === overviewInsightsRequestId) return
+    const requestParams = new URLSearchParams(location.search)
+    requestParams.set('customerData', '1')
+    requestParams.set('requestId', overviewInsightsRequestId)
+    requestParams.set('scope', 'overview-insights')
+    loadOverviewInsightsData(`/?index&${requestParams.toString()}`)
+  }, [
+    overviewInsightsFetcher.data,
+    overviewInsightsFetcher.state,
+    overviewInsightsRequestId,
+    startedOverviewInsightsRequestId,
+    loadOverviewInsightsData,
+    location.search,
+  ])
+  useEffect(() => {
+    if (overviewOrdersFetcher.state === 'idle' || !overviewOrdersRequestId) return
+    const timer = window.setTimeout(() => setStartedOverviewOrdersRequestId(overviewOrdersRequestId), 0)
+    return () => window.clearTimeout(timer)
+  }, [overviewOrdersFetcher.state, overviewOrdersRequestId])
+  useEffect(() => {
+    if (overviewInsightsFetcher.state === 'idle' || !overviewInsightsRequestId) return
+    const timer = window.setTimeout(() => setStartedOverviewInsightsRequestId(overviewInsightsRequestId), 0)
+    return () => window.clearTimeout(timer)
+  }, [overviewInsightsFetcher.state, overviewInsightsRequestId])
+  useEffect(() => {
+    if (overviewTopUpFetcher.state === 'idle' || !overviewTopUpRequestId) return
+    const timer = window.setTimeout(() => setStartedOverviewTopUpRequestId(overviewTopUpRequestId), 0)
+    return () => window.clearTimeout(timer)
+  }, [overviewTopUpFetcher.state, overviewTopUpRequestId])
+  useEffect(() => {
     if (customerDataFetcher.state === 'idle' || !customerDataRequestId) return
     const timer = window.setTimeout(() => setStartedCustomerDataRequestId(customerDataRequestId), 0)
     return () => window.clearTimeout(timer)
@@ -1164,6 +1413,145 @@ export default function CustomerLayout() {
   const retainedOrdersData =
     activeCustomerDataScope === 'orders' && cachedOrdersData?.key === ordersDataCacheKey ? cachedOrdersData.data : null
   const customerData = loadedCustomerData ?? retainedOrdersData ?? loaderData
+  const matchingOverviewInsightsResponse =
+    overviewInsightsFetcher.data &&
+    overviewInsightsFetcher.data.customerDataRequestId === overviewInsightsRequestId &&
+    overviewInsightsFetcher.data.customerDataScope === 'overview-insights' &&
+    overviewInsightsFetcher.data.customerDataLoading === false
+      ? overviewInsightsFetcher.data
+      : null
+  const loadedOverviewInsightsData = matchingOverviewInsightsResponse?.customerDataError ? null : matchingOverviewInsightsResponse
+  const overviewInsightsRequestFailed =
+    Boolean(overviewInsightsRequestId) &&
+    startedOverviewInsightsRequestId === overviewInsightsRequestId &&
+    overviewInsightsFetcher.state === 'idle' &&
+    !matchingOverviewInsightsResponse
+  const overviewInsightsRequestError =
+    matchingOverviewInsightsResponse?.customerDataError ??
+    (overviewInsightsRequestFailed ? 'Overview details could not be loaded. Please try again.' : null)
+  const overviewInsightsRetryAttempts =
+    overviewInsightsRetryState.requestId === overviewInsightsRequestId
+      ? overviewInsightsRetryState.attempts
+      : 0
+  const overviewInsightsRetrying =
+    Boolean(overviewInsightsRequestError) && overviewInsightsRetryAttempts < overviewRequestRetryDelaysMs.length
+  const overviewInsightsError =
+    overviewInsightsFetcher.state !== 'idle' || overviewInsightsRetrying
+      ? null
+      : overviewInsightsRequestError
+  useEffect(() => {
+    if (
+      !overviewInsightsRequestId ||
+      overviewInsightsFetcher.state !== 'idle' ||
+      !overviewInsightsRequestError
+    ) {
+      return
+    }
+
+    const retryAttempt = overviewInsightsRetryAttempts
+    const retryDelayMs = overviewRequestRetryDelaysMs[retryAttempt]
+    if (retryDelayMs === undefined) return
+
+    const timer = window.setTimeout(() => {
+      setOverviewInsightsRetryState((current) => {
+        const currentAttempts = current.requestId === overviewInsightsRequestId ? current.attempts : 0
+        return currentAttempts === retryAttempt
+          ? { requestId: overviewInsightsRequestId, attempts: retryAttempt + 1 }
+          : current
+      })
+      loadOverviewInsightsRequest(overviewInsightsRequestId)
+    }, retryDelayMs)
+
+    return () => window.clearTimeout(timer)
+  }, [
+    loadOverviewInsightsRequest,
+    overviewInsightsFetcher.state,
+    overviewInsightsRetryAttempts,
+    overviewInsightsRequestError,
+    overviewInsightsRequestId,
+  ])
+  const isOverviewInsightsLoading =
+    activeCustomerDataScope === 'overview' &&
+    (overviewInsightsFetcher.state !== 'idle' || (!overviewInsightsError && !loadedOverviewInsightsData))
+  const matchingOverviewOrdersResponse =
+    overviewOrdersFetcher.data &&
+    overviewOrdersFetcher.data.customerDataRequestId === overviewOrdersRequestId &&
+    overviewOrdersFetcher.data.customerDataScope === 'overview-orders' &&
+    overviewOrdersFetcher.data.customerDataLoading === false
+      ? overviewOrdersFetcher.data
+      : null
+  const loadedOverviewOrdersData = matchingOverviewOrdersResponse?.customerDataError ? null : matchingOverviewOrdersResponse
+  const overviewOrdersRequestFailed =
+    Boolean(overviewOrdersRequestId) &&
+    startedOverviewOrdersRequestId === overviewOrdersRequestId &&
+    overviewOrdersFetcher.state === 'idle' &&
+    !matchingOverviewOrdersResponse
+  const recentOrdersRequestError =
+    matchingOverviewOrdersResponse?.customerDataError ??
+    (overviewOrdersRequestFailed ? 'Recent orders could not be loaded. Please try again.' : null)
+  const recentOrdersRetryAttempts =
+    overviewOrdersRetryState.requestId === overviewOrdersRequestId ? overviewOrdersRetryState.attempts : 0
+  const recentOrdersRetrying =
+    Boolean(recentOrdersRequestError) && recentOrdersRetryAttempts < overviewRequestRetryDelaysMs.length
+  const recentOrdersError =
+    overviewOrdersFetcher.state !== 'idle' || recentOrdersRetrying
+      ? null
+      : recentOrdersRequestError
+  useEffect(() => {
+    if (!overviewOrdersRequestId || overviewOrdersFetcher.state !== 'idle' || !recentOrdersRequestError) return
+
+    const retryAttempt = recentOrdersRetryAttempts
+    const retryDelayMs = overviewRequestRetryDelaysMs[retryAttempt]
+    if (retryDelayMs === undefined) return
+
+    const timer = window.setTimeout(() => {
+      setOverviewOrdersRetryState((current) => {
+        const currentAttempts = current.requestId === overviewOrdersRequestId ? current.attempts : 0
+        return currentAttempts === retryAttempt
+          ? { requestId: overviewOrdersRequestId, attempts: retryAttempt + 1 }
+          : current
+      })
+      loadOverviewOrdersRequest(overviewOrdersRequestId)
+    }, retryDelayMs)
+
+    return () => window.clearTimeout(timer)
+  }, [
+    loadOverviewOrdersRequest,
+    overviewOrdersFetcher.state,
+    recentOrdersRequestError,
+    overviewOrdersRequestId,
+    recentOrdersRetryAttempts,
+  ])
+  const isRecentOrdersLoading =
+    activeCustomerDataScope === 'overview' &&
+    (overviewOrdersFetcher.state !== 'idle' || (!recentOrdersError && !loadedOverviewOrdersData))
+  const orderData = activeCustomerDataScope === 'overview' ? loadedOverviewOrdersData : customerData
+  const matchingOverviewTopUpResponse =
+    overviewTopUpFetcher.data &&
+    overviewTopUpFetcher.data.customerDataRequestId === overviewTopUpRequestId &&
+    overviewTopUpFetcher.data.customerDataScope === 'overview-topup' &&
+    overviewTopUpFetcher.data.customerDataLoading === false
+      ? overviewTopUpFetcher.data
+      : null
+  const overviewTopUpRequestFailed =
+    Boolean(overviewTopUpRequestId) &&
+    startedOverviewTopUpRequestId === overviewTopUpRequestId &&
+    overviewTopUpFetcher.state === 'idle' &&
+    !matchingOverviewTopUpResponse
+  const pendingPaymentTotalError =
+    overviewTopUpFetcher.state !== 'idle'
+      ? null
+      : matchingOverviewTopUpResponse?.customerDataError ??
+        (overviewTopUpRequestFailed ? 'Pending order totals could not be loaded. Please try again.' : null)
+  const isPendingPaymentTotalLoading =
+    activeCustomerDataScope === 'overview' &&
+    overviewTopUpFetcher.state !== 'idle' &&
+    startedOverviewTopUpRequestId === overviewTopUpRequestId
+  const pendingPaymentTotal =
+    matchingOverviewTopUpResponse && !matchingOverviewTopUpResponse.customerDataError
+      ? Number(matchingOverviewTopUpResponse.pendingPaymentTotal ?? 0)
+      : null
+  const overviewData = activeCustomerDataScope === 'overview' ? loadedOverviewInsightsData : customerData
   const customerDataRequestFailed =
     shouldLoadCustomerData &&
     startedCustomerDataRequestId === customerDataRequestId &&
@@ -1287,17 +1675,30 @@ export default function CustomerLayout() {
     <CustomerStoreProvider
       key={loaderData?.profile?.id ?? 'customer'}
       profile={loaderData?.profile ?? undefined}
-      persistedOrders={customerData ? (customerData.orders as Order[]) : undefined}
-      persistedUnpaidInvoiceOrderIds={customerData?.unpaidInvoiceOrderIds as string[] | undefined}
-      invoiceAmountsByOrderId={customerData?.invoiceAmountsByOrderId as Record<string, number> | undefined}
-      persistedPickupLocations={customerData ? (customerData.pickupLocations as PickupLocationOption[]) : undefined}
-      persistedOrderItems={customerData ? (customerData.orderItems as PersistedOrderItem[]) : undefined}
+      persistedOrders={orderData ? (orderData.orders as Order[]) : undefined}
+      persistedUnpaidInvoiceOrderIds={orderData?.unpaidInvoiceOrderIds as string[] | undefined}
+      invoiceAmountsByOrderId={orderData?.invoiceAmountsByOrderId as Record<string, number> | undefined}
+      persistedPickupLocations={
+        customerData?.pickupLocations?.length
+          ? (customerData.pickupLocations as PickupLocationOption[])
+          : (orderData?.pickupLocations as PickupLocationOption[] | undefined)
+      }
+      pickupLocationsCatalogLoaded={
+        activeCustomerDataScope === 'overview'
+          ? Boolean(orderData?.pickupLocationsCatalogLoaded)
+          : Boolean(customerData?.pickupLocationsCatalogLoaded)
+      }
+      persistedOrderItems={orderData ? (orderData.orderItems as PersistedOrderItem[]) : undefined}
       persistedOrderMismatches={
-        customerData?.orderMismatches as
+        orderData?.orderMismatches as
           Array<{ id: string; order_id: string; direction: 'over' | 'under'; detail: string | null; details: MismatchLine[] }> | undefined
       }
-      persistedSubscriptionAllowance={customerData?.subscriptionAllowance}
-      persistedOverviewSummary={customerData?.overviewSummary}
+      persistedSubscriptionAllowance={overviewData?.subscriptionAllowance}
+      persistedOverviewSummary={overviewData?.overviewSummary}
+      persistedPendingTopUp={
+        activeCustomerDataScope === 'overview' ? (overviewData?.hasPendingTopUp as boolean | null | undefined) : undefined
+      }
+      persistedPendingPaymentTotal={pendingPaymentTotal}
       persistedOrdersPagination={customerData?.ordersPagination}
       persistedInvoicePagination={customerData?.invoicePagination}
       persistedWallet={customerData?.wallet as Wallet | null | undefined}
@@ -1307,7 +1708,7 @@ export default function CustomerLayout() {
       persistedTransactions={customerData?.customerTransactions ?? undefined}
       persistedTransactionPagination={customerData?.transactionPagination}
       persistedInvoices={
-        customerData?.invoices as
+        orderData?.invoices as
           | Array<
               Invoice & {
                 order_reference?: string
@@ -1337,6 +1738,15 @@ export default function CustomerLayout() {
       isDataLoading={isCustomerDataLoading}
       dataLoadError={customerDataError}
       retryDataLoad={retryCustomerData}
+      isOverviewInsightsLoading={isOverviewInsightsLoading}
+      overviewInsightsError={overviewInsightsError}
+      retryOverviewInsights={retryOverviewInsights}
+      isPendingPaymentTotalLoading={isPendingPaymentTotalLoading}
+      pendingPaymentTotalError={pendingPaymentTotalError}
+      loadPendingPaymentTotal={loadPendingPaymentTotal}
+      isRecentOrdersLoading={isRecentOrdersLoading}
+      recentOrdersError={recentOrdersError}
+      retryRecentOrders={retryOverviewOrders}
     >
       {showReferralModal && referralCode && (
         <div className="referral-modal-backdrop fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/45 p-4 backdrop-blur-[2px]">

@@ -769,12 +769,12 @@ export async function finalizeVendorOrder(
       await tx`delete from mismatches where order_id = ${orderId}`
       await tx`
         insert into mismatches (order_id, direction, detail, details)
-        values (${orderId}, ${mismatchDirection}, ${mismatchDetail}, ${JSON.stringify(mismatchItems)}::jsonb)
+        values (${orderId}, ${mismatchDirection}, ${mismatchDetail}, ${tx.json(mismatchItems)}::jsonb)
       `
     }
     const [invoice] = await tx`
       insert into invoices (order_id, amount, status, billing_breakdown)
-      values (${orderId}, ${invoiceAmount}, 'unpaid', ${billingBreakdown ? JSON.stringify(billingBreakdown) : null}::jsonb)
+      values (${orderId}, ${invoiceAmount}, 'unpaid', ${billingBreakdown ? tx.json(billingBreakdown) : null}::jsonb)
       on conflict (order_id) do update set
         amount = excluded.amount,
         status = 'unpaid',

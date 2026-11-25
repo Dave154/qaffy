@@ -28,14 +28,19 @@ export default function PlanEndingBanner({ planName, endDate, onDismiss }: PlanE
   const shouldShow = dismissalStage === null || (daysRemaining !== null && daysRemaining <= 3 && dismissalStage === 7)
 
   useEffect(() => {
-    if (!storageKey) {
+    if (!storageKey || !endDate) {
       setDismissedAt(null)
       return
     }
 
     const storedDismissal = window.localStorage.getItem(storageKey)
-    setDismissedAt(storedDismissal ? Number(storedDismissal) : null)
-  }, [storageKey])
+    const storedDismissalStage = storedDismissal ? Number(storedDismissal) : null
+    const remainingDays = getDaysRemaining(endDate)
+    const shouldShowStoredBanner =
+      storedDismissalStage === null || (remainingDays <= 3 && storedDismissalStage === 7)
+    setDismissedAt(storedDismissalStage)
+    if (!shouldShowStoredBanner) onDismiss?.()
+  }, [endDate, onDismiss, storageKey])
 
   if (!endDate || daysRemaining === null || daysRemaining < 0 || daysRemaining > 7 || !shouldShow) return null
 

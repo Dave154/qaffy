@@ -16,6 +16,7 @@ import { data, useFetcher, useNavigate, useSearchParams } from 'react-router'
 import type { Route } from './+types/Orders'
 import { getSupabaseServerClient, isSupabaseServerConfigured } from '../../../lib/supabase.server'
 import { sql } from '../../../lib/db.server'
+import { createCustomerOrder, CustomerOrderCreateError } from '../../../lib/customer-order-create.server'
 import { CustomerOrderEditError, updateCustomerOrder } from '../../../lib/customer-order-edit.server'
 import { chargeSubscriptionInvoice, debitOneOffInvoice, InsufficientBalanceError } from '../../../lib/wallet.server'
 import { sendCustomerNotification, walletInvoicePaidNotification } from '../../../lib/notifications.server'
@@ -32,6 +33,35 @@ export async function action({ request }: Route.ActionArgs) {
 
   const formData = await request.formData()
   const intent = String(formData.get('intent') ?? '')
+  if (intent === 'create-order') {
+    let items: unknown
+    try {
+      items = JSON.parse(String(formData.get('items') ?? ''))
+    } catch {
+      return data({ ok: false, intent, message: 'Order items are invalid.' }, { status: 400, headers })
+    }
+
+    try {
+      const order = await createCustomerOrder({
+        customerId: userData.user.id,
+        pickupLocationId: String(formData.get('pickupLocationId') ?? ''),
+        notes: String(formData.get('notes') ?? ''),
+        subscriptionBorrowConsentUnits: Number(formData.get('subscriptionBorrowConsentUnits') ?? 0),
+        items,
+      })
+      return data({ ok: true, intent, orderId: order.orderId, publicOrderNumber: order.publicOrderNumber }, { headers })
+    } catch (error) {
+      if (error instanceof CustomerOrderCreateError) {
+        return data({ ok: false, intent, message: error.message }, { status: error.status, headers })
+      }
+      console.error('[orders] Customer order creation failed', error)
+      return data(
+        { ok: false, intent, message: 'The order could not be saved. Please try again.' },
+        { status: 500, headers },
+      )
+    }
+  }
+
   if (intent === 'update-order') {
     const orderId = String(formData.get('orderId') ?? '')
     const pickupLocationId = String(formData.get('pickupLocationId') ?? '')
@@ -209,7 +239,7 @@ export default function Orders() {
     if (order.paymentStatus === 'Pending' && order.total > 0) return `Payment due · ₦${order.total.toLocaleString()}`
     if (order.total > 0) return `₦${order.total.toLocaleString()}`
     if (order.status === 'In progress') return 'Final billing pending'
-    if (order.isSubscriptionOrder && ['Ready for delivery', 'Delivered'].includes(order.status)) return 'Covered by plan'
+    if (order.isSubscriptionOrder && ['Ready for delivery', 'Out for delivery', 'Delivered'].includes(order.status)) return 'Covered by plan'
     return 'No charge yet'
   }
   const getVisibleOtp = (order: (typeof orders)[number]) => {
@@ -374,7 +404,15 @@ export default function Orders() {
                 </div>
 
                 <div className="mt-4 flex flex-row flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-3">
-                  <p className="text-sm text-slate-600">{order.pickup}</p>
+                  <p
+                    className={
+                      ['Out for delivery', 'Delivered'].includes(order.status)
+                        ? 'text-sm font-bold text-slate-800'
+                        : 'text-sm text-slate-600'
+                    }
+                  >
+                    {order.status === 'Delivered' ? 'Order delivered' : order.pickup}
+                  </p>
                   <div className="flex flex-wrap items-center gap-2">
                     {order.status === 'Awaiting pickup' && (
                       <cancelFetcher.Form

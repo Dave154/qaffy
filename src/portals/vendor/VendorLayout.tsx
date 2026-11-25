@@ -7,15 +7,19 @@ import QaffyLogo from '../../components/QaffyLogo'
 import { requireRole } from '../../lib/auth.server'
 import { changedRowStatus, createRefreshScheduler } from '../../lib/live-refresh.client'
 import { sql } from '../../lib/db.server'
+import { normalizeMismatchDetails } from '../../lib/mismatch-details'
 import { supabase } from '../../lib/supabase.client'
 
 const vendorOrderPageSize = 20
 const vendorOverviewOrderPageSize = 10
 const overviewDateModes = ['all', 'today', 'this_week', 'last_week', 'this_month', 'last_month', 'custom'] as const
 const overviewSortColumns = ['pickup_date', 'order_type', 'customer', 'customer_id', 'location', 'status'] as const
+const vendorOrderSortColumns = ['order', 'customer', 'service', 'location', 'pickup', 'status'] as const
 type OverviewDateMode = (typeof overviewDateModes)[number]
 type OverviewSortColumn = (typeof overviewSortColumns)[number]
 type OverviewSortRule = { column: OverviewSortColumn; direction: 'asc' | 'desc' }
+type VendorOrderSortColumn = (typeof vendorOrderSortColumns)[number]
+type VendorOrderSortRule = { column: VendorOrderSortColumn; direction: 'asc' | 'desc' }
 
 function validOverviewDate(value: string | null) {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null
@@ -43,6 +47,26 @@ function parseOverviewSortRules(value: string | null): OverviewSortRule[] {
     .slice(0, overviewSortColumns.length)
 }
 
+function parseVendorOrderSortRules(value: string | null): VendorOrderSortRule[] {
+  if (!value) return []
+  const seen = new Set<VendorOrderSortColumn>()
+  return value
+    .split(',')
+    .flatMap((rule): VendorOrderSortRule[] => {
+      const [column, direction] = rule.split(':')
+      if (
+        !vendorOrderSortColumns.includes(column as VendorOrderSortColumn) ||
+        (direction !== 'asc' && direction !== 'desc') ||
+        seen.has(column as VendorOrderSortColumn)
+      ) {
+        return []
+      }
+      seen.add(column as VendorOrderSortColumn)
+      return [{ column: column as VendorOrderSortColumn, direction }]
+    })
+    .slice(0, vendorOrderSortColumns.length)
+}
+
 // eslint-disable-next-line react-refresh/only-export-components
 export async function loader({ request }: Route.LoaderArgs) {
   const auth = await requireRole(request, 'vendor')
@@ -64,6 +88,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   const allowedTabs = ['unclaimed', 'processing', 'ready', 'dispatched', 'delivered']
   const activeTab = allowedTabs.includes(requestedTab) ? requestedTab : 'processing'
   const orderSearch = (requestUrl.searchParams.get('search') ?? '').trim().slice(0, 100)
+  const ordersSortRules = parseVendorOrderSortRules(requestUrl.searchParams.get('sort'))
   const requestedPage = Number.parseInt(requestUrl.searchParams.get('page') ?? '1', 10)
   const page = Number.isSafeInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1
   const legacyOverviewRange = requestUrl.searchParams.get('range')
@@ -90,6 +115,30 @@ export async function loader({ request }: Route.LoaderArgs) {
   let overviewPagination: { page: number; pageSize: number; totalCount: number; pageCount: number } | null = null
 
   if (vendor?.id && isOrdersPage) {
+    const orderSortExpression = (column: VendorOrderSortColumn) => {
+      switch (column) {
+        case 'order':
+          return sql`public_order_number`
+        case 'customer':
+          return sql`customer_name`
+        case 'service':
+          return sql`service_name`
+        case 'location':
+          return sql`location_name`
+        case 'pickup':
+          return sql`picked_up_date`
+        case 'status':
+          return sql`order_status`
+      }
+    }
+    const ordersOrderBy = ordersSortRules.length
+      ? ordersSortRules.slice(1).reduce(
+          (order, rule) => sql`
+            ${order}, ${orderSortExpression(rule.column)} ${rule.direction === 'asc' ? sql`asc` : sql`desc`} nulls last
+          `,
+          sql`${orderSortExpression(ordersSortRules[0].column)} ${ordersSortRules[0].direction === 'asc' ? sql`asc` : sql`desc`} nulls last`,
+        )
+      : sql`created_at desc`
     const [pageSummary] = await sql<
       {
         order_ids: string[]
@@ -136,9 +185,23 @@ export async function loader({ request }: Route.LoaderArgs) {
         from vendor_orders
       ),
       matching_orders as (
-        select vendor_orders.id, vendor_orders.created_at
+        select
+          vendor_orders.id,
+          vendor_orders.created_at,
+          order_row.public_order_number,
+          order_row.picked_up_date,
+          order_row.status::text as order_status,
+          case order_row.order_type
+            when 'wash' then 'Wash only'
+            when 'wash_iron' then 'Wash + Iron'
+            else 'Mixed service'
+          end as service_name,
+          customer.name as customer_name,
+          location.name as location_name
         from vendor_orders
         join orders order_row on order_row.id = vendor_orders.id
+        left join profiles customer on customer.id = order_row.customer_id
+        left join pickup_locations location on location.id = order_row.pickup_location_id
         where (
           (${activeTab} = 'unclaimed' and vendor_orders.status = 'picked_up' and vendor_orders.vendor_id is null)
           or (${activeTab} = 'processing' and vendor_orders.vendor_id = ${vendor.id} and vendor_orders.status in ('at_vendor', 'invoiced', 'paid'))
@@ -177,7 +240,7 @@ export async function loader({ request }: Route.LoaderArgs) {
         coalesce(array(
           select id
           from matching_orders
-          order by created_at desc, id desc
+          order by ${ordersOrderBy}, created_at desc, id desc
           offset ((select page from page_info) - 1) * ${vendorOrderPageSize}
           limit ${vendorOrderPageSize}
         ), '{}'::uuid[]) as order_ids,
@@ -435,13 +498,16 @@ export async function loader({ request }: Route.LoaderArgs) {
           .filter((item) => item.order_id === order.id)
           .map((item) => ({ ...item, category: (categories ?? []).find((category) => category.id === item.category_id) ?? null })),
         invoice: (invoices ?? []).find((invoice) => invoice.order_id === order.id) ?? null,
-        mismatches: (mismatches ?? []).filter((mismatch) => mismatch.order_id === order.id),
+        mismatches: (mismatches ?? [])
+          .filter((mismatch) => mismatch.order_id === order.id)
+          .map((mismatch) => ({ ...mismatch, details: normalizeMismatchDetails(mismatch.details) })),
         logisticsEvents: (logisticsEvents ?? []).filter((event) => event.order_id === order.id),
       })),
       vendorName: auth.profile.name ?? 'Vendor',
       rateCard: [...rateCard.values()],
       payoutAccountReady: !vendor || (vendor.payout_account_status === 'verified' && Boolean(vendor.payout_recipient_code)),
       ordersPagination,
+      ordersSortRules,
       overviewMetrics,
       overviewOrderIds,
       overviewPagination,
